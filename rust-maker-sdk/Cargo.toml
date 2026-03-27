@@ -1,0 +1,72 @@
+[package]
+name = "acta-maker-sdk"
+version = "0.1.0-beta.1"
+edition = "2024"
+license = "MIT"
+description = "Rust SDK for Acta options market makers — WebSocket client, order signing, message types"
+repository = "https://github.com/acta-markets/rust-maker-sdk"
+keywords = ["rfq", "options", "defi", "solana", "market-maker"]
+categories = ["api-bindings"]
+readme = "README.md"
+
+[dependencies]
+bs58 = { workspace = true }
+ed25519-dalek = { workspace = true }
+futures-util = { workspace = true, optional = true }
+hex = { workspace = true }
+rand = { workspace = true }
+rand_xoshiro = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+derive_more = { workspace = true }
+strum = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"], optional = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"], optional = true }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+
+# Optional chain support (Solana RPC + instruction builders)
+solana-client = { workspace = true, optional = true }
+solana-sdk = { workspace = true, optional = true }
+solana-commitment-config = { workspace = true, optional = true }
+solana-compute-budget-interface = { workspace = true, optional = true }
+
+[features]
+default = []
+ws-client = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite"]
+test-helpers = ["ws-client"]
+chain = ["dep:solana-sdk"]
+chain-rpc = [
+  "chain",
+  "dep:solana-client",
+  "dep:solana-commitment-config",
+  "dep:solana-compute-budget-interface",
+]
+
+[[example]]
+name = "hello_auth"
+required-features = ["ws-client"]
+
+[[example]]
+name = "quote"
+required-features = ["ws-client"]
+
+[[example]]
+name = "discovery"
+required-features = ["ws-client"]
+
+[[example]]
+name = "indicative"
+required-features = ["ws-client"]
+
+[[example]]
+name = "managed_quote"
+required-features = ["ws-client"]
+
+[dev-dependencies]
+proptest = { workspace = true }
+tracing-subscriber = { workspace = true }
