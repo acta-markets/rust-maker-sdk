@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let args = OrderPreimageArgs {
                     chain_id: rfq.market.chain_id.value(),
                     program_id: decode_base58_32(&rfq.market.program_id)?,
-                    is_taker_buy: true,
+                    is_taker_buy: false,
                     position_type: rfq.position_type as u8,
                     market: decode_base58_32(&rfq.market.market_pda)?,
                     strike: rfq.strike.value(),
