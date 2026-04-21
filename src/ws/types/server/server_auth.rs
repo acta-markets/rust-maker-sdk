@@ -14,6 +14,8 @@ pub struct AuthSuccessData {
     pub session_id: String,
     #[serde_as(as = "Option<TimestampSeconds<i64>>")]
     pub expires_at: Option<SystemTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maker_pda: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

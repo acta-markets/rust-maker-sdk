@@ -51,6 +51,17 @@ pub enum PositionUpdateType {
     Settled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum PositionStatus {
+    None,
+    Open,
+    Funded,
+    Liquidated,
+    Settled,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqOrderOption {
     pub strike: Strike,

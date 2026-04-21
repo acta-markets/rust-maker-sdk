@@ -1,16 +1,20 @@
-[workspace]
-resolver = "2"
-members = ["rust-maker-sdk"]
+[package]
+name = "acta-maker-sdk"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Rust SDK for Acta options market makers — WebSocket client, order signing, message types"
+repository = "https://github.com/acta-markets/rust-maker-sdk"
+keywords = ["rfq", "options", "defi", "solana", "market-maker"]
+categories = ["api-bindings"]
+readme = "README.md"
 
-[workspace.dependencies]
-acta-maker-sdk = { version = "0.1.0-beta.1", path = "rust-maker-sdk" }
-
+[dependencies]
 bs58 = "0.5"
 derive_more = { version = "2.1", features = ["display", "from", "into", "deref"] }
 ed25519-dalek = { version = "2", features = ["zeroize"] }
-futures-util = "0.3"
+futures-util = { version = "0.3", optional = true }
 hex = "0.4"
-proptest = "1"
 rand = "0.9"
 rand_xoshiro = "0.7.0"
 serde = { version = "1", features = ["derive"] }
@@ -19,17 +23,53 @@ serde_with = { version = "3.16.1", features = ["macros"] }
 sha2 = "0.10"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2.0"
-tokio = "1"
-tokio-tungstenite = "0.28"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"], optional = true }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"], optional = true }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 zeroize = { version = "1", features = ["derive"] }
 
-solana-client = "3.0.0"
-solana-sdk = "3.0.0"
-solana-commitment-config = "3.0.0"
-solana-compute-budget-interface = "3.0.0"
+# Optional chain support (Solana RPC + instruction builders)
+solana-client = { version = "3.0.0", optional = true }
+solana-sdk = { version = "3.0.0", optional = true }
+solana-commitment-config = { version = "3.0.0", optional = true }
+solana-compute-budget-interface = { version = "3.0.0", optional = true }
+
+[features]
+default = []
+ws-client = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite"]
+test-helpers = ["ws-client"]
+chain = ["dep:solana-sdk"]
+chain-rpc = [
+  "chain",
+  "dep:solana-client",
+  "dep:solana-commitment-config",
+  "dep:solana-compute-budget-interface",
+]
+
+[[example]]
+name = "hello_auth"
+required-features = ["ws-client"]
+
+[[example]]
+name = "quote"
+required-features = ["ws-client"]
+
+[[example]]
+name = "discovery"
+required-features = ["ws-client"]
+
+[[example]]
+name = "indicative"
+required-features = ["ws-client"]
+
+[[example]]
+name = "managed_quote"
+required-features = ["ws-client"]
+
+[dev-dependencies]
+proptest = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 lto = true

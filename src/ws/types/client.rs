@@ -40,11 +40,11 @@ pub enum ClientMessage {
     GetMakerPositions(GetMakerPositionsMessage),
     GetMyQuotes(GetMyQuotesMessage),
     GetMarketsForMaker(GetMarketsForMakerMessage),
-    GetMakerBalances(GetMakerBalancesMessage),
     GetTokenCaps(GetTokenCapsMessage),
     GetMyCaps(GetMyCapsMessage),
     GetMyTrades(GetMyTradesMessage),
     GetEarnSummary(GetEarnSummaryMessage),
+    GetMmSummary(GetMmSummaryMessage),
     GetTokenMarketsInfo(GetTokenMarketsInfoMessage),
     GetSubscriptions(GetSubscriptionsMessage),
     CancelAllQuotes(CancelAllQuotesMessage),
@@ -125,11 +125,6 @@ pub struct GetMarketsMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GetActiveRfqsMessage {
-    pub request_id: Uuid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct GetMakerBalancesMessage {
     pub request_id: Uuid,
 }
 
@@ -383,6 +378,11 @@ pub struct GetEarnSummaryMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetMmSummaryMessage {
+    pub request_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTokenMarketsInfoMessage {
     pub request_id: Uuid,
     pub underlying_mint: String,
@@ -409,7 +409,6 @@ impl ClientMessage {
             Self::GetMakerPositions(m) => Some(m.request_id),
             Self::GetMyQuotes(m) => Some(m.request_id),
             Self::GetMarketsForMaker(m) => Some(m.request_id),
-            Self::GetMakerBalances(m) => Some(m.request_id),
             Self::GetMyActiveRfqs(m) => Some(m.request_id),
             Self::GetOrderStatus(m) => Some(m.request_id),
             Self::GetIndicativePrices(m) => Some(m.request_id),
@@ -418,6 +417,7 @@ impl ClientMessage {
             Self::GetMyCaps(m) => Some(m.request_id),
             Self::GetMyTrades(m) => Some(m.request_id),
             Self::GetEarnSummary(m) => Some(m.request_id),
+            Self::GetMmSummary(m) => Some(m.request_id),
             Self::GetTokenMarketsInfo(m) => Some(m.request_id),
             Self::IndicativePricesResponse(m) => Some(m.request_id),
             _ => None,
@@ -447,7 +447,6 @@ impl ClientMessage {
             Self::GetMakerPositions(_) => Some("MakerPositions"),
             Self::GetMyQuotes(_) => Some("MyQuotes"),
             Self::GetMarketsForMaker(_) => Some("MakerMarkets"),
-            Self::GetMakerBalances(_) => Some("MakerBalances"),
             Self::GetSubscriptions(_) => Some("Subscriptions"),
             Self::GetOrderStatus(_) => Some("OrderStatus"),
             Self::GetIndicativePrices(_) => Some("IndicativePrices"),
@@ -455,6 +454,7 @@ impl ClientMessage {
             Self::GetMyCaps(_) => Some("MyCaps"),
             Self::GetMyTrades(_) => Some("MyTrades"),
             Self::GetEarnSummary(_) => Some("EarnSummary"),
+            Self::GetMmSummary(_) => Some("MmSummary"),
             Self::GetTokenMarketsInfo(_) => Some("TokenMarketsInfo"),
             _ => None,
         }
