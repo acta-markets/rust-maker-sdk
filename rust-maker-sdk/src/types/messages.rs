@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use super::errors::ServerError;
 use super::ids::{
-    Balance, MarketId, Nonce, OrderId, PositionType, Price, Quantity, QuoteCount, RfqVersion,
-    Strike, UserId,
+    Balance, Decimals, MarketId, Nonce, OrderId, PositionType, Price, Quantity, QuoteCount,
+    RfqVersion, Strike, UserId,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]
@@ -374,6 +374,7 @@ pub struct MakerNotionalCapInfo {
 pub struct MakerBalanceCapInfo {
     pub mint: String,
     pub symbol: String,
+    pub decimals: Decimals,
     pub deposited: Balance,
     pub committed: Balance,
     pub available: Balance,

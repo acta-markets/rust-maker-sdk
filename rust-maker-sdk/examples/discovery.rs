@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .await?;
 
-                client.get_maker_balances().await?;
+                client.get_mm_summary().await?;
             }
             other => println!("server: {:?}", other),
         }

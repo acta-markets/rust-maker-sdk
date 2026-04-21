@@ -6,13 +6,12 @@ use crate::ws::error::{WsClientError, WsResult};
 use crate::ws::types::{
     AcceptQuoteMessage, AddChannelsData, AddMintsData, AuthChallengeData, CancelAllQuotesMessage,
     CancelQuoteData, CancelRfqData, ClientMessage, GetActiveRfqsMessage, GetExpiriesMessage,
-    GetIndicativePricesMessage, GetMakerBalancesMessage, GetMakerPositionsMessage,
-    GetMarketDescriptorsMessage, GetMarketsForMakerMessage, GetMarketsMessage,
-    GetMyActiveRfqsMessage, GetMyQuotesMessage, GetOrderStatusMessage, GetPositionsMessage,
-    GetSubscriptionsMessage, GetTokensMessage, HelloData, IndicativePricesResponseMessage,
-    QuoteMessage, RemoveChannelsData, RemoveMintsData, ResumeAuthData, RfqRequestMessage,
-    ServerMessage, StartAuthData, SubmitSignedSponsoredTxData, SubscribeData, UnsubscribeData,
-    WsChannel,
+    GetIndicativePricesMessage, GetMakerPositionsMessage, GetMarketDescriptorsMessage,
+    GetMarketsForMakerMessage, GetMarketsMessage, GetMmSummaryMessage, GetMyActiveRfqsMessage,
+    GetMyQuotesMessage, GetOrderStatusMessage, GetPositionsMessage, GetSubscriptionsMessage,
+    GetTokensMessage, HelloData, IndicativePricesResponseMessage, QuoteMessage, RemoveChannelsData,
+    RemoveMintsData, ResumeAuthData, RfqRequestMessage, ServerMessage, StartAuthData,
+    SubmitSignedSponsoredTxData, SubscribeData, UnsubscribeData, WsChannel,
 };
 use uuid::Uuid;
 
@@ -94,11 +93,7 @@ impl WsClient {
     ws_method!(get_expiries, GetExpiries, GetExpiriesMessage);
     ws_method!(get_order_status, GetOrderStatus, GetOrderStatusMessage);
 
-    ws_method_request_id!(
-        get_maker_balances,
-        GetMakerBalances,
-        GetMakerBalancesMessage
-    );
+    ws_method_request_id!(get_mm_summary, GetMmSummary, GetMmSummaryMessage);
     ws_method_request_id!(get_subscriptions, GetSubscriptions, GetSubscriptionsMessage);
     ws_method_request_id!(get_markets, GetMarkets, GetMarketsMessage);
 

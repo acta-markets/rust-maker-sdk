@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use crate::types::ids::{
-    Balance, Decimals, MarketId, OrderId, OrderVersion, PositionType, Price, Quantity, Slot, Strike,
+    Decimals, MarketId, OrderId, OrderVersion, PositionType, Price, Quantity, Slot, Strike,
 };
 use crate::types::{
     MakerBalanceCapInfo, MakerNotionalCapInfo, MakerPositionCapInfo, MarketCapInfo, TokenCapInfo,
@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::super::common::{
     GlobalStats, MarketDescriptorInfo, MarketStats, PositionInfo, PositionSizeRule,
-    PositionUpdateType, QuoteStatus, StatsDelta, TokenInfo, TradeInfo, WsChannel,
+    PositionStatus, PositionUpdateType, QuoteStatus, StatsDelta, TokenInfo, TradeInfo, WsChannel,
 };
 use super::super::market::MarketInfo;
 
@@ -62,9 +62,13 @@ pub struct MakerPositionInfo {
     pub pda: String,
     pub market: MarketId,
     pub underlying_mint: String,
+    pub underlying_symbol: String,
+    pub underlying_decimals: u8,
     pub quote_mint: String,
+    pub quote_symbol: String,
+    pub quote_decimals: u8,
     pub position_type: PositionType,
-    pub status: String,
+    pub status: PositionStatus,
     pub strike: Strike,
     pub quantity: Quantity,
     pub price: Price,
@@ -76,6 +80,8 @@ pub struct MakerPositionInfo {
     pub expiry_ts: SystemTime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_otm: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement_price: Option<Price>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +96,12 @@ pub struct MakerQuoteInfo {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
     pub market: MarketId,
+    pub underlying_mint: String,
+    pub underlying_symbol: String,
+    pub underlying_decimals: u8,
+    pub quote_mint: String,
+    pub quote_symbol: String,
+    pub quote_decimals: u8,
     pub strike: Strike,
     pub price: Price,
     pub quantity: Quantity,
@@ -125,19 +137,6 @@ pub struct MakerMarketInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MakerBalancesMessage {
-    pub request_id: Uuid,
-    pub balances_by_mint: HashMap<String, MakerMintBalance>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MakerMintBalance {
-    pub total: Balance,
-    pub locked_as_collateral: Balance,
-    pub available: Balance,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MyTradesMessage {
     pub request_id: Uuid,
     pub trades: Vec<MakerTradeInfo>,
@@ -150,6 +149,12 @@ pub struct MakerTradeInfo {
     pub id: Uuid,
     pub rfq_id: Uuid,
     pub market_pda: String,
+    pub underlying_mint: String,
+    pub underlying_symbol: String,
+    pub underlying_decimals: u8,
+    pub quote_mint: String,
+    pub quote_symbol: String,
+    pub quote_decimals: u8,
     pub position_type: PositionType,
     pub taker: String,
     pub strike: Strike,
@@ -265,6 +270,27 @@ pub struct MyCapsData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MakerCapsSnapshot {
+    pub positions: MakerPositionCapInfo,
+    pub notional: Vec<MakerNotionalCapInfo>,
+    pub balances: Vec<MakerBalanceCapInfo>,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MmSummaryData {
+    pub request_id: Uuid,
+    pub maker_pda: String,
+    pub caps: MyCapsData,
+    pub positions: Vec<MakerPositionInfo>,
+    pub active_quotes: Vec<MakerQuoteInfo>,
+    pub markets: Vec<MakerMarketInfo>,
+    pub tokens: Vec<TokenInfo>,
+    #[serde_as(as = "TimestampSeconds<i64>")]
+    pub computed_at: SystemTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionsMessage {
     pub request_id: Uuid,
     pub channels: Vec<WsChannel>,
@@ -315,6 +341,7 @@ pub struct TradeExecutedMessage {
 pub struct PositionUpdatedMessage {
     pub position: PositionInfo,
     pub update_type: PositionUpdateType,
+    pub caps_snapshot: MakerCapsSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
