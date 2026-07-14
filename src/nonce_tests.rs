@@ -17,7 +17,7 @@ fn atomic_nonce_generator_produces_unique_values() {
     nonce_gen.init().unwrap();
     let mut seen = HashSet::new();
     for _ in 0..10000 {
-        assert!(seen.insert(nonce_gen.next_u64()));
+        assert!(seen.insert(nonce_gen.next_u64().unwrap()));
     }
 }
 
@@ -27,7 +27,13 @@ fn atomic_nonce_generator_thread_safe() {
     GEN.init().unwrap();
 
     let results: Vec<_> = (0..8)
-        .map(|_| thread::spawn(|| (0..1000).map(|_| GEN.next_u64()).collect::<Vec<_>>()))
+        .map(|_| {
+            thread::spawn(|| {
+                (0..1000)
+                    .map(|_| GEN.next_u64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+        })
         .collect();
 
     let mut all_nonces = HashSet::new();
@@ -43,6 +49,16 @@ fn atomic_nonce_generator_thread_safe() {
 fn atomic_nonce_generator_first_value_is_not_zero() {
     let nonce_gen = AtomicNonceGenerator::new();
     nonce_gen.init().unwrap();
-    let first = nonce_gen.next_u64();
+    let first = nonce_gen.next_u64().unwrap();
     assert_ne!(first, 0, "first nonce must not be zero");
+}
+
+#[test]
+fn atomic_nonce_mapping_is_injective_for_the_known_collision_boundary() {
+    let nonce_gen = AtomicNonceGenerator {
+        counter: AtomicU64::new(64),
+        entropy_base: AtomicU64::new(1),
+    };
+
+    assert_ne!(nonce_gen.next_u64().unwrap(), nonce_gen.next_u64().unwrap());
 }

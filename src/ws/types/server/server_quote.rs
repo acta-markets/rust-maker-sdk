@@ -6,7 +6,7 @@ use serde_with::{TimestampSeconds, serde_as};
 use strum::IntoStaticStr;
 use uuid::Uuid;
 
-use super::super::common::QuoteCancelReason;
+use crate::types::QuoteCancelReason;
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]

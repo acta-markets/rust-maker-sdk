@@ -3,13 +3,12 @@ use std::time::SystemTime;
 use crate::types::ids::{
     MarketId, OrderId, PositionType, Price, Quantity, QuoteCount, RfqVersion, Strike,
 };
+use crate::types::{QuoteFinalStatus, RfqAvailableAgainReason, RfqCloseReason};
 use serde::{Deserialize, Serialize};
 use serde_with::{TimestampSeconds, serde_as};
 use uuid::Uuid;
 
-use super::super::common::{
-    MarketDescriptor, QuoteFinalStatus, RfqAvailableAgainReason, RfqCloseReason, RfqOrderOption,
-};
+use super::super::common::{MarketDescriptor, RfqOrderOption};
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +111,14 @@ pub struct ActiveRfqsData {
     pub rfqs: Vec<ActiveRfqInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MyActiveRfqState {
+    Active,
+    PendingSignature,
+    Enqueued,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MyActiveRfqInfo {
@@ -122,7 +129,7 @@ pub struct MyActiveRfqInfo {
     pub quantity: Quantity,
     #[serde_as(as = "TimestampSeconds<i64>")]
     pub expires_at: SystemTime,
-    pub state: String,
+    pub state: MyActiveRfqState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked_order_id: Option<OrderId>,
     pub quotes_count: QuoteCount,

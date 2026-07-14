@@ -23,5 +23,5 @@ pub enum ActaSdkError {
     Chain(#[from] crate::chain::ix::ChainIxError),
     #[cfg(feature = "chain-rpc")]
     #[error(transparent)]
-    ChainRpc(#[from] crate::chain::rpc::ChainError),
+    ChainRpc(#[from] crate::chain::ChainError),
 }

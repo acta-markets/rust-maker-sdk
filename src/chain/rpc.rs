@@ -1,5 +1,3 @@
-use thiserror::Error;
-
 use solana_client::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{
@@ -7,24 +5,17 @@ use solana_sdk::{
     signer::Signer, transaction::Transaction,
 };
 
+use crate::chain::ChainError;
+use crate::chain::accounts::{MarketInfo, PositionInfo, parse_market, parse_position};
 use crate::chain::ix::{
-    ChainIxError, DepositPremiumIxArgs, FundPositionIxArgs, WithdrawPremiumIxArgs,
-    build_deposit_premium_ixs, build_fund_position_ixs, build_withdraw_premium_ixs,
+    DepositPremiumIxArgs, FundPositionIxArgs, WithdrawPremiumIxArgs, build_deposit_premium_ixs,
+    build_fund_position_ixs, build_withdraw_premium_ixs,
 };
-
-#[derive(Debug, Error)]
-pub enum ChainError {
-    #[error("rpc error: {0}")]
-    Rpc(String),
-    #[error("io error: {0}")]
-    Io(String),
-    #[error("invalid account data")]
-    InvalidAccountData,
-    #[error("unknown position status: {0}")]
-    UnknownPositionStatus(u8),
-    #[error(transparent)]
-    Ix(#[from] ChainIxError),
-}
+use crate::chain::settlement::required_settlement;
+use crate::chain::wsol::{
+    NativeSolBudget, NativeSolFunding, WrapPlan, WsolWrapRequest, is_native_mint, plan_wsol_wrap,
+    token_account_rent_lamports,
+};
 
 pub struct ChainClient {
     rpc: RpcClient,
@@ -60,56 +51,12 @@ pub struct FundPositionArgs {
     pub maker_owner: Pubkey,
     pub position_pda: Pubkey,
     pub create_atas: bool,
+    pub native_sol: NativeSolFunding,
 }
 
-/// On-chain position status discriminant.
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PositionStatus {
-    None = 0,
-    Open = 1,
-    Funded = 2,
-    Liquidated = 3,
-    Settled = 4,
-}
-
-impl TryFrom<u8> for PositionStatus {
-    type Error = ChainError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::None),
-            1 => Ok(Self::Open),
-            2 => Ok(Self::Funded),
-            3 => Ok(Self::Liquidated),
-            4 => Ok(Self::Settled),
-            other => Err(ChainError::UnknownPositionStatus(other)),
-        }
-    }
-}
-
-/// Parsed data from a position on-chain account.
-#[derive(Debug, Clone)]
-pub struct PositionInfo {
-    pub position_type: u8,
-    pub status: PositionStatus,
-    pub taker_owner: Pubkey,
-    pub maker_owner: Pubkey,
-    pub market_pda: Pubkey,
-    pub strike: u64,
-    pub quantity: u64,
-    pub order_id: [u8; 32],
-}
-
-/// Parsed data from a market on-chain account.
-#[derive(Debug, Clone)]
-pub struct MarketInfo {
-    pub underlying_mint: Pubkey,
-    pub quote_mint: Pubkey,
-    pub underlying_token_program_id: Pubkey,
-    pub quote_token_program_id: Pubkey,
-    pub underlying_decimals: u8,
-    pub quote_decimals: u8,
+struct PreparedFundPosition {
+    instructions: Vec<Instruction>,
+    native_budget: Option<NativeSolBudget>,
 }
 
 impl ChainClient {
@@ -155,8 +102,14 @@ impl ChainClient {
         fee_payer: Option<&dyn Signer>,
     ) -> Result<Signature, ChainError> {
         let payer = fee_payer.unwrap_or(maker_owner);
-        let ixs = self.build_fund_position_ixs(&args, payer.pubkey())?;
-        self.send_instructions_with_options(ixs, payer, &[maker_owner], SendOptions::default())
+        let prepared = self.prepare_fund_position(&args, payer.pubkey())?;
+        self.send_instructions(
+            prepared.instructions,
+            payer,
+            &[maker_owner],
+            SendOptions::default(),
+            prepared.native_budget,
+        )
     }
 
     pub fn build_deposit_premium_ixs(
@@ -204,18 +157,26 @@ impl ChainClient {
         args: &FundPositionArgs,
         fee_payer: Pubkey,
     ) -> Result<Vec<Instruction>, ChainError> {
-        let position_data = self.fetch_account(&args.position_pda)?;
-        let pos = parse_position_basic(&position_data)?;
-        let market_data = self.fetch_account(&pos.market_pda)?;
-        let market = parse_market(&market_data)?;
+        Ok(self.prepare_fund_position(args, fee_payer)?.instructions)
+    }
 
-        build_fund_position_ixs(
+    fn prepare_fund_position(
+        &self,
+        args: &FundPositionArgs,
+        fee_payer: Pubkey,
+    ) -> Result<PreparedFundPosition, ChainError> {
+        let position_data = self.fetch_account(&args.position_pda)?;
+        let pos = parse_position(&position_data, &self.program_id)?;
+        let market_data = self.fetch_account(&pos.market_pda)?;
+        let market = parse_market(&market_data, &self.program_id)?;
+
+        let mut fund_ixs = build_fund_position_ixs(
             &self.program_id,
             &FundPositionIxArgs {
                 maker_owner: args.maker_owner,
                 position_pda: args.position_pda,
                 market_pda: pos.market_pda,
-                position_type: pos.position_type,
+                position_type: pos.position_type.into(),
                 underlying_mint: market.underlying_mint,
                 quote_mint: market.quote_mint,
                 underlying_token_program_id: market.underlying_token_program_id,
@@ -224,18 +185,101 @@ impl ChainClient {
             },
             fee_payer,
         )
-        .map_err(ChainError::from)
+        .map_err(ChainError::from)?;
+
+        let NativeSolFunding::WrapIfNeeded { reserve_lamports } = args.native_sol else {
+            return Ok(PreparedFundPosition {
+                instructions: fund_ixs,
+                native_budget: None,
+            });
+        };
+        let (settlement_mint, settlement_program) = match pos.position_type {
+            crate::types::PositionType::CoveredCall => {
+                (market.quote_mint, market.quote_token_program_id)
+            }
+            crate::types::PositionType::CashSecuredPut => {
+                (market.underlying_mint, market.underlying_token_program_id)
+            }
+        };
+        if !is_native_mint(&settlement_mint) {
+            return Ok(PreparedFundPosition {
+                instructions: fund_ixs,
+                native_budget: None,
+            });
+        }
+        let expected_settlement = required_settlement(
+            pos.position_type.into(),
+            pos.strike.value(),
+            pos.quantity.value(),
+            market.quote_decimals.value(),
+            market.underlying_decimals.value(),
+        )?;
+        if expected_settlement == 0 {
+            return Err(ChainError::InvalidAccountData);
+        }
+        let funding_ata = crate::chain::ix::derive_associated_token_address(
+            &args.maker_owner,
+            &settlement_mint,
+            &settlement_program,
+        );
+        let position_funding_ata = crate::chain::ix::derive_associated_token_address(
+            &args.position_pda,
+            &settlement_mint,
+            &settlement_program,
+        );
+        let additional_ata_rent_lamports = if args.create_atas
+            && fee_payer == args.maker_owner
+            && self
+                .rpc
+                .get_account_with_commitment(&position_funding_ata, self.commitment)?
+                .value
+                .is_none()
+        {
+            token_account_rent_lamports(&self.rpc)?
+        } else {
+            0
+        };
+        match plan_wsol_wrap(
+            &self.rpc,
+            WsolWrapRequest {
+                owner: args.maker_owner,
+                funding_ata,
+                token_program: settlement_program,
+                expected_settlement,
+                reserve_lamports,
+                allow_account_creation: args.create_atas,
+                fee_payer,
+                additional_ata_rent_lamports,
+            },
+        )? {
+            WrapPlan::NotNeeded => Ok(PreparedFundPosition {
+                instructions: fund_ixs,
+                native_budget: None,
+            }),
+            WrapPlan::Wrap {
+                instructions: wrap_ixs,
+                budget,
+            } => {
+                let deposit_ix = fund_ixs.pop().ok_or(ChainError::InvalidAccountData)?;
+                fund_ixs.extend(wrap_ixs);
+                fund_ixs.push(deposit_ix);
+                Ok(PreparedFundPosition {
+                    instructions: fund_ixs,
+                    native_budget: Some(budget),
+                })
+            }
+        }
     }
 
     /// Fetch and parse a position account. Returns full position details for pre-flight validation.
     pub fn fetch_position_info(&self, position_pda: &Pubkey) -> Result<PositionInfo, ChainError> {
         let data = self.fetch_account(position_pda)?;
-        parse_position(&data)
+        parse_position(&data, &self.program_id)
     }
 
     pub fn fetch_market_info(&self, market_pda: &Pubkey) -> Result<MarketInfo, ChainError> {
         let market_data = self.fetch_account(market_pda)?;
-        parse_market(&market_data)
+        parse_market(&market_data, &self.program_id)
     }
 
     pub fn fetch_market_quote_mint(&self, market_pda: &Pubkey) -> Result<Pubkey, ChainError> {
@@ -244,10 +288,7 @@ impl ChainClient {
 
     /// Fetch the raw token balance (u64 atoms) of a token account.
     pub fn fetch_token_balance(&self, token_account: &Pubkey) -> Result<u64, ChainError> {
-        let result = self
-            .rpc
-            .get_token_account_balance(token_account)
-            .map_err(|err| ChainError::Rpc(err.to_string()))?;
+        let result = self.rpc.get_token_account_balance(token_account)?;
         result
             .amount
             .parse::<u64>()
@@ -262,25 +303,31 @@ impl ChainClient {
         if let Some(program) = token_program {
             return ensure_supported_token_program(program);
         }
-        let account = self
-            .rpc
-            .get_account(mint)
-            .map_err(|err| ChainError::Rpc(err.to_string()))?;
+        let account = self.rpc.get_account(mint)?;
         ensure_supported_token_program(account.owner)
     }
 
     fn fetch_account(&self, pubkey: &Pubkey) -> Result<Account, ChainError> {
-        self.rpc
-            .get_account(pubkey)
-            .map_err(|err| ChainError::Rpc(err.to_string()))
+        self.rpc.get_account(pubkey).map_err(ChainError::from)
     }
 
     pub fn send_instructions_with_options(
+        &self,
+        instructions: Vec<Instruction>,
+        fee_payer: &dyn Signer,
+        extra_signers: &[&dyn Signer],
+        options: SendOptions,
+    ) -> Result<Signature, ChainError> {
+        self.send_instructions(instructions, fee_payer, extra_signers, options, None)
+    }
+
+    fn send_instructions(
         &self,
         mut instructions: Vec<Instruction>,
         fee_payer: &dyn Signer,
         extra_signers: &[&dyn Signer],
         options: SendOptions,
+        native_budget: Option<NativeSolBudget>,
     ) -> Result<Signature, ChainError> {
         if let Some(limit) = options.compute_unit_limit {
             instructions.insert(
@@ -290,10 +337,7 @@ impl ChainClient {
                 ),
             );
         }
-        let recent = self
-            .rpc
-            .get_latest_blockhash()
-            .map_err(|err| ChainError::Rpc(err.to_string()))?;
+        let recent = self.rpc.get_latest_blockhash()?;
 
         let mut signers: Vec<&dyn Signer> = Vec::with_capacity(1 + extra_signers.len());
         signers.push(fee_payer);
@@ -303,147 +347,34 @@ impl ChainClient {
             }
         }
 
-        let tx = Transaction::new_signed_with_payer(
-            &instructions,
-            Some(&fee_payer.pubkey()),
-            &signers,
-            recent,
-        );
+        let mut tx = Transaction::new_with_payer(&instructions, Some(&fee_payer.pubkey()));
+        tx.message.recent_blockhash = recent;
+        if let Some(budget) = native_budget {
+            let fee_lamports = if fee_payer.pubkey() == budget.owner {
+                self.rpc.get_fee_for_message(&tx.message)?
+            } else {
+                0
+            };
+            let available_lamports = self.rpc.get_balance(&budget.owner)?;
+            budget.validate(available_lamports, fee_lamports)?;
+        }
+        tx.try_sign(&signers, recent)?;
         self.rpc
             .send_and_confirm_transaction_with_spinner_and_commitment(&tx, self.commitment)
-            .map_err(|err| ChainError::Rpc(err.to_string()))
+            .map_err(ChainError::from)
     }
 }
 
-// ─── Position parsing ──────────────────────────────────────────────────────────
-//
-// On-chain layout:
-//   discriminator    u8   @ 0
-//   version          u8   @ 1
-//   bump             u8   @ 2
-//   position_type    u8   @ 3
-//   status           u8   @ 4
-//   flags            u8   @ 5
-//   flags2           u8   @ 6
-//   flags3           u8   @ 7
-//   taker_owner   Pubkey  @ 8   (32 bytes)
-//   maker_owner   Pubkey  @ 40  (32 bytes)
-//   market        Pubkey  @ 72  (32 bytes)
-//   strike           u64  @ 104 (8 bytes, LE)
-//   quantity         u64  @ 112 (8 bytes, LE)
-//   total_premium    u64  @ 120 (8 bytes)
-//   order_id      [u8;32] @ 128 (32 bytes)
-
-const POSITION_OFFSET_POSITION_TYPE: usize = 3;
-const POSITION_OFFSET_STATUS: usize = 4;
-const POSITION_OFFSET_TAKER_OWNER: usize = 8;
-const POSITION_OFFSET_MAKER_OWNER: usize = 40;
-const POSITION_OFFSET_MARKET: usize = 72;
-const POSITION_OFFSET_STRIKE: usize = 104;
-const POSITION_OFFSET_QUANTITY: usize = 112;
-const POSITION_OFFSET_ORDER_ID: usize = 128;
-const POSITION_MIN_LEN: usize = POSITION_OFFSET_ORDER_ID + 32; // 160
-
-struct PositionBasic {
-    position_type: u8,
-    market_pda: Pubkey,
-}
-
-fn parse_position_basic(data: &Account) -> Result<PositionBasic, ChainError> {
-    if data.data.len() < POSITION_MIN_LEN {
-        return Err(ChainError::InvalidAccountData);
-    }
-    Ok(PositionBasic {
-        position_type: data.data[POSITION_OFFSET_POSITION_TYPE],
-        market_pda: read_pubkey(&data.data, POSITION_OFFSET_MARKET)?,
-    })
-}
-
-fn parse_position(data: &Account) -> Result<PositionInfo, ChainError> {
-    if data.data.len() < POSITION_MIN_LEN {
-        return Err(ChainError::InvalidAccountData);
-    }
-    let status = PositionStatus::try_from(data.data[POSITION_OFFSET_STATUS])?;
-    let mut order_id = [0u8; 32];
-    order_id.copy_from_slice(&data.data[POSITION_OFFSET_ORDER_ID..POSITION_OFFSET_ORDER_ID + 32]);
-    Ok(PositionInfo {
-        position_type: data.data[POSITION_OFFSET_POSITION_TYPE],
-        status,
-        taker_owner: read_pubkey(&data.data, POSITION_OFFSET_TAKER_OWNER)?,
-        maker_owner: read_pubkey(&data.data, POSITION_OFFSET_MAKER_OWNER)?,
-        market_pda: read_pubkey(&data.data, POSITION_OFFSET_MARKET)?,
-        strike: read_u64(&data.data, POSITION_OFFSET_STRIKE)?,
-        quantity: read_u64(&data.data, POSITION_OFFSET_QUANTITY)?,
-        order_id,
-    })
-}
-
-// ─── Market parsing ────────────────────────────────────────────────────────────
-//
-// On-chain layout:
-//   discriminator               u8   @ 0
-//   version                     u8   @ 1
-//   bump                        u8   @ 2
-//   underlying_decimals         u8   @ 3
-//   quote_decimals              u8   @ 4
-//   flags                       u8   @ 5
-//   reserved_byte1              u8   @ 6
-//   reserved_byte2              u8   @ 7
-//   expiry_ts                  u64   @ 8
-//   settlement_price           u64   @ 16
-//   open_positions_count       u64   @ 24
-//   underlying_mint         Pubkey   @ 32  (32 bytes)
-//   quote_mint              Pubkey   @ 64  (32 bytes)
-//   underlying_token_program Pubkey  @ 96  (32 bytes)
-//   quote_token_program     Pubkey   @ 128 (32 bytes)
-//   underlying_oracle       Pubkey   @ 160 (32 bytes)
-//   quote_oracle            Pubkey   @ 192 (32 bytes)
-//
-// NOTE: prior version had WRONG offsets (160/192) reading oracle addresses as token programs.
-
-const MARKET_OFFSET_UNDERLYING_DECIMALS: usize = 3;
-const MARKET_OFFSET_QUOTE_DECIMALS: usize = 4;
-const MARKET_OFFSET_UNDERLYING_MINT: usize = 32;
-const MARKET_OFFSET_QUOTE_MINT: usize = 64;
-const MARKET_OFFSET_UNDERLYING_TOKEN_PROGRAM: usize = 96;
-const MARKET_OFFSET_QUOTE_TOKEN_PROGRAM: usize = 128;
-const MARKET_MIN_LEN: usize = MARKET_OFFSET_QUOTE_TOKEN_PROGRAM + 32; // 160
-
-fn parse_market(data: &Account) -> Result<MarketInfo, ChainError> {
-    if data.data.len() < MARKET_MIN_LEN {
-        return Err(ChainError::InvalidAccountData);
-    }
-    Ok(MarketInfo {
-        underlying_decimals: data.data[MARKET_OFFSET_UNDERLYING_DECIMALS],
-        quote_decimals: data.data[MARKET_OFFSET_QUOTE_DECIMALS],
-        underlying_mint: read_pubkey(&data.data, MARKET_OFFSET_UNDERLYING_MINT)?,
-        quote_mint: read_pubkey(&data.data, MARKET_OFFSET_QUOTE_MINT)?,
-        underlying_token_program_id: read_pubkey(
-            &data.data,
-            MARKET_OFFSET_UNDERLYING_TOKEN_PROGRAM,
-        )?,
-        quote_token_program_id: read_pubkey(&data.data, MARKET_OFFSET_QUOTE_TOKEN_PROGRAM)?,
-    })
-}
-
-// ─── Byte-level helpers ────────────────────────────────────────────────────────
-
-fn read_pubkey(data: &[u8], offset: usize) -> Result<Pubkey, ChainError> {
-    if data.len() < offset + 32 {
-        return Err(ChainError::InvalidAccountData);
-    }
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&data[offset..offset + 32]);
-    Ok(Pubkey::new_from_array(bytes))
-}
-
-fn read_u64(data: &[u8], offset: usize) -> Result<u64, ChainError> {
-    if data.len() < offset + 8 {
-        return Err(ChainError::InvalidAccountData);
-    }
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&data[offset..offset + 8]);
-    Ok(u64::from_le_bytes(bytes))
+#[cfg(test)]
+fn build_signed_transaction(
+    instructions: Vec<Instruction>,
+    fee_payer: Pubkey,
+    signers: &[&dyn Signer],
+    recent_blockhash: solana_sdk::hash::Hash,
+) -> Result<Transaction, ChainError> {
+    let mut transaction = Transaction::new_with_payer(&instructions, Some(&fee_payer));
+    transaction.try_sign(signers, recent_blockhash)?;
+    Ok(transaction)
 }
 
 const TOKEN_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -457,3 +388,7 @@ fn ensure_supported_token_program(program: Pubkey) -> Result<Pubkey, ChainError>
         Err(ChainError::InvalidAccountData)
     }
 }
+
+#[cfg(test)]
+#[path = "rpc_tests.rs"]
+mod tests;

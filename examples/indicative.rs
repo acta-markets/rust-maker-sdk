@@ -6,8 +6,8 @@ use acta_maker_sdk::{MarketId, Price};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let keypair_bytes: [u8; 64] = [0u8; 64]; // placeholder
-    let signer = BytesSigner::from_keypair(&keypair_bytes);
+    // Deterministic example key only. Load a protected secret in a real maker.
+    let signer = BytesSigner::from_secret([1u8; 32]);
 
     let mut client = WsClient::connect("wss://devnet-api.acta.markets/maker").await?;
 

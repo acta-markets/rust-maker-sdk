@@ -3,7 +3,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::signing::sign_verified;
+use crate::types::PositionType;
 use crate::wire::{WireError, decode_base58_32, decode_base58_64, encode_base58, encode_hex};
+use crate::{AsyncSignerLike, SigningError};
 
 pub const ORDER_ID_LEN: usize = 32;
 pub const ORDER_DOMAIN_TAG: [u8; 4] = *b"ACTA";
@@ -82,19 +85,27 @@ impl Zeroize for BytesSigner {
 impl ZeroizeOnDrop for BytesSigner {}
 
 impl BytesSigner {
-    pub fn from_secret(secret: [u8; 32]) -> Self {
+    pub fn from_secret(mut secret: [u8; 32]) -> Self {
         let signing_key = SigningKey::from_bytes(&secret);
         let pubkey = signing_key.verifying_key().to_bytes();
+        secret.zeroize();
         Self {
             signing_key,
             pubkey,
         }
     }
 
-    pub fn from_keypair(keypair: &[u8; 64]) -> Self {
+    pub fn from_keypair(keypair: &[u8; 64]) -> Result<Self, OrderError> {
         let mut secret = [0u8; 32];
         secret.copy_from_slice(&keypair[0..32]);
-        Self::from_secret(secret)
+        let signer = Self::from_secret(secret);
+        secret.zeroize();
+
+        if signer.pubkey != keypair[32..64] {
+            return Err(OrderError::KeypairPublicKeyMismatch);
+        }
+
+        Ok(signer)
     }
 }
 
@@ -114,7 +125,7 @@ pub struct OrderPreimageArgs {
     pub chain_id: u64,
     pub program_id: [u8; 32],
     pub is_taker_buy: bool,
-    pub position_type: u8,
+    pub position_type: PositionType,
     pub market: [u8; 32],
     pub strike: u64,
     pub quantity: u64,
@@ -127,6 +138,8 @@ pub struct OrderPreimageArgs {
 
 #[derive(Debug, Error)]
 pub enum OrderError {
+    #[error("keypair public key does not match its secret key")]
+    KeypairPublicKeyMismatch,
     #[error("invalid signing key: {0}")]
     InvalidSigningKey(String),
     #[error("invalid verifying key: {0}")]
@@ -145,7 +158,7 @@ pub fn build_order_preimage(args: &OrderPreimageArgs) -> [u8; ORDER_PREIMAGE_LEN
 
     let b = HEADER_LEN;
     buf[b + OFF_IS_TAKER_BUY] = u8::from(args.is_taker_buy);
-    buf[b + OFF_POSITION_TYPE] = args.position_type;
+    buf[b + OFF_POSITION_TYPE] = args.position_type.into();
     buf[b + OFF_MARKET..b + OFF_MARKET + PUBKEY_LEN].copy_from_slice(&args.market);
     buf[b + OFF_STRIKE..b + OFF_STRIKE + U64_LEN].copy_from_slice(&args.strike.to_le_bytes());
     buf[b + OFF_QUANTITY..b + OFF_QUANTITY + U64_LEN].copy_from_slice(&args.quantity.to_le_bytes());
@@ -207,6 +220,13 @@ pub fn sign_order_id_with_signer_base58<S: SignerLike>(
     signer.sign_message_base58(order_id)
 }
 
+pub async fn sign_order_id_with_async_signer<S: AsyncSignerLike + ?Sized>(
+    order_id: &[u8; ORDER_ID_LEN],
+    signer: &S,
+) -> Result<[u8; 64], SigningError> {
+    sign_verified(signer, order_id).await
+}
+
 pub fn verify_order_id_signature_bytes(
     order_id: &[u8; ORDER_ID_LEN],
     signature: &[u8; 64],
@@ -237,10 +257,8 @@ pub fn sign_order_id_from_base58_keypair(
 ) -> Result<String, OrderError> {
     let order_id = decode_hex32(order_id_hex)?;
     let keypair = decode_base58_64(keypair_base58)?;
-    let secret: [u8; 32] = keypair[0..32]
-        .try_into()
-        .map_err(|_| OrderError::InvalidSigningKey("expected 64-byte keypair".to_string()))?;
-    sign_order_id_base58(&order_id, &secret)
+    let signer = BytesSigner::from_keypair(&keypair)?;
+    Ok(sign_order_id_with_signer_base58(&order_id, &signer))
 }
 
 fn decode_hex32(hex_str: &str) -> Result<[u8; 32], OrderError> {

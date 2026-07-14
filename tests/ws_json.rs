@@ -1,4 +1,4 @@
-use acta_maker_sdk::{Decimals, Nonce, OrderId, Price, RfqVersion, Strike};
+use acta_maker_sdk::{Decimals, MarketId, Nonce, OrderId, PositionType, Price, RfqVersion, Strike};
 use proptest::prelude::*;
 
 use acta_maker_sdk::ws::types::*;
@@ -856,5 +856,127 @@ fn batch_quotes_ack_roundtrip() {
             assert!(matches!(data.results[1], BatchQuoteResult::Rejected(_)));
         }
         _ => panic!("Expected BatchQuotesAck"),
+    }
+}
+
+#[test]
+fn unknown_server_message_parses_to_unknown() {
+    let raw = r#"{"type":"SomeFutureMessage","data":{"x":1}}"#;
+    let parsed = parse_server_message(raw).unwrap();
+    match parsed {
+        ServerMessage::Unknown(unknown) => {
+            assert_eq!(unknown.message_type, "SomeFutureMessage");
+            assert_eq!(&*unknown.raw_json, raw);
+        }
+        _ => panic!("Expected Unknown"),
+    }
+}
+
+#[test]
+fn unknown_server_error_parses_to_unknown() {
+    let parsed = parse_server_message(
+        r#"{"type":"Error","data":{"type":"SomeFutureError","data":{"x":1}}}"#,
+    )
+    .unwrap();
+    match parsed {
+        ServerMessage::Error(ServerError::Unknown(unknown)) => {
+            assert_eq!(unknown.error_type, "SomeFutureError");
+            assert!(unknown.raw_json.contains("\"x\":1"));
+        }
+        _ => panic!("Expected Error"),
+    }
+}
+
+#[test]
+fn unknown_request_error_keeps_request_id() {
+    let request_id = Uuid::new_v4();
+    let parsed = parse_server_message(&format!(
+        r#"{{"type":"RequestError","data":{{"request_id":"{request_id}","error":{{"type":"SomeFutureError"}}}}}}"#,
+    ))
+    .unwrap();
+    match parsed {
+        ServerMessage::RequestError(env) => {
+            assert_eq!(env.request_id, request_id);
+            match env.error {
+                ServerError::Unknown(unknown) => {
+                    assert_eq!(unknown.error_type, "SomeFutureError");
+                    assert!(unknown.raw_json.contains("RequestError"));
+                }
+                _ => panic!("Expected Unknown error"),
+            }
+        }
+        _ => panic!("Expected RequestError"),
+    }
+}
+
+#[test]
+fn referral_protocol_messages_match_backend_wire_shape() {
+    let request_id = Uuid::new_v4();
+    let client = ClientMessage::RedeemInvite(RedeemInviteData {
+        request_id,
+        code: "ABCD".to_string(),
+    });
+    assert_eq!(client.request_id(), Some(request_id));
+
+    let raw = format!(
+        r#"{{"type":"InviteRedeemed","data":{{"request_id":"{request_id}","referral_code":"abcd"}}}}"#
+    );
+    match parse_server_message(&raw).unwrap() {
+        ServerMessage::InviteRedeemed(data) => {
+            assert_eq!(data.request_id, request_id);
+            assert_eq!(data.referral_code.as_str(), "ABCD");
+        }
+        _ => panic!("Expected InviteRedeemed"),
+    }
+}
+
+#[test]
+fn my_quotes_default_requests_only_active_quotes() {
+    let request = GetMyQuotesMessage::default();
+    assert!(request.active_only);
+    assert_eq!(request.limit, None);
+}
+
+#[test]
+fn default_request_messages_receive_unique_non_nil_ids() {
+    let first = GetMarketsMessage::default().request_id;
+    let second = GetMarketsMessage::default().request_id;
+
+    assert!(!first.is_nil());
+    assert!(!second.is_nil());
+    assert_ne!(first, second);
+}
+
+#[test]
+fn indicative_price_response_is_not_treated_as_an_acknowledged_request() {
+    let message = ClientMessage::IndicativePricesResponse(IndicativePricesResponseMessage {
+        request_id: Uuid::new_v4(),
+        market: MarketId::new("market"),
+        position_type: PositionType::CoveredCall,
+        prices: vec![],
+    });
+    assert_eq!(message.request_id(), None);
+}
+
+#[test]
+fn known_message_with_bad_payload_is_still_an_error() {
+    assert!(parse_server_message(r#"{"type":"RfqCreated","data":{"x":1}}"#).is_err());
+}
+
+#[test]
+fn wrong_endpoint_error_parses() {
+    let parsed: ServerMessage = serde_json::from_str(
+        r#"{"type":"Error","data":{"type":"WrongEndpoint","data":{"endpoint":"maker_data","allowed_endpoints":["maker"]}}}"#,
+    )
+    .unwrap();
+    match parsed {
+        ServerMessage::Error(ServerError::WrongEndpoint {
+            endpoint,
+            allowed_endpoints,
+        }) => {
+            assert_eq!(endpoint, WsEndpointKind::MakerData);
+            assert_eq!(allowed_endpoints, vec![WsEndpointKind::Maker]);
+        }
+        _ => panic!("Expected WrongEndpoint"),
     }
 }

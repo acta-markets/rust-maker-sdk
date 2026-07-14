@@ -1,4 +1,3 @@
-#[macro_export]
 macro_rules! define_numeric_newtype {
     ($name:ident, $inner:ty) => {
         #[derive(
@@ -33,7 +32,6 @@ macro_rules! define_numeric_newtype {
     };
 }
 
-#[macro_export]
 macro_rules! define_string_newtype {
     ($name:ident) => {
         #[derive(
@@ -85,7 +83,6 @@ macro_rules! define_string_newtype {
     };
 }
 
-#[macro_export]
 macro_rules! define_bytes32_newtype {
     ($name:ident) => {
         #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

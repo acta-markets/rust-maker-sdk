@@ -12,9 +12,8 @@ static NONCE_GEN: AtomicNonceGenerator = AtomicNonceGenerator::new();
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load keypair — in production, read from file or env var.
-    let keypair_bytes: [u8; 64] = [0u8; 64]; // placeholder
-    let signer = BytesSigner::from_keypair(&keypair_bytes);
+    // Deterministic example key only. Load a protected secret in a real maker.
+    let signer = BytesSigner::from_secret([1u8; 32]);
 
     let mut client = WsClient::connect("wss://devnet-api.acta.markets/maker").await?;
 
@@ -54,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // until valid_until - 300s.
                 let valid_until =
                     std::time::SystemTime::now() + std::time::Duration::from_secs(350);
-                let nonce = NONCE_GEN.next_u64();
+                let nonce = NONCE_GEN.next_u64()?;
                 let price: u64 = 1_000_000_000; // your pricing logic here
 
                 // Build order_id from canonical preimage and sign it.
@@ -62,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     chain_id: rfq.market.chain_id.value(),
                     program_id: decode_base58_32(&rfq.market.program_id)?,
                     is_taker_buy: false,
-                    position_type: rfq.position_type as u8,
+                    position_type: rfq.position_type,
                     market: decode_base58_32(&rfq.market.market_pda)?,
                     strike: rfq.strike.value(),
                     quantity: rfq.quantity.value(),

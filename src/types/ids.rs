@@ -8,8 +8,22 @@ define_bytes32_newtype!(OrderId);
 define_numeric_newtype!(Strike, u64);
 define_numeric_newtype!(Price, u64);
 define_numeric_newtype!(Quantity, u64);
+
+impl Price {
+    /// Apply a protocol fee in basis points using the contract's rounding rule.
+    #[must_use]
+    pub fn after_fee_bps(self, bps: u16) -> Self {
+        let fee = u128::from(self.0) * u128::from(bps) / 10_000;
+        Self::new(
+            self.0
+                .saturating_sub(u64::try_from(fee).unwrap_or(u64::MAX)),
+        )
+    }
+}
+
 define_numeric_newtype!(Nonce, u64);
 define_numeric_newtype!(RfqVersion, u64);
+// Reserved wire field: producers emit 0, no domain source yet, no consumer gates on it.
 define_numeric_newtype!(OrderVersion, u64);
 define_numeric_newtype!(Slot, u64);
 define_numeric_newtype!(ChainId, u64);

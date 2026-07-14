@@ -36,7 +36,8 @@ impl NonceGenerator {
 
 /// Lock-free atomic nonce generator for concurrent use.
 ///
-/// Uses atomic counter XOR'd with entropy base for uniqueness.
+/// Uses an atomic counter offset by an entropy base. Values are unique until
+/// the `u64` counter wraps.
 /// Call [`init()`](Self::init) once before use to seed from OS entropy.
 pub struct AtomicNonceGenerator {
     counter: AtomicU64,
@@ -66,21 +67,17 @@ impl AtomicNonceGenerator {
     }
 
     #[inline]
-    pub fn next_u64(&self) -> u64 {
+    pub fn next_u64(&self) -> Result<u64, NonceError> {
         let base = self.entropy_base.load(Ordering::Relaxed);
         let base = if base == 0 {
-            if let Err(e) = self.init() {
-                tracing::warn!(
-                    "AtomicNonceGenerator: OsRng unavailable ({e}), nonces will be sequential"
-                );
-            }
+            self.init()?;
             self.entropy_base.load(Ordering::Relaxed)
         } else {
             base
         };
 
         let count = self.counter.fetch_add(1, Ordering::Relaxed);
-        base.wrapping_add(count) ^ base.rotate_left((count & 63) as u32)
+        Ok(base.wrapping_add(count))
     }
 }
 

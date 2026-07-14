@@ -8,25 +8,6 @@ use crate::types::ids::{
     ChainId, Decimals, MarketId, PositionType, Price, Quantity, Strike, TradeCount, Volume,
 };
 
-pub use crate::types::AuthRequiredAction;
-pub use crate::types::CapError;
-pub use crate::types::DbFeature;
-pub use crate::types::MakerBalanceCapInfo;
-pub use crate::types::MakerNotionalCapInfo;
-pub use crate::types::MakerPositionCapInfo;
-pub use crate::types::MarketCapInfo;
-pub use crate::types::QuoteCancelReason;
-pub use crate::types::QuoteCapInfo;
-pub use crate::types::QuoteFinalStatus;
-pub use crate::types::QuoteLockedReason;
-pub use crate::types::QuoteStatus;
-pub use crate::types::RateLimitReason;
-pub use crate::types::RfqAvailableAgainReason;
-pub use crate::types::RfqCloseReason;
-pub use crate::types::RfqStateError;
-pub use crate::types::TokenCapInfo;
-pub use crate::types::UserRole;
-
 pub const FEATURE_QUOTE_EXPIRED: &str = "quote_expired";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
@@ -39,6 +20,15 @@ pub enum WsChannel {
     Positions,
     ChainEvents,
     Markets,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum WsEndpointKind {
+    Maker,
+    MakerData,
+    Taker,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]
@@ -128,7 +118,7 @@ pub struct PositionInfo {
     pub underlying_mint: String,
     pub quote_mint: String,
     pub position_type: PositionType,
-    pub status: String,
+    pub status: PositionStatus,
     pub strike: Strike,
     pub quantity: Quantity,
     pub price: Price,

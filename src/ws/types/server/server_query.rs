@@ -5,7 +5,8 @@ use crate::types::ids::{
     Decimals, MarketId, OrderId, OrderVersion, PositionType, Price, Quantity, Slot, Strike,
 };
 use crate::types::{
-    MakerBalanceCapInfo, MakerNotionalCapInfo, MakerPositionCapInfo, MarketCapInfo, TokenCapInfo,
+    MakerBalanceCapInfo, MakerNotionalCapInfo, MakerPositionCapInfo, MarketCapInfo, OrderStatus,
+    QuoteCapInfo, QuoteStatus, TokenCapInfo,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::{TimestampSeconds, serde_as};
@@ -13,7 +14,7 @@ use uuid::Uuid;
 
 use super::super::common::{
     GlobalStats, MarketDescriptorInfo, MarketStats, PositionInfo, PositionSizeRule, PositionStatus,
-    PositionUpdateType, QuoteStatus, StatsDelta, TokenInfo, TradeInfo, WsChannel,
+    PositionUpdateType, StatsDelta, TokenInfo, TradeInfo, WsChannel,
 };
 use super::super::market::MarketInfo;
 
@@ -54,6 +55,9 @@ pub struct TokensData {
 pub struct MakerPositionsMessage {
     pub request_id: Uuid,
     pub positions: Vec<MakerPositionInfo>,
+    /// True when the result was truncated at the server limit (default 100, max 500).
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[serde_as]
@@ -160,8 +164,7 @@ pub struct MakerTradeInfo {
     pub strike: Strike,
     pub quantity: Quantity,
     pub price: Price,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tx_signature: Option<String>,
+    pub tx_signature: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position_pda: Option<String>,
     #[serde_as(as = "TimestampSeconds<i64>")]
@@ -258,7 +261,7 @@ pub struct TokenCapsData {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markets: Vec<MarketCapInfo>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub quotes: Vec<super::super::common::QuoteCapInfo>,
+    pub quotes: Vec<QuoteCapInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,6 +291,9 @@ pub struct MmSummaryData {
     pub tokens: Vec<TokenInfo>,
     #[serde_as(as = "TimestampSeconds<i64>")]
     pub computed_at: SystemTime,
+    /// True when the embedded `positions` were capped; page via `GetMakerPositions`.
+    #[serde(default)]
+    pub positions_has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,7 +320,7 @@ pub struct SubscriptionUpdatedData {
 pub struct OrderStatusMessage {
     pub request_id: Uuid,
     pub order_id: OrderId,
-    pub status: String,
+    pub status: OrderStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rfq_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

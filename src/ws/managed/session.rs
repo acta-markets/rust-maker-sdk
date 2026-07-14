@@ -1,19 +1,23 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc};
-use tokio::time::{interval, sleep, timeout};
+use tokio::time::{Instant, interval, timeout};
 
 use crate::ws::client::WsClient;
 use crate::ws::error::{WsClientError, WsResult};
 use crate::ws::reconnect::{jittered_reconnect_delay, next_reconnect_delay};
-use crate::ws::types::{AuthChallengeData, ClientMessage, ServerMessage};
+use uuid::Uuid;
 
+use crate::ws::types::{
+    AuthChallengeData, ClientMessage, GetActiveRfqsMessage, GetMmSummaryMessage, ServerMessage,
+};
+
+use super::reconnect_window::wait_reconnect_window;
 use super::tracker::AwaitTracker;
 use super::{
-    ManagedCommand, ManagedWsConfig, ManagedWsEvent, SendAwaitError, normalize_maker_ws_url,
-    send_event,
+    ManagedCommand, ManagedInbound, ManagedWsConfig, ManagedWsEvent, SendAwaitError,
+    normalize_maker_ws_url_for_endpoint, send_event,
 };
 
 enum SessionEnd {
@@ -21,21 +25,50 @@ enum SessionEnd {
     Disconnected,
 }
 
+struct InboundPublisher<'a> {
+    tx: &'a broadcast::Sender<Arc<ManagedInbound>>,
+    connection_epoch: u64,
+    sequence: &'a mut u64,
+}
+
+impl InboundPublisher<'_> {
+    fn publish(&mut self, message: ServerMessage) -> Arc<ServerMessage> {
+        *self.sequence = self.sequence.wrapping_add(1);
+        let message = Arc::new(message);
+        let inbound = ManagedInbound {
+            connection_epoch: self.connection_epoch,
+            sequence: *self.sequence,
+            received_at: std::time::Instant::now(),
+            message: Arc::clone(&message),
+        };
+        let _ = self.tx.send(Arc::new(inbound));
+        message
+    }
+}
+
 pub(super) async fn run_managed_ws(
     config: ManagedWsConfig,
     mut cmd_rx: mpsc::Receiver<ManagedCommand>,
-    messages_tx: broadcast::Sender<Arc<ServerMessage>>,
+    mut cancel_rx: mpsc::UnboundedReceiver<u64>,
+    messages_tx: broadcast::Sender<Arc<ManagedInbound>>,
     events_tx: broadcast::Sender<ManagedWsEvent>,
 ) {
-    let mut queued_outbound = VecDeque::<ClientMessage>::new();
-    let mut tracker = AwaitTracker::new();
+    let mut tracker = AwaitTracker::new(config.max_pending_awaits);
     let mut reconnect_delay = config.reconnect_delay;
     let mut reconnect_attempt = 0u64;
-    let connect_url = normalize_maker_ws_url(&config.url);
+    let mut connection_epoch = 0u64;
+    let connect_url = normalize_maker_ws_url_for_endpoint(&config.url, config.endpoint);
 
     loop {
-        match WsClient::connect(&connect_url).await {
+        match WsClient::connect_with_config(&connect_url, config.transport).await {
             Ok(mut client) => {
+                connection_epoch = connection_epoch.wrapping_add(1);
+                let mut inbound_sequence = 0u64;
+                let mut inbound = InboundPublisher {
+                    tx: &messages_tx,
+                    connection_epoch,
+                    sequence: &mut inbound_sequence,
+                };
                 reconnect_attempt = 0;
                 reconnect_delay = config.reconnect_delay;
                 send_event(&events_tx, ManagedWsEvent::Connected);
@@ -44,9 +77,9 @@ pub(super) async fn run_managed_ws(
                     &mut client,
                     &config,
                     &mut cmd_rx,
-                    &mut queued_outbound,
+                    &mut cancel_rx,
                     &mut tracker,
-                    &messages_tx,
+                    &mut inbound,
                     &events_tx,
                 )
                 .await;
@@ -54,7 +87,7 @@ pub(super) async fn run_managed_ws(
                 tracker.drain_all();
 
                 if matches!(outcome, SessionEnd::CloseRequested) {
-                    let _ = client.close().await;
+                    let _ = timeout(config.write_timeout, client.close()).await;
                     return;
                 }
                 send_event(&events_tx, ManagedWsEvent::Disconnected);
@@ -66,8 +99,7 @@ pub(super) async fn run_managed_ws(
 
         if wait_reconnect_window(
             &mut cmd_rx,
-            &mut queued_outbound,
-            config.max_queued_outbound,
+            &mut cancel_rx,
             jittered_reconnect_delay(reconnect_delay),
             &events_tx,
             reconnect_attempt + 1,
@@ -86,58 +118,98 @@ async fn run_session(
     client: &mut WsClient,
     config: &ManagedWsConfig,
     cmd_rx: &mut mpsc::Receiver<ManagedCommand>,
-    queued_outbound: &mut VecDeque<ClientMessage>,
+    cancel_rx: &mut mpsc::UnboundedReceiver<u64>,
     tracker: &mut AwaitTracker,
-    messages_tx: &broadcast::Sender<Arc<ServerMessage>>,
+    inbound: &mut InboundPublisher<'_>,
     events_tx: &broadcast::Sender<ManagedWsEvent>,
 ) -> SessionEnd {
-    if let Err(err) = authenticate(client, config, messages_tx).await {
-        send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
-        return SessionEnd::Disconnected;
+    match timeout(config.auth_timeout, authenticate(client, config, inbound)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
+            return SessionEnd::Disconnected;
+        }
+        Err(_) => {
+            send_event(
+                events_tx,
+                ManagedWsEvent::Error("authentication timed out".to_string()),
+            );
+            return SessionEnd::Disconnected;
+        }
     }
     send_event(events_tx, ManagedWsEvent::Authenticated);
 
     if let Some(subscribe) = &config.initial_subscribe {
         let sub = subscribe.clone();
-        if let Err(err) = client.send(&ClientMessage::Subscribe(sub)).await {
+        if let Err(err) = write_message(client, config, &ClientMessage::Subscribe(sub)).await {
             send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
             return SessionEnd::Disconnected;
         }
     }
 
-    for message in &config.resync_messages {
-        if let Err(err) = client.send(message).await {
-            send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
-            return SessionEnd::Disconnected;
-        }
-    }
-
-    while let Some(message) = queued_outbound.pop_front() {
-        if let Err(err) = client.send(&message).await {
-            queued_outbound.push_front(message);
-            send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
-            return SessionEnd::Disconnected;
+    if config.auto_reconcile {
+        let reconcile = [
+            ClientMessage::GetMmSummary(GetMmSummaryMessage {
+                request_id: Uuid::new_v4(),
+            }),
+            ClientMessage::GetActiveRfqs(GetActiveRfqsMessage {
+                request_id: Uuid::new_v4(),
+            }),
+        ];
+        for message in reconcile {
+            if let Err(err) = write_message(client, config, &message).await {
+                send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
+                return SessionEnd::Disconnected;
+            }
         }
     }
 
     let mut ping_timer = interval(config.ping_interval);
     ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut pong_deadline = None;
 
     loop {
         tokio::select! {
             maybe_cmd = cmd_rx.recv() => {
-                if let Some(end) = handle_command(maybe_cmd, client, config, queued_outbound, tracker, events_tx).await {
+                if let Some(end) = handle_command(maybe_cmd, client, config, tracker, events_tx).await {
                     return end;
                 }
             }
-            _ = ping_timer.tick() => {
-                if let Err(err) = client.ping().await {
-                    send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
-                    return SessionEnd::Disconnected;
+            maybe_await_id = cancel_rx.recv() => {
+                if let Some(await_id) = maybe_await_id {
+                    tracker.cancel(await_id);
                 }
             }
+            _ = ping_timer.tick(), if pong_deadline.is_none() => {
+                match timeout(config.write_timeout, client.ping()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
+                        return SessionEnd::Disconnected;
+                    }
+                    Err(_) => {
+                        send_event(events_tx, ManagedWsEvent::Error("ping write timed out".to_string()));
+                        return SessionEnd::Disconnected;
+                    }
+                }
+                pong_deadline = Some(Instant::now() + config.pong_timeout);
+            }
+            _ = wait_for_deadline(pong_deadline), if pong_deadline.is_some() => {
+                send_event(events_tx, ManagedWsEvent::Error("pong deadline exceeded".to_string()));
+                return SessionEnd::Disconnected;
+            }
             read_result = read_ws(client, config.ws_read_timeout) => {
-                if let Some(end) = handle_ws_read(read_result, client, config, tracker, messages_tx, events_tx).await {
+                if matches!(read_result, Some(Ok(ServerMessage::Pong(_)))) {
+                    pong_deadline = None;
+                }
+                if let Some(end) = handle_ws_read(
+                    read_result,
+                    client,
+                    config,
+                    tracker,
+                    inbound,
+                    events_tx,
+                ).await {
                     return end;
                 }
             }
@@ -145,53 +217,75 @@ async fn run_session(
     }
 }
 
+async fn wait_for_deadline(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline).await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
 async fn handle_command(
     maybe_cmd: Option<ManagedCommand>,
     client: &mut WsClient,
     config: &ManagedWsConfig,
-    queued_outbound: &mut VecDeque<ClientMessage>,
     tracker: &mut AwaitTracker,
     events_tx: &broadcast::Sender<ManagedWsEvent>,
 ) -> Option<SessionEnd> {
     match maybe_cmd {
-        Some(ManagedCommand::Send(message)) => {
-            if let Err(err) = client.send(&message).await {
-                if queued_outbound.len() < config.max_queued_outbound {
-                    queued_outbound.push_back(message);
-                }
+        Some(ManagedCommand::Send { message, tx }) => {
+            if tx.is_closed() {
+                return None;
+            }
+            if let Err(err) = write_message(client, config, &message).await {
                 send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
+                let _ = tx.send(Err(err));
                 return Some(SessionEnd::Disconnected);
             }
-        }
-        Some(ManagedCommand::SendRaw(json)) => {
-            if let Err(err) = client.send_text(json).await {
-                send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
-                return Some(SessionEnd::Disconnected);
-            }
+            let _ = tx.send(Ok(()));
         }
         Some(ManagedCommand::SendAwait {
+            await_id,
             message,
-            expected,
-            request_id,
             tx,
         }) => {
             if tx.is_closed() {
                 return None;
             }
-            tracker.register(expected, request_id, tx);
-            if let Err(err) = client.send(&message).await {
-                if let Some(sender) = tracker.remove_latest() {
+            if let Err((err, tx)) = tracker.register(await_id, &message, tx) {
+                tracing::warn!(await_id, error = %err, "cannot register response awaiter");
+                let _ = tx.send(Err(err));
+                return None;
+            }
+            if let Err(err) = write_message(client, config, &message).await {
+                if let Some(sender) = tracker.cancel(await_id) {
                     let _ = sender.send(Err(SendAwaitError::Disconnected));
                 }
                 send_event(events_tx, ManagedWsEvent::Error(err.to_string()));
                 return Some(SessionEnd::Disconnected);
             }
         }
-        Some(ManagedCommand::Close) | None => {
+        Some(ManagedCommand::Close { tx }) => {
+            let _ = tx.send(());
+            return Some(SessionEnd::CloseRequested);
+        }
+        None => {
             return Some(SessionEnd::CloseRequested);
         }
     }
     None
+}
+
+async fn write_message(
+    client: &mut WsClient,
+    config: &ManagedWsConfig,
+    message: &ClientMessage,
+) -> Result<(), super::ManagedWsError> {
+    match timeout(config.write_timeout, client.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => Err(super::ManagedWsError::Write(err)),
+        Err(_) => Err(super::ManagedWsError::WriteTimeout),
+    }
 }
 
 async fn read_ws(
@@ -215,13 +309,12 @@ async fn handle_ws_read(
     client: &mut WsClient,
     config: &ManagedWsConfig,
     tracker: &mut AwaitTracker,
-    messages_tx: &broadcast::Sender<Arc<ServerMessage>>,
+    inbound: &mut InboundPublisher<'_>,
     events_tx: &broadcast::Sender<ManagedWsEvent>,
 ) -> Option<SessionEnd> {
     match read_result {
         Some(Ok(server_msg)) => {
-            let msg_ref = Arc::new(server_msg);
-            let _ = messages_tx.send(Arc::clone(&msg_ref));
+            let msg_ref = inbound.publish(server_msg);
             if let Some(sender) = tracker.take_for_message(&msg_ref) {
                 let _ = sender.send(Ok(Arc::clone(&msg_ref)));
             }
@@ -239,11 +332,14 @@ async fn handle_ws_read(
     None
 }
 
-fn build_auth_response(
+async fn build_auth_response(
     config: &ManagedWsConfig,
     challenge: &str,
 ) -> Result<AuthChallengeData, String> {
-    let signature = (config.challenge_signer)(challenge)
+    let signature = config
+        .challenge_signing
+        .sign(challenge)
+        .await
         .map_err(|err| format!("challenge signer failed: {err}"))?;
     Ok(AuthChallengeData {
         challenge: challenge.to_owned(),
@@ -267,11 +363,16 @@ async fn handle_session_message(
 ) -> Result<(), String> {
     match msg {
         ServerMessage::AuthRequest(data) => {
-            let auth = build_auth_response(config, &data.challenge)?;
-            client
-                .auth_challenge(auth)
+            let auth = timeout(
+                config.auth_timeout,
+                build_auth_response(config, &data.challenge),
+            )
+            .await
+            .map_err(|_| "challenge signing timed out".to_string())??;
+            timeout(config.write_timeout, client.auth_challenge(auth))
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|_| "auth response write timed out".to_string())?
+                .map_err(|error| error.to_string())?;
         }
         ServerMessage::AuthSuccess(_) => {
             send_event(events_tx, ManagedWsEvent::Authenticated);
@@ -317,28 +418,35 @@ async fn handle_session_message(
 async fn authenticate(
     client: &mut WsClient,
     config: &ManagedWsConfig,
-    messages_tx: &broadcast::Sender<Arc<ServerMessage>>,
+    inbound: &mut InboundPublisher<'_>,
 ) -> WsResult<()> {
-    client.send_text(&*config.hello_json).await?;
-    client.send_text(&*config.start_auth_json).await?;
+    timeout(config.write_timeout, client.send_text(&*config.hello_json))
+        .await
+        .map_err(|_| WsClientError::Timeout)??;
+    timeout(
+        config.write_timeout,
+        client.send_text(&*config.start_auth_json),
+    )
+    .await
+    .map_err(|_| WsClientError::Timeout)??;
 
     loop {
-        let next = timeout(config.auth_timeout, client.next()).await;
-        let message = match next {
-            Ok(Some(Ok(msg))) => msg,
-            Ok(Some(Err(err))) => return Err(err),
-            Ok(None) => return Err(WsClientError::ConnectionClosed),
-            Err(_) => return Err(WsClientError::Timeout),
+        let message = match client.next().await {
+            Some(Ok(msg)) => msg,
+            Some(Err(err)) => return Err(err),
+            None => return Err(WsClientError::ConnectionClosed),
         };
 
-        let msg_arc = Arc::new(message);
-        let _ = messages_tx.send(Arc::clone(&msg_arc));
+        let msg_arc = inbound.publish(message);
 
         match &*msg_arc {
             ServerMessage::AuthRequest(data) => {
                 let auth = build_auth_response(config, &data.challenge)
+                    .await
                     .map_err(WsClientError::Protocol)?;
-                client.auth_challenge(auth).await?;
+                timeout(config.write_timeout, client.auth_challenge(auth))
+                    .await
+                    .map_err(|_| WsClientError::Timeout)??;
             }
             ServerMessage::AuthSuccess(_) => {
                 return Ok(());
@@ -350,53 +458,6 @@ async fn authenticate(
                 )));
             }
             _ => {}
-        }
-    }
-}
-
-async fn wait_reconnect_window(
-    cmd_rx: &mut mpsc::Receiver<ManagedCommand>,
-    queued_outbound: &mut VecDeque<ClientMessage>,
-    max_queued: usize,
-    delay: Duration,
-    events_tx: &broadcast::Sender<ManagedWsEvent>,
-    next_attempt: u64,
-) -> bool {
-    send_event(
-        events_tx,
-        ManagedWsEvent::Reconnecting {
-            attempt: next_attempt,
-            delay_ms: delay.as_millis() as u64,
-        },
-    );
-
-    let sleeper = sleep(delay);
-    tokio::pin!(sleeper);
-
-    loop {
-        tokio::select! {
-            _ = &mut sleeper => return false,
-            maybe_cmd = cmd_rx.recv() => {
-                match maybe_cmd {
-                    Some(ManagedCommand::Send(message)) => {
-                        if queued_outbound.len() < max_queued {
-                            queued_outbound.push_back(message);
-                        } else {
-                            tracing::warn!(
-                                queue_len = queued_outbound.len(),
-                                "outbound queue full, dropping message during reconnect"
-                            );
-                        }
-                    }
-                    Some(ManagedCommand::SendRaw(_)) => {
-                        tracing::warn!("SendRaw dropped during reconnect — raw messages cannot be queued for resend");
-                    }
-                    Some(ManagedCommand::SendAwait { tx, .. }) => {
-                        let _ = tx.send(Err(SendAwaitError::Disconnected));
-                    }
-                    Some(ManagedCommand::Close) | None => return true,
-                }
-            }
         }
     }
 }

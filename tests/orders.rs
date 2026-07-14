@@ -1,3 +1,4 @@
+use acta_maker_sdk::PositionType;
 use acta_maker_sdk::orders::*;
 use acta_maker_sdk::wire::{encode_base58, encode_hex};
 use proptest::prelude::*;
@@ -8,7 +9,7 @@ fn order_preimage_layout_is_stable() {
         chain_id: 0,
         program_id: [4u8; 32],
         is_taker_buy: false,
-        position_type: 2,
+        position_type: PositionType::CashSecuredPut,
         market: [1u8; 32],
         strike: 42,
         quantity: 7,
@@ -27,7 +28,7 @@ fn order_preimage_layout_is_stable() {
 
     let base = 44usize;
     assert_eq!(preimage[base], 0);
-    assert_eq!(preimage[base + 1], 2);
+    assert_eq!(preimage[base + 1], 1);
     assert_eq!(&preimage[base + 2..base + 34], &args.market);
     assert_eq!(
         u64::from_le_bytes(preimage[base + 34..base + 42].try_into().unwrap()),
@@ -59,7 +60,7 @@ fn order_id_changes_when_nonce_changes() {
         chain_id: 0,
         program_id: [4u8; 32],
         is_taker_buy: false,
-        position_type: 1,
+        position_type: PositionType::CashSecuredPut,
         market: [9u8; 32],
         strike: 1_000_000_000,
         quantity: 10_000_000,
@@ -85,7 +86,7 @@ fn sign_and_verify_order_id() {
         chain_id: 0,
         program_id: [1u8; 32],
         is_taker_buy: false,
-        position_type: 0,
+        position_type: PositionType::CoveredCall,
         market: [2u8; 32],
         strike: 1,
         quantity: 1,
@@ -109,6 +110,45 @@ fn sign_and_verify_order_id() {
     verify_order_id_signature_base58(&order_id_hex, &sig_b58, &pubkey_b58).unwrap();
 }
 
+#[test]
+fn bytes_signer_from_keypair_validates_and_signs() {
+    let mut keypair = [0u8; 64];
+    keypair[0..32].copy_from_slice(&[9u8; 32]);
+    let public = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32])
+        .verifying_key()
+        .to_bytes();
+    keypair[32..64].copy_from_slice(&public);
+    let signer = BytesSigner::from_keypair(&keypair).unwrap();
+
+    let order_id = [7u8; ORDER_ID_LEN];
+    let signature = signer.sign_message(&order_id);
+    verify_order_id_signature_bytes(&order_id, &signature, &signer.pubkey_bytes()).unwrap();
+}
+
+#[test]
+fn bytes_signer_rejects_mismatched_public_half() {
+    let mut keypair = [0u8; 64];
+    keypair[0..32].copy_from_slice(&[9u8; 32]);
+    keypair[32..64].copy_from_slice(&[7u8; 32]);
+
+    assert!(matches!(
+        BytesSigner::from_keypair(&keypair),
+        Err(OrderError::KeypairPublicKeyMismatch)
+    ));
+}
+
+#[test]
+fn base58_keypair_signing_rejects_mismatched_public_half() {
+    let mut keypair = [0u8; 64];
+    keypair[0..32].copy_from_slice(&[9u8; 32]);
+    keypair[32..64].copy_from_slice(&[7u8; 32]);
+
+    assert!(matches!(
+        sign_order_id_from_base58_keypair(&encode_hex(&[1u8; 32]), &encode_base58(&keypair)),
+        Err(OrderError::KeypairPublicKeyMismatch)
+    ));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
@@ -117,7 +157,7 @@ proptest! {
         chain_id in any::<u64>(),
         program_id in proptest::array::uniform32(any::<u8>()),
         is_taker_buy in any::<bool>(),
-        position_type in 0u8..=1,
+        is_put in any::<bool>(),
         market in proptest::array::uniform32(any::<u8>()),
         strike in any::<u64>(),
         quantity in any::<u64>(),
@@ -131,7 +171,11 @@ proptest! {
             chain_id,
             program_id,
             is_taker_buy,
-            position_type,
+            position_type: if is_put {
+                PositionType::CashSecuredPut
+            } else {
+                PositionType::CoveredCall
+            },
             market,
             strike,
             quantity,
@@ -149,7 +193,7 @@ proptest! {
 
         let base = 44usize;
         prop_assert_eq!(preimage[base], if is_taker_buy { 1 } else { 0 });
-        prop_assert_eq!(preimage[base + 1], position_type);
+        prop_assert_eq!(preimage[base + 1], u8::from(args.position_type));
         prop_assert_eq!(&preimage[base + 2..base + 34], &args.market);
         prop_assert_eq!(
             u64::from_le_bytes(preimage[base + 34..base + 42].try_into().unwrap()),
@@ -180,7 +224,7 @@ proptest! {
         chain_id in any::<u64>(),
         program_id in proptest::array::uniform32(any::<u8>()),
         is_taker_buy in any::<bool>(),
-        position_type in 0u8..=1,
+        is_put in any::<bool>(),
         market in proptest::array::uniform32(any::<u8>()),
         strike in any::<u64>(),
         quantity in any::<u64>(),
@@ -194,7 +238,11 @@ proptest! {
             chain_id,
             program_id,
             is_taker_buy,
-            position_type,
+            position_type: if is_put {
+                PositionType::CashSecuredPut
+            } else {
+                PositionType::CoveredCall
+            },
             market,
             strike,
             quantity,

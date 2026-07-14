@@ -1,8 +1,9 @@
-use acta_maker_sdk::ws::{client::WsClient, types::*};
+use acta_maker_sdk::ws::{client::WsClient, managed::normalize_maker_data_ws_url, types::*};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = WsClient::connect("wss://devnet-api.acta.markets/maker").await?;
+    let url = normalize_maker_data_ws_url("wss://devnet-api.acta.markets");
+    let mut client = WsClient::connect(&url).await?;
 
     client
         .send_hello(HelloData {
@@ -39,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         underlying_mint: None,
                         status: Some(vec!["open".to_string(), "funded".to_string()]),
                         min_expiry_ts: None,
+                        limit: None,
                     })
                     .await?;
 

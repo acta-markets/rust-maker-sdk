@@ -1,4 +1,4 @@
-//! Full maker bot using ManagedWs (recommended for production).
+//! Managed connection lifecycle and quote flow.
 //!
 //! Connects, subscribes, quotes on every RFQ, handles lifecycle events.
 //! ManagedWs handles reconnection and re-authentication automatically.
@@ -19,14 +19,13 @@ static NONCE_GEN: AtomicNonceGenerator = AtomicNonceGenerator::new();
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    // Load keypair — in production, read from file or env var.
-    let keypair_bytes: [u8; 64] = [0u8; 64]; // placeholder
-    let signer = BytesSigner::from_keypair(&keypair_bytes);
+    // Deterministic example key only. Load a protected secret in a real maker.
+    let signer = BytesSigner::from_secret([1u8; 32]);
     let signer_for_auth = signer.clone();
     let signer_for_quotes = signer.clone();
 
     // Configure managed connection.
-    let mut config = ManagedWsConfig::new(
+    let config = ManagedWsConfig::new(
         "wss://devnet-api.acta.markets/maker",
         HelloData {
             protocol_version: WS_PROTOCOL_VERSION.to_string(),
@@ -38,17 +37,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(move |challenge: &str| {
             Ok(signer_for_auth.sign_message_base58(challenge.as_bytes()))
         }),
-    );
-
+    )
     // Subscribe to RFQs on every connect/reconnect.
-    config.initial_subscribe = Some(SubscribeData {
+    .with_initial_subscribe(SubscribeData {
         request_id: Uuid::new_v4(),
         channels: vec![WsChannel::Rfqs],
         underlying_mints: None,
         quote_mints: None,
     });
 
-    let handle = spawn_managed_ws(config);
+    let handle = spawn_managed_ws(config)?;
 
     // Monitor connection events in a separate task.
     let mut events = handle.subscribe_events();
@@ -68,18 +66,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Main message loop.
     let mut rx = handle.subscribe_messages();
     while let Ok(msg) = rx.recv().await {
-        match msg.as_ref() {
+        match msg.message() {
             ServerMessage::RfqBroadcast(rfq) => {
                 let valid_until =
                     std::time::SystemTime::now() + std::time::Duration::from_secs(350);
-                let nonce = NONCE_GEN.next_u64();
+                let nonce = NONCE_GEN.next_u64()?;
                 let price: u64 = 1_000_000_000; // your pricing logic
 
                 let args = OrderPreimageArgs {
                     chain_id: rfq.market.chain_id.value(),
                     program_id: decode_base58_32(&rfq.market.program_id).unwrap(),
                     is_taker_buy: false,
-                    position_type: rfq.position_type as u8,
+                    position_type: rfq.position_type,
                     market: decode_base58_32(&rfq.market.market_pda).unwrap(),
                     strike: rfq.strike.value(),
                     quantity: rfq.quantity.value(),
