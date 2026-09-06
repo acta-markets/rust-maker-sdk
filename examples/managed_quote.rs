@@ -1,14 +1,10 @@
-//! Managed connection lifecycle and quote flow.
-//!
-//! Connects, subscribes, quotes on every RFQ, handles lifecycle events.
-//! ManagedWs handles reconnection and re-authentication automatically.
+//! Quote RFQs with `MakerQuoteClient`.
 
+use acta_maker_sdk::ws::maker::MakerQuoteClient;
 use acta_maker_sdk::ws::managed::*;
 use acta_maker_sdk::ws::types::*;
 use acta_maker_sdk::{
-    AtomicNonceGenerator, BytesSigner, Nonce, OrderId, OrderPreimageArgs, Price, SignerLike,
-    WS_PROTOCOL_VERSION, compute_order_id, decode_base58_32, encode_base58,
-    sign_order_id_with_signer,
+    AtomicNonceGenerator, BytesSigner, Nonce, Price, QuoteExpiry, RfqBinding, WS_PROTOCOL_VERSION,
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -19,12 +15,10 @@ static NONCE_GEN: AtomicNonceGenerator = AtomicNonceGenerator::new();
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    // Deterministic example key only. Load a protected secret in a real maker.
-    let signer = BytesSigner::from_secret([1u8; 32]);
-    let signer_for_auth = signer.clone();
-    let signer_for_quotes = signer.clone();
+    // Example key. Never use it in production.
+    let signer = Arc::new(BytesSigner::from_secret([1u8; 32]));
+    let signer_for_quotes = Arc::clone(&signer);
 
-    // Configure managed connection.
     let config = ManagedWsConfig::new(
         "wss://devnet-api.acta.markets/maker",
         HelloData {
@@ -33,12 +27,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             client_name: Some("maker-bot".to_string()),
             client_version: Some("0.1.0".to_string()),
         },
-        signer.pubkey_base58(),
-        Arc::new(move |challenge: &str| {
-            Ok(signer_for_auth.sign_message_base58(challenge.as_bytes()))
-        }),
+        signer,
     )
-    // Subscribe to RFQs on every connect/reconnect.
+    .low_latency()
     .with_initial_subscribe(SubscribeData {
         request_id: Uuid::new_v4(),
         channels: vec![WsChannel::Rfqs],
@@ -46,14 +37,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         quote_mints: None,
     });
 
-    let handle = spawn_managed_ws(config)?;
+    let client = MakerQuoteClient::spawn(config)?;
+    let mut rx = client.subscribe_messages();
 
-    // Monitor connection events in a separate task.
-    let mut events = handle.subscribe_events();
+    let mut events = client.subscribe_events();
     tokio::spawn(async move {
         while let Ok(event) = events.recv().await {
             match event {
                 ManagedWsEvent::Authenticated => tracing::info!("authenticated"),
+                ManagedWsEvent::Ready => tracing::info!("ready"),
                 ManagedWsEvent::Reconnecting { attempt, delay_ms } => {
                     tracing::warn!(attempt, delay_ms, "reconnecting");
                 }
@@ -63,50 +55,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Main message loop.
-    let mut rx = handle.subscribe_messages();
-    while let Ok(msg) = rx.recv().await {
+    let epoch = client.wait_until_ready().await?;
+    tracing::info!(epoch, "quote session ready");
+    let mut recovery_epoch = epoch;
+    let mut recovered = (false, false, false);
+
+    loop {
+        let msg = match rx.recv().await {
+            Ok(msg) => msg,
+            Err(ManagedReceiveError::Gap { skipped }) => {
+                tracing::error!(
+                    skipped,
+                    "message stream lagged; refresh state before quoting"
+                );
+                return Err("managed message stream lagged".into());
+            }
+            Err(ManagedReceiveError::Closed) => break,
+            Err(error) => return Err(format!("managed message stream failed: {error}").into()),
+        };
+        if msg.connection_epoch != recovery_epoch {
+            recovery_epoch = msg.connection_epoch;
+            recovered = (false, false, false);
+        }
         match msg.message() {
-            ServerMessage::RfqBroadcast(rfq) => {
-                let valid_until =
-                    std::time::SystemTime::now() + std::time::Duration::from_secs(350);
-                let nonce = NONCE_GEN.next_u64()?;
-                let price: u64 = 1_000_000_000; // your pricing logic
+            ServerMessage::MmSummary(summary) => {
+                tracing::info!(
+                    positions = summary.positions.len(),
+                    "account recovery received"
+                );
+                recovered.0 = true;
+            }
+            ServerMessage::ActiveRfqs(snapshot) => {
+                tracing::info!(rfqs = snapshot.rfqs.len(), "RFQ recovery received");
+                recovered.1 = true;
+            }
+            ServerMessage::MyQuotes(snapshot) => {
+                tracing::info!(quotes = snapshot.quotes.len(), "quote recovery received");
+                recovered.2 = true;
+            }
+            ServerMessage::RfqBroadcast(rfq)
+                if recovered == (true, true, true)
+                    && matches!(client.raw().state(), ManagedWsState::Ready { connection_epoch } if connection_epoch == recovery_epoch) =>
+            {
+                let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
+                    .ok_or("system clock is before the Unix epoch")?;
 
-                let args = OrderPreimageArgs {
-                    chain_id: rfq.market.chain_id.value(),
-                    program_id: decode_base58_32(&rfq.market.program_id).unwrap(),
-                    is_taker_buy: false,
-                    position_type: rfq.position_type,
-                    market: decode_base58_32(&rfq.market.market_pda).unwrap(),
-                    strike: rfq.strike.value(),
-                    quantity: rfq.quantity.value(),
-                    gross_price: price,
-                    valid_until: valid_until
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    maker: signer_for_quotes.pubkey_bytes(),
-                    taker: decode_base58_32(&rfq.taker).unwrap(),
-                    nonce,
-                };
+                // `RfqBinding` decodes the RFQ's keys once and resolves the
+                // strikes it will accept; the builder derives the signed
+                // preimage and the wire message from the same values.
+                let quote = RfqBinding::from_broadcast(rfq)?
+                    .quote()
+                    .price(Price::new(1_000_000_000)) // your pricing logic
+                    .valid_until(valid_until)
+                    .nonce(Nonce::new(NONCE_GEN.next_u64()?))
+                    .sign(signer_for_quotes.as_ref())?;
 
-                let order_id = compute_order_id(&args);
-                let signature = sign_order_id_with_signer(&order_id, &signer_for_quotes);
-
-                handle
-                    .send(ClientMessage::Quote(QuoteMessage {
-                        rfq_id: rfq.rfq_id,
-                        strike: rfq.strike,
-                        price: Price::new(price),
-                        valid_until,
-                        nonce: Nonce::new(nonce),
-                        order_id: OrderId::new(order_id),
-                        signature: encode_base58(&signature),
-                    }))
-                    .await?;
-
-                tracing::info!(rfq = %rfq.rfq_id, strike = %rfq.strike, "quoted");
+                tracing::info!(rfq = %quote.rfq_id, strike = %quote.strike, "quoted");
+                client.quote(quote).await?;
             }
             ServerMessage::QuoteAcknowledged(ack) => {
                 tracing::info!(rfq = %ack.rfq_id, order = ?ack.order_id, "ack");
@@ -121,7 +126,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     best = ?outbid.current_best_price.map(|p| p.value()),
                     "outbid"
                 );
-                // Consider sending ReplaceQuote with a better price here.
             }
             ServerMessage::QuoteFilled(fill) => {
                 tracing::info!(

@@ -6,7 +6,7 @@ use acta_maker_sdk::{MarketId, Price};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Deterministic example key only. Load a protected secret in a real maker.
+    // Example key. Never use it in production.
     let signer = BytesSigner::from_secret([1u8; 32]);
 
     let mut client = WsClient::connect("wss://devnet-api.acta.markets/maker").await?;
@@ -32,7 +32,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             }
             ServerMessage::IndicativePricesRequest(req) => {
-                // Return a price for each requested strike.
                 let prices: Vec<IndicativeStrikePrice> = req
                     .strikes
                     .iter()

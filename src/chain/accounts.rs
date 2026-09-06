@@ -141,14 +141,10 @@ fn validate_account(
             actual: discriminator,
         });
     }
-    if account
-        .data
-        .get(ACCOUNT_OFFSET_VERSION)
-        .copied()
-        .unwrap_or(0)
-        == 0
-    {
-        return Err(ChainError::UninitializedAccount);
+    // A missing version byte is as uninitialized as a zero one.
+    match account.data.get(ACCOUNT_OFFSET_VERSION) {
+        None | Some(0) => return Err(ChainError::UninitializedAccount),
+        Some(_) => {}
     }
     Ok(())
 }

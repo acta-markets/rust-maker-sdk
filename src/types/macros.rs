@@ -1,5 +1,6 @@
 macro_rules! define_numeric_newtype {
-    ($name:ident, $inner:ty) => {
+    ($(#[$meta:meta])* $name:ident, $inner:ty) => {
+        $(#[$meta])*
         #[derive(
             Debug,
             Default,
@@ -12,9 +13,6 @@ macro_rules! define_numeric_newtype {
             Hash,
             Serialize,
             Deserialize,
-            DeriveDisplay,
-            From,
-            Into,
         )]
         pub struct $name($inner);
 
@@ -29,24 +27,30 @@ macro_rules! define_numeric_newtype {
                 self.0
             }
         }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+
+        impl From<$inner> for $name {
+            fn from(value: $inner) -> Self {
+                Self(value)
+            }
+        }
+
+        impl From<$name> for $inner {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
     };
 }
 
 macro_rules! define_string_newtype {
     ($name:ident) => {
-        #[derive(
-            Debug,
-            Clone,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Hash,
-            Serialize,
-            Deserialize,
-            DeriveDisplay,
-            From,
-        )]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         pub struct $name(pub String);
 
         impl $name {
@@ -58,6 +62,18 @@ macro_rules! define_string_newtype {
             #[must_use]
             pub fn as_str(&self) -> &str {
                 &self.0
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
             }
         }
 

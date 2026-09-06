@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use acta_maker_sdk::ws::reconnect::{jittered_reconnect_delay, next_reconnect_delay};
+use acta_maker_sdk::ws::reconnect::{
+    jittered_reconnect_delay, jittered_reconnect_delay_with_ratio, next_reconnect_delay,
+};
 
 #[test]
 fn next_delay_doubles() {
@@ -25,11 +27,16 @@ fn next_delay_caps_at_max() {
 #[test]
 fn jittered_delay_within_bounds() {
     let base = Duration::from_secs(10);
-    // ±20% jitter → 8s..12s
     for _ in 0..20 {
         let jittered = jittered_reconnect_delay(base);
         let ms = jittered.as_millis();
         assert!(ms >= 8000, "jittered {ms}ms < 8000ms");
         assert!(ms <= 12001, "jittered {ms}ms > 12001ms");
     }
+}
+
+#[test]
+fn zero_jitter_keeps_the_exact_delay() {
+    let base = Duration::from_millis(137);
+    assert_eq!(jittered_reconnect_delay_with_ratio(base, 0.0), base);
 }

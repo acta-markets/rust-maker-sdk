@@ -7,7 +7,7 @@ use super::ix::ChainIxError;
 pub enum ChainError {
     #[cfg(feature = "chain-rpc")]
     #[error(transparent)]
-    Rpc(#[from] solana_client::client_error::ClientError),
+    Rpc(#[from] solana_rpc_client::api::client_error::Error),
     #[error("invalid account data")]
     InvalidAccountData,
     #[error("account owner mismatch: expected {expected}, got {actual}")]

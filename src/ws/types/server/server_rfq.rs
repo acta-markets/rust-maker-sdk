@@ -1,3 +1,4 @@
+use crate::types::unix_time::{UnixMillis, UnixSeconds};
 use std::time::SystemTime;
 
 use crate::types::ids::{
@@ -5,7 +6,7 @@ use crate::types::ids::{
 };
 use crate::types::{QuoteFinalStatus, RfqAvailableAgainReason, RfqCloseReason};
 use serde::{Deserialize, Serialize};
-use serde_with::{TimestampSeconds, serde_as};
+use serde_with::serde_as;
 use uuid::Uuid;
 
 use super::super::common::{MarketDescriptor, RfqOrderOption};
@@ -14,13 +15,12 @@ use super::super::common::{MarketDescriptor, RfqOrderOption};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqCreatedMessage {
     pub rfq_id: Uuid,
-    #[serde(default)]
     pub rfq_version: RfqVersion,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_request_id: Option<Uuid>,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub order_options: Vec<RfqOrderOption>,
@@ -45,14 +45,13 @@ pub struct RfqClosedWinner {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqClosedMessage {
     pub rfq_id: Uuid,
-    #[serde(default)]
     pub rfq_version: RfqVersion,
     pub reason: RfqCloseReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub your_quote: Option<RfqClosedYourQuote>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub winner: Option<RfqClosedWinner>,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub closed_at: SystemTime,
 }
 
@@ -64,20 +63,28 @@ pub struct RfqBroadcastMessage {
     pub position_type: PositionType,
     pub strike: Strike,
     pub quantity: Quantity,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     pub taker: String,
     pub order_options: Vec<RfqOrderOption>,
+    /// When the server emitted this broadcast.
+    ///
+    /// `expires_at` is whole seconds, so on its own it cannot distinguish an
+    /// RFQ that arrived promptly from one delayed behind a slow fan-out.
+    /// Compare against [`ManagedInbound::received_at`] to measure delivery.
+    ///
+    /// [`ManagedInbound::received_at`]: crate::ws::managed::ManagedInbound
+    #[serde_as(as = "UnixMillis")]
+    pub sent_at_unix_ms: SystemTime,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqAvailableAgainMessage {
     pub rfq_id: Uuid,
-    #[serde(default)]
     pub rfq_version: RfqVersion,
     pub reason: RfqAvailableAgainReason,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub available_again_at: SystemTime,
 }
 
@@ -88,6 +95,10 @@ pub struct RfqSkippedMessage {
     pub market_id: MarketId,
     pub quantity: Quantity,
     pub reason: String,
+    /// Structured cap error with current/limit amounts, when the skip was a
+    /// cap pre-filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap_detail: Option<crate::types::errors::CapError>,
 }
 
 #[serde_as]
@@ -95,10 +106,12 @@ pub struct RfqSkippedMessage {
 pub struct ActiveRfqInfo {
     pub rfq_id: Uuid,
     pub market: MarketId,
+    /// Taker pubkey: an `order_id` preimage input, so a re-read RFQ can be quoted.
+    pub taker: String,
     pub position_type: PositionType,
     pub strike: Strike,
     pub quantity: Quantity,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     pub quotes_count: QuoteCount,
     pub best_price: Option<Price>,
@@ -113,10 +126,13 @@ pub struct ActiveRfqsData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum MyActiveRfqState {
     Active,
     PendingSignature,
     Enqueued,
+    #[serde(other)]
+    Unknown,
 }
 
 #[serde_as]
@@ -127,7 +143,7 @@ pub struct MyActiveRfqInfo {
     pub position_type: PositionType,
     pub strike: Strike,
     pub quantity: Quantity,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     pub state: MyActiveRfqState,
     #[serde(default, skip_serializing_if = "Option::is_none")]

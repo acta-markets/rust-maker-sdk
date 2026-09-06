@@ -1,4 +1,4 @@
-use solana_client::rpc_client::RpcClient;
+use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
     account::Account,
     instruction::{AccountMeta, Instruction},
@@ -130,7 +130,7 @@ pub(crate) fn decide_wrap(
     WrapDecision::Wrap { wrap_lamports }
 }
 
-pub(crate) fn plan_wsol_wrap(
+pub(crate) async fn plan_wsol_wrap(
     rpc: &RpcClient,
     request: WsolWrapRequest,
 ) -> Result<WrapPlan, ChainError> {
@@ -150,13 +150,15 @@ pub(crate) fn plan_wsol_wrap(
 
     let account = rpc
         .get_account_with_commitment(&funding_ata, rpc.commitment())
+        .await
         .map_err(ChainError::from)?
         .value;
     let (existing_wsol, ata_rent_lamports) = match account {
         Some(account) => (parse_wsol_balance(&account, &owner, &token_program)?, 0),
         None if allow_account_creation => {
             let rent = if fee_payer == owner {
-                rpc.get_minimum_balance_for_rent_exemption(TOKEN_ACCOUNT_RENT_LEN)?
+                rpc.get_minimum_balance_for_rent_exemption(TOKEN_ACCOUNT_RENT_LEN)
+                    .await?
             } else {
                 0
             };
@@ -167,7 +169,7 @@ pub(crate) fn plan_wsol_wrap(
     if existing_wsol >= expected_settlement {
         return Ok(WrapPlan::NotNeeded);
     }
-    let sol_balance = rpc.get_balance(&owner)?;
+    let sol_balance = rpc.get_balance(&owner).await?;
 
     match decide_wrap(
         existing_wsol,
@@ -201,8 +203,9 @@ pub(crate) fn plan_wsol_wrap(
     }
 }
 
-pub(crate) fn token_account_rent_lamports(rpc: &RpcClient) -> Result<u64, ChainError> {
+pub(crate) async fn token_account_rent_lamports(rpc: &RpcClient) -> Result<u64, ChainError> {
     rpc.get_minimum_balance_for_rent_exemption(TOKEN_ACCOUNT_RENT_LEN)
+        .await
         .map_err(ChainError::from)
 }
 

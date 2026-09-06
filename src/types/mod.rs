@@ -1,9 +1,4 @@
-//! SDK-owned domain model aligned with the backend contract.
-//!
-//! This module contains domain values and shared payload types. WebSocket
-//! envelopes (`ClientMessage` and `ServerMessage`) belong to [`crate::ws::types`]
-//! and must not be duplicated here. The SDK intentionally has no dependency on
-//! the backend's internal types crate.
+//! Domain values shared by WebSocket and chain APIs.
 
 /// Fixed-point price scale shared with the backend and on-chain contract.
 pub const PRICE_SCALE: u64 = 1_000_000_000;
@@ -13,10 +8,14 @@ mod macros;
 
 pub mod domain;
 pub mod errors;
+pub mod expiry;
 pub mod ids;
 pub mod invite;
+pub mod unix_time;
 
 pub use domain::*;
 pub use errors::*;
+pub use expiry::QuoteExpiry;
 pub use ids::*;
 pub use invite::*;
+pub use unix_time::{UnixMillis, UnixSeconds};

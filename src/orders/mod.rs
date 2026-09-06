@@ -48,10 +48,7 @@ pub const ORDER_PREIMAGE_LEN: usize = TAG_LEN
     + PUBKEY_LEN
     + U64_LEN;
 
-/// Trait for abstracting signing operations.
-///
-/// Allows using different key implementations without
-/// depending on specific crates like `solana-sdk`.
+/// Synchronous order signer.
 pub trait SignerLike {
     fn pubkey_bytes(&self) -> [u8; 32];
     fn sign_message(&self, msg: &[u8]) -> [u8; 64];
@@ -65,11 +62,7 @@ pub trait SignerLike {
     }
 }
 
-/// Simple signer implementation using a cached ed25519 `SigningKey`.
-///
-/// The `SigningKey` is created once and reused for all signing operations,
-/// avoiding per-call reconstruction overhead. `SigningKey` from `ed25519-dalek`
-/// implements `Zeroize` on drop, so secret material is securely cleared.
+/// In-memory Ed25519 signer. Secret material is zeroized on drop.
 #[derive(Clone)]
 pub struct BytesSigner {
     signing_key: SigningKey,
@@ -189,6 +182,14 @@ pub fn order_preimage_hex(preimage: &[u8; ORDER_PREIMAGE_LEN]) -> String {
     encode_hex(preimage)
 }
 
+/// Sign an order id from raw secret bytes.
+///
+/// Expanding the secret derives the public key, which costs about as much as
+/// the signature itself. Quoting in a loop should hold a [`BytesSigner`] and
+/// call [`sign_order_id_with_signer`] instead, so the key is expanded once.
+///
+/// # Errors
+/// Currently infallible; the signature is returned as `Ok`.
 pub fn sign_order_id_bytes(
     order_id: &[u8; ORDER_ID_LEN],
     signing_key_bytes: &[u8; 32],
@@ -198,6 +199,10 @@ pub fn sign_order_id_bytes(
     Ok(signature.to_bytes())
 }
 
+/// Base58 form of [`sign_order_id_bytes`], and it re-expands the key the same way.
+///
+/// # Errors
+/// Currently infallible; the signature is returned as `Ok`.
 pub fn sign_order_id_base58(
     order_id: &[u8; ORDER_ID_LEN],
     signing_key_bytes: &[u8; 32],

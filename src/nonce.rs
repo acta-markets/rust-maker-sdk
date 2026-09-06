@@ -1,6 +1,5 @@
-use rand::rngs::OsRng;
+use rand::rngs::{OsRng, StdRng};
 use rand::{RngCore, SeedableRng, TryRngCore};
-use rand_xoshiro::Xoshiro256PlusPlus;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug)]
@@ -15,7 +14,7 @@ impl std::fmt::Display for NonceError {
 impl std::error::Error for NonceError {}
 
 pub struct NonceGenerator {
-    rng: Xoshiro256PlusPlus,
+    rng: StdRng,
 }
 
 impl NonceGenerator {
@@ -25,7 +24,7 @@ impl NonceGenerator {
         rng.try_fill_bytes(&mut seed)
             .map_err(|e| NonceError(format!("OsRng unavailable: {e}")))?;
         Ok(Self {
-            rng: Xoshiro256PlusPlus::from_seed(seed),
+            rng: StdRng::from_seed(seed),
         })
     }
 

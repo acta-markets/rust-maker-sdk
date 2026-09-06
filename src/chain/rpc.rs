@@ -1,5 +1,5 @@
-use solana_client::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
+use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
     account::Account, instruction::Instruction, pubkey::Pubkey, signature::Signature,
     signer::Signer, transaction::Transaction,
@@ -73,36 +73,42 @@ impl ChainClient {
         }
     }
 
-    pub fn deposit_premium(
+    pub async fn deposit_premium(
         &self,
         args: DepositPremiumArgs,
-        maker_owner: &dyn Signer,
-        fee_payer: Option<&dyn Signer>,
+        maker_owner: &(dyn Signer + Sync),
+        fee_payer: Option<&(dyn Signer + Sync)>,
     ) -> Result<Signature, ChainError> {
         let payer = fee_payer.unwrap_or(maker_owner);
-        let ixs = self.build_deposit_premium_ixs(&args, payer.pubkey())?;
+        let ixs = self
+            .build_deposit_premium_ixs(&args, payer.pubkey())
+            .await?;
         self.send_instructions_with_options(ixs, payer, &[maker_owner], SendOptions::default())
+            .await
     }
 
-    pub fn withdraw_premium(
+    pub async fn withdraw_premium(
         &self,
         args: WithdrawPremiumArgs,
-        maker_owner: &dyn Signer,
-        fee_payer: Option<&dyn Signer>,
+        maker_owner: &(dyn Signer + Sync),
+        fee_payer: Option<&(dyn Signer + Sync)>,
     ) -> Result<Signature, ChainError> {
         let payer = fee_payer.unwrap_or(maker_owner);
-        let ixs = self.build_withdraw_premium_ixs(&args, payer.pubkey())?;
+        let ixs = self
+            .build_withdraw_premium_ixs(&args, payer.pubkey())
+            .await?;
         self.send_instructions_with_options(ixs, payer, &[maker_owner], SendOptions::default())
+            .await
     }
 
-    pub fn fund_position(
+    pub async fn fund_position(
         &self,
         args: FundPositionArgs,
-        maker_owner: &dyn Signer,
-        fee_payer: Option<&dyn Signer>,
+        maker_owner: &(dyn Signer + Sync),
+        fee_payer: Option<&(dyn Signer + Sync)>,
     ) -> Result<Signature, ChainError> {
         let payer = fee_payer.unwrap_or(maker_owner);
-        let prepared = self.prepare_fund_position(&args, payer.pubkey())?;
+        let prepared = self.prepare_fund_position(&args, payer.pubkey()).await?;
         self.send_instructions(
             prepared.instructions,
             payer,
@@ -110,14 +116,17 @@ impl ChainClient {
             SendOptions::default(),
             prepared.native_budget,
         )
+        .await
     }
 
-    pub fn build_deposit_premium_ixs(
+    pub async fn build_deposit_premium_ixs(
         &self,
         args: &DepositPremiumArgs,
         fee_payer: Pubkey,
     ) -> Result<Vec<Instruction>, ChainError> {
-        let token_program = self.resolve_token_program(&args.premium_mint, args.token_program)?;
+        let token_program = self
+            .resolve_token_program(&args.premium_mint, args.token_program)
+            .await?;
         build_deposit_premium_ixs(
             &self.program_id,
             &DepositPremiumIxArgs {
@@ -132,12 +141,14 @@ impl ChainClient {
         .map_err(ChainError::from)
     }
 
-    pub fn build_withdraw_premium_ixs(
+    pub async fn build_withdraw_premium_ixs(
         &self,
         args: &WithdrawPremiumArgs,
         fee_payer: Pubkey,
     ) -> Result<Vec<Instruction>, ChainError> {
-        let token_program = self.resolve_token_program(&args.premium_mint, args.token_program)?;
+        let token_program = self
+            .resolve_token_program(&args.premium_mint, args.token_program)
+            .await?;
         build_withdraw_premium_ixs(
             &self.program_id,
             &WithdrawPremiumIxArgs {
@@ -152,22 +163,25 @@ impl ChainClient {
         .map_err(ChainError::from)
     }
 
-    pub fn build_fund_position_ixs(
+    pub async fn build_fund_position_ixs(
         &self,
         args: &FundPositionArgs,
         fee_payer: Pubkey,
     ) -> Result<Vec<Instruction>, ChainError> {
-        Ok(self.prepare_fund_position(args, fee_payer)?.instructions)
+        Ok(self
+            .prepare_fund_position(args, fee_payer)
+            .await?
+            .instructions)
     }
 
-    fn prepare_fund_position(
+    async fn prepare_fund_position(
         &self,
         args: &FundPositionArgs,
         fee_payer: Pubkey,
     ) -> Result<PreparedFundPosition, ChainError> {
-        let position_data = self.fetch_account(&args.position_pda)?;
+        let position_data = self.fetch_account(&args.position_pda).await?;
         let pos = parse_position(&position_data, &self.program_id)?;
-        let market_data = self.fetch_account(&pos.market_pda)?;
+        let market_data = self.fetch_account(&pos.market_pda).await?;
         let market = parse_market(&market_data, &self.program_id)?;
 
         let mut fund_ixs = build_fund_position_ixs(
@@ -231,11 +245,12 @@ impl ChainClient {
             && fee_payer == args.maker_owner
             && self
                 .rpc
-                .get_account_with_commitment(&position_funding_ata, self.commitment)?
+                .get_account_with_commitment(&position_funding_ata, self.commitment)
+                .await?
                 .value
                 .is_none()
         {
-            token_account_rent_lamports(&self.rpc)?
+            token_account_rent_lamports(&self.rpc).await?
         } else {
             0
         };
@@ -251,7 +266,9 @@ impl ChainClient {
                 fee_payer,
                 additional_ata_rent_lamports,
             },
-        )? {
+        )
+        .await?
+        {
             WrapPlan::NotNeeded => Ok(PreparedFundPosition {
                 instructions: fund_ixs,
                 native_budget: None,
@@ -272,30 +289,33 @@ impl ChainClient {
     }
 
     /// Fetch and parse a position account. Returns full position details for pre-flight validation.
-    pub fn fetch_position_info(&self, position_pda: &Pubkey) -> Result<PositionInfo, ChainError> {
-        let data = self.fetch_account(position_pda)?;
+    pub async fn fetch_position_info(
+        &self,
+        position_pda: &Pubkey,
+    ) -> Result<PositionInfo, ChainError> {
+        let data = self.fetch_account(position_pda).await?;
         parse_position(&data, &self.program_id)
     }
 
-    pub fn fetch_market_info(&self, market_pda: &Pubkey) -> Result<MarketInfo, ChainError> {
-        let market_data = self.fetch_account(market_pda)?;
+    pub async fn fetch_market_info(&self, market_pda: &Pubkey) -> Result<MarketInfo, ChainError> {
+        let market_data = self.fetch_account(market_pda).await?;
         parse_market(&market_data, &self.program_id)
     }
 
-    pub fn fetch_market_quote_mint(&self, market_pda: &Pubkey) -> Result<Pubkey, ChainError> {
-        Ok(self.fetch_market_info(market_pda)?.quote_mint)
+    pub async fn fetch_market_quote_mint(&self, market_pda: &Pubkey) -> Result<Pubkey, ChainError> {
+        Ok(self.fetch_market_info(market_pda).await?.quote_mint)
     }
 
     /// Fetch the raw token balance (u64 atoms) of a token account.
-    pub fn fetch_token_balance(&self, token_account: &Pubkey) -> Result<u64, ChainError> {
-        let result = self.rpc.get_token_account_balance(token_account)?;
+    pub async fn fetch_token_balance(&self, token_account: &Pubkey) -> Result<u64, ChainError> {
+        let result = self.rpc.get_token_account_balance(token_account).await?;
         result
             .amount
             .parse::<u64>()
             .map_err(|_| ChainError::InvalidAccountData)
     }
 
-    fn resolve_token_program(
+    async fn resolve_token_program(
         &self,
         mint: &Pubkey,
         token_program: Option<Pubkey>,
@@ -303,29 +323,30 @@ impl ChainClient {
         if let Some(program) = token_program {
             return ensure_supported_token_program(program);
         }
-        let account = self.rpc.get_account(mint)?;
+        let account = self.rpc.get_account(mint).await?;
         ensure_supported_token_program(account.owner)
     }
 
-    fn fetch_account(&self, pubkey: &Pubkey) -> Result<Account, ChainError> {
-        self.rpc.get_account(pubkey).map_err(ChainError::from)
+    async fn fetch_account(&self, pubkey: &Pubkey) -> Result<Account, ChainError> {
+        self.rpc.get_account(pubkey).await.map_err(ChainError::from)
     }
 
-    pub fn send_instructions_with_options(
+    pub async fn send_instructions_with_options(
         &self,
         instructions: Vec<Instruction>,
-        fee_payer: &dyn Signer,
-        extra_signers: &[&dyn Signer],
+        fee_payer: &(dyn Signer + Sync),
+        extra_signers: &[&(dyn Signer + Sync)],
         options: SendOptions,
     ) -> Result<Signature, ChainError> {
         self.send_instructions(instructions, fee_payer, extra_signers, options, None)
+            .await
     }
 
-    fn send_instructions(
+    async fn send_instructions(
         &self,
         mut instructions: Vec<Instruction>,
-        fee_payer: &dyn Signer,
-        extra_signers: &[&dyn Signer],
+        fee_payer: &(dyn Signer + Sync),
+        extra_signers: &[&(dyn Signer + Sync)],
         options: SendOptions,
         native_budget: Option<NativeSolBudget>,
     ) -> Result<Signature, ChainError> {
@@ -337,30 +358,30 @@ impl ChainClient {
                 ),
             );
         }
-        let recent = self.rpc.get_latest_blockhash()?;
+        let recent = self.rpc.get_latest_blockhash().await?;
 
-        let mut signers: Vec<&dyn Signer> = Vec::with_capacity(1 + extra_signers.len());
+        let mut tx = Transaction::new_with_payer(&instructions, Some(&fee_payer.pubkey()));
+        tx.message.recent_blockhash = recent;
+        if let Some(budget) = native_budget {
+            let fee_lamports = if fee_payer.pubkey() == budget.owner {
+                self.rpc.get_fee_for_message(&tx.message).await?
+            } else {
+                0
+            };
+            let available_lamports = self.rpc.get_balance(&budget.owner).await?;
+            budget.validate(available_lamports, fee_lamports)?;
+        }
+        let mut signers: Vec<&(dyn Signer + Sync)> = Vec::with_capacity(1 + extra_signers.len());
         signers.push(fee_payer);
         for signer in extra_signers {
             if signer.pubkey() != fee_payer.pubkey() {
                 signers.push(*signer);
             }
         }
-
-        let mut tx = Transaction::new_with_payer(&instructions, Some(&fee_payer.pubkey()));
-        tx.message.recent_blockhash = recent;
-        if let Some(budget) = native_budget {
-            let fee_lamports = if fee_payer.pubkey() == budget.owner {
-                self.rpc.get_fee_for_message(&tx.message)?
-            } else {
-                0
-            };
-            let available_lamports = self.rpc.get_balance(&budget.owner)?;
-            budget.validate(available_lamports, fee_lamports)?;
-        }
         tx.try_sign(&signers, recent)?;
         self.rpc
             .send_and_confirm_transaction_with_spinner_and_commitment(&tx, self.commitment)
+            .await
             .map_err(ChainError::from)
     }
 }

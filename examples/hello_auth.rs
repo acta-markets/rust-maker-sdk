@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(msg) = client.next().await {
         match msg? {
             ServerMessage::AuthRequest(data) => {
-                // In real usage, sign `challenge` with your quote-signing keypair.
+                // Sign with the registered maker key.
                 let auth = AuthChallengeData {
                     challenge: data.challenge,
                     signature: "base58-signature".to_string(),

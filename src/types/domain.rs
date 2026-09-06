@@ -3,68 +3,57 @@ use strum::IntoStaticStr;
 
 use super::ids::{Balance, MarketId, Quantity};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum QuoteStatus {
-    Pending,
-    Best,
-    Outbid,
-    Filled,
-    Expired,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum RfqCloseReason {
     Expired,
     TakerCancelled,
     Filled,
     MarketExpired,
     LadderTimeout,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum QuoteFinalStatus {
     Expired,
     Outbid,
     Cancelled,
     Filled,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum QuoteCancelReason {
     Requested,
     RiskCheck,
     RfqAccepted,
-}
-
-/// `Pending..Expired` mirror persisted order states; `NotFound` is wire-only.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr, strum::EnumString,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum OrderStatus {
-    Pending,
-    Submitted,
-    Confirmed,
-    Failed,
-    Expired,
-    NotFound,
+    /// The session enabled `cancel_on_disconnect` and disconnected.
+    MakerDisconnected,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum RfqAvailableAgainReason {
     SignatureTimeout,
     TxFailed,
     TxBuildFailed,
+    #[serde(other)]
+    Unknown,
 }
 
 impl std::fmt::Display for RfqAvailableAgainReason {

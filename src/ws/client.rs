@@ -1,10 +1,11 @@
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::net::TcpStream;
 
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async_with_config,
-    tungstenite::{Message, Utf8Bytes, protocol::WebSocketConfig},
+    tungstenite::{Bytes, Message, Utf8Bytes, protocol::WebSocketConfig},
 };
 
 use crate::ws::error::{WsClientError, WsResult, WsTransportConfigError};
@@ -15,12 +16,15 @@ use crate::ws::types::{
     GetMarketDescriptorsMessage, GetMarketsForMakerMessage, GetMarketsMessage, GetMmSummaryMessage,
     GetMyActiveRfqsMessage, GetMyQuotesMessage, GetMyReferralInfoData, GetOrderStatusMessage,
     GetPositionsMessage, GetSubscriptionsMessage, GetTokensMessage, HelloData,
-    IndicativePricesResponseMessage, QuoteMessage, RedeemInviteData, RemoveChannelsData,
+    IndicativePricesResponseMessage, Lane, QuoteMessage, RedeemInviteData, RemoveChannelsData,
     RemoveMintsData, ReplaceQuoteMessage, ResumeAuthData, RfqRequestMessage, ServerMessage,
     StartAuthData, SubmitSignedSponsoredTxData, SubscribeData, UnsubscribeData, WsChannel,
     parse_server_message,
 };
 use uuid::Uuid;
+
+type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) type WsSink = SplitSink<Socket, Message>;
 
 macro_rules! ws_method {
     ($name:ident, $variant:ident, $data:ty) => {
@@ -42,23 +46,65 @@ macro_rules! ws_method_request_id {
 }
 
 pub struct WsClient {
-    stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    stream: Socket,
+}
+
+/// Read half of a split [`WsClient`]. Liveness frames are returned, not
+/// answered, so the owner decides which lane the reply takes.
+pub(crate) struct WsReader {
+    stream: SplitStream<Socket>,
+}
+
+// Avoid a per-frame allocation.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum WsFrame {
+    Message(ServerMessage),
+    Ping(Bytes),
+    Pong,
 }
 
 #[derive(Debug, Clone)]
 pub struct PreparedClientMessage {
     text: Utf8Bytes,
+    lane: Lane,
+    subscription: Option<Box<crate::ws::types::SubscriptionChange>>,
 }
 
 impl PreparedClientMessage {
     pub fn new(message: &ClientMessage) -> Result<Self, serde_json::Error> {
         Ok(Self {
             text: serde_json::to_string(message)?.into(),
+            lane: message.lane(),
+            subscription: crate::ws::types::SubscriptionChange::from_message(message).map(Box::new),
         })
+    }
+
+    pub(crate) fn take_subscription(
+        &mut self,
+    ) -> Option<Box<crate::ws::types::SubscriptionChange>> {
+        self.subscription.take()
+    }
+
+    pub(crate) const fn lane(&self) -> Lane {
+        self.lane
+    }
+
+    pub(crate) fn into_text(self) -> Utf8Bytes {
+        self.text
     }
 
     pub fn as_str(&self) -> &str {
         &self.text
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.text.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
     }
 }
 
@@ -136,6 +182,12 @@ impl WsClient {
         self.stream
             .send(Message::Text(message.text.clone()))
             .await?;
+        Ok(())
+    }
+
+    /// Send a prepared message by transferring its buffer into the socket sink.
+    pub async fn send_prepared_owned(&mut self, message: PreparedClientMessage) -> WsResult<()> {
+        self.stream.send(Message::Text(message.text)).await?;
         Ok(())
     }
 
@@ -307,11 +359,7 @@ impl WsClient {
                     return Some(parsed.map_err(WsClientError::from));
                 }
                 Message::Binary(bin) => {
-                    let parsed = match std::str::from_utf8(&bin) {
-                        Ok(text) => parse_server_message(text),
-                        Err(_) => serde_json::from_slice::<ServerMessage>(&bin),
-                    };
-                    return Some(parsed.map_err(WsClientError::from));
+                    return Some(parse_binary(&bin).map_err(WsClientError::from));
                 }
                 Message::Ping(payload) => {
                     if let Err(err) = self.stream.send(Message::Pong(payload)).await {
@@ -328,5 +376,38 @@ impl WsClient {
     pub async fn close(mut self) -> WsResult<()> {
         self.stream.close(None).await?;
         Ok(())
+    }
+
+    pub(crate) fn split(self) -> (WsSink, WsReader) {
+        let (sink, stream) = self.stream.split();
+        (sink, WsReader { stream })
+    }
+}
+
+impl WsReader {
+    pub(crate) async fn next(&mut self) -> Option<WsResult<WsFrame>> {
+        loop {
+            let msg = match self.stream.next().await {
+                Some(Ok(msg)) => msg,
+                Some(Err(err)) => return Some(Err(err.into())),
+                None => return None,
+            };
+            let frame = match msg {
+                Message::Text(text) => parse_server_message(&text).map(WsFrame::Message),
+                Message::Binary(bin) => parse_binary(&bin).map(WsFrame::Message),
+                Message::Ping(payload) => Ok(WsFrame::Ping(payload)),
+                Message::Pong(_) => Ok(WsFrame::Pong),
+                Message::Close(_) => return None,
+                Message::Frame(_) => continue,
+            };
+            return Some(frame.map_err(WsClientError::from));
+        }
+    }
+}
+
+fn parse_binary(bin: &[u8]) -> Result<ServerMessage, serde_json::Error> {
+    match std::str::from_utf8(bin) {
+        Ok(text) => parse_server_message(text),
+        Err(_) => serde_json::from_slice::<ServerMessage>(bin),
     }
 }

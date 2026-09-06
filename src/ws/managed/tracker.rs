@@ -13,13 +13,15 @@ type AwaitResult = Result<Arc<ServerMessage>, SendAwaitError>;
 type AwaitSender = oneshot::Sender<AwaitResult>;
 type RegisterError = (SendAwaitError, AwaitSender);
 
+pub(crate) struct AwaitRegistration {
+    keys: Vec<CorrelationKey>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CorrelationKey {
     Request(Uuid),
     Quote(OrderId),
     Batch(Vec<OrderId>),
-    CancelQuote(Uuid),
-    CancelRfq(Uuid),
     CreateRfq(Uuid),
 }
 
@@ -31,14 +33,9 @@ impl CorrelationKey {
             ClientMessage::BatchQuotes(message) => Some(vec![Self::Batch(sorted_order_ids(
                 message.quotes.iter().map(|quote| quote.order_id),
             ))]),
-            ClientMessage::CancelQuote(message) => Some(vec![
-                Self::Request(message.request_id),
-                Self::CancelQuote(message.rfq_id),
-            ]),
-            ClientMessage::CancelRfq(message) => Some(vec![
-                Self::Request(message.request_id),
-                Self::CancelRfq(message.rfq_id),
-            ]),
+            // RfqClosed is lifecycle evidence, not a correlated command result.
+            // CancelRfq has no success receipt in this wire contract.
+            ClientMessage::CancelRfq(_) => None,
             ClientMessage::RfqRequest(message) => message
                 .client_request_id
                 .map(|request_id| vec![Self::CreateRfq(request_id)]),
@@ -53,13 +50,11 @@ impl CorrelationKey {
             ServerMessage::QuoteAcknowledged(message) => Some(Self::Quote(message.order_id)),
             ServerMessage::QuoteRejected(message) => Some(Self::Quote(message.order_id)),
             ServerMessage::BatchQuotesAck(message) => Some(Self::Batch(sorted_order_ids(
-                message.results.iter().map(|result| match result {
-                    BatchQuoteResult::Acknowledged(quote) => quote.order_id,
-                    BatchQuoteResult::Rejected(quote) => quote.order_id,
-                }),
+                message
+                    .results
+                    .iter()
+                    .filter_map(BatchQuoteResult::order_id),
             ))),
-            ServerMessage::QuoteCancelled(message) => Some(Self::CancelQuote(message.rfq_id)),
-            ServerMessage::RfqClosed(message) => Some(Self::CancelRfq(message.rfq_id)),
             ServerMessage::RfqCreated(message) => message.client_request_id.map(Self::CreateRfq),
             _ => message.request_id().map(Self::Request),
         }
@@ -92,15 +87,26 @@ impl AwaitTracker {
         }
     }
 
+    pub(crate) fn prepare(message: &ClientMessage) -> Result<AwaitRegistration, SendAwaitError> {
+        CorrelationKey::for_client(message)
+            .map(|keys| AwaitRegistration { keys })
+            .ok_or(SendAwaitError::NoCorrelationKey)
+    }
+
     pub(crate) fn register(
         &mut self,
         await_id: u64,
-        message: &ClientMessage,
+        registration: AwaitRegistration,
         tx: AwaitSender,
     ) -> Result<(), RegisterError> {
-        let Some(keys) = CorrelationKey::for_client(message) else {
-            return Err((SendAwaitError::NoCorrelationKey, tx));
-        };
+        if self.by_id.len() >= self.max_pending
+            || registration
+                .keys
+                .iter()
+                .any(|key| self.by_key.contains_key(key))
+        {
+            self.prune_closed();
+        }
         if self.by_id.len() >= self.max_pending {
             return Err((
                 SendAwaitError::TooManyPending {
@@ -109,15 +115,36 @@ impl AwaitTracker {
                 tx,
             ));
         }
-        if keys.iter().any(|key| self.by_key.contains_key(key)) {
+        if registration
+            .keys
+            .iter()
+            .any(|key| self.by_key.contains_key(key))
+        {
             return Err((SendAwaitError::DuplicateInFlight, tx));
         }
 
-        for key in &keys {
+        for key in &registration.keys {
             self.by_key.insert(key.clone(), await_id);
         }
-        self.by_id.insert(await_id, PendingAwait { keys, tx });
+        self.by_id.insert(
+            await_id,
+            PendingAwait {
+                keys: registration.keys,
+                tx,
+            },
+        );
         Ok(())
+    }
+
+    fn prune_closed(&mut self) {
+        let closed_ids = self
+            .by_id
+            .iter()
+            .filter_map(|(await_id, pending)| pending.tx.is_closed().then_some(*await_id))
+            .collect::<Vec<_>>();
+        for await_id in closed_ids {
+            let _ = self.cancel(await_id);
+        }
     }
 
     pub(crate) fn cancel(&mut self, await_id: u64) -> Option<AwaitSender> {

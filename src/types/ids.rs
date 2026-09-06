@@ -1,13 +1,26 @@
 use std::fmt::Display;
 
-use derive_more::{Display as DeriveDisplay, From, Into};
 use serde::{Deserialize, Serialize};
 
 define_bytes32_newtype!(OrderId);
 
-define_numeric_newtype!(Strike, u64);
-define_numeric_newtype!(Price, u64);
-define_numeric_newtype!(Quantity, u64);
+define_numeric_newtype!(
+    /// Strike price, 1e9 fixed-point per one unit of the underlying
+    /// ([`PRICE_SCALE`](crate::PRICE_SCALE)), independent of mint decimals.
+    Strike,
+    u64
+);
+define_numeric_newtype!(
+    /// Gross premium per one unit of the underlying, 1e9 fixed-point
+    /// ([`PRICE_SCALE`](crate::PRICE_SCALE)), independent of mint decimals.
+    Price,
+    u64
+);
+define_numeric_newtype!(
+    /// Order size in the underlying mint's atomic units.
+    Quantity,
+    u64
+);
 
 impl Price {
     /// Apply a protocol fee in basis points using the contract's rounding rule.
@@ -23,8 +36,20 @@ impl Price {
 
 define_numeric_newtype!(Nonce, u64);
 define_numeric_newtype!(RfqVersion, u64);
-// Reserved wire field: producers emit 0, no domain source yet, no consumer gates on it.
 define_numeric_newtype!(OrderVersion, u64);
+
+impl OrderVersion {
+    /// Order exists and has been accepted/locked by the taker.
+    pub const ACCEPTED: Self = Self::new(1);
+    /// The signed transaction has been submitted for execution.
+    pub const SUBMITTED: Self = Self::new(2);
+    /// A locally final failure or expiry. A later chain confirmation may supersede failure.
+    pub const FAILED: Self = Self::new(3);
+    /// An authoritative on-chain confirmation.
+    pub const CONFIRMED: Self = Self::new(4);
+    /// No authoritative order exists for the requested id.
+    pub const NOT_FOUND: Self = Self::new(0);
+}
 define_numeric_newtype!(Slot, u64);
 define_numeric_newtype!(ChainId, u64);
 define_numeric_newtype!(DurationSeconds, u64);
@@ -36,19 +61,7 @@ define_numeric_newtype!(TradeCount, u32);
 define_numeric_newtype!(TimeoutSeconds, u32);
 
 #[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    From,
-    Into,
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 pub struct Decimals(pub u8);
 
@@ -67,6 +80,31 @@ impl Decimals {
 impl Display for Decimals {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl From<u8> for Decimals {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Decimals> for u8 {
+    fn from(value: Decimals) -> Self {
+        value.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OrderVersion;
+
+    #[test]
+    fn order_version_ranks_match_wire_lifecycle_precedence() {
+        assert_eq!(OrderVersion::NOT_FOUND.value(), 0);
+        assert!(OrderVersion::ACCEPTED < OrderVersion::SUBMITTED);
+        assert!(OrderVersion::SUBMITTED < OrderVersion::FAILED);
+        assert!(OrderVersion::FAILED < OrderVersion::CONFIRMED);
     }
 }
 

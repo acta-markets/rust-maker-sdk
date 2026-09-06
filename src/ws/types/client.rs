@@ -1,10 +1,9 @@
-use std::time::SystemTime;
-
+use crate::types::QuoteExpiry;
 use crate::types::ids::{
     MarketId, Nonce, OrderId, PositionType, Price, Quantity, Strike, TimeoutSeconds,
 };
 use serde::{Deserialize, Serialize};
-use serde_with::{TimestampSeconds, serde_as};
+use serde_with::serde_as;
 use strum::IntoStaticStr;
 use uuid::Uuid;
 
@@ -14,6 +13,7 @@ use super::common::{MarketDescriptor, WsChannel};
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]
 #[serde(tag = "type", content = "data")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum ClientMessage {
     Hello(HelloData),
     StartAuth(StartAuthData),
@@ -43,6 +43,7 @@ pub enum ClientMessage {
     GetMarketsForMaker(GetMarketsForMakerMessage),
     GetTokenCaps(GetTokenCapsMessage),
     GetMyCaps(GetMyCapsMessage),
+    CheckQuote(CheckQuoteMessage),
     GetMyTrades(GetMyTradesMessage),
     GetEarnSummary(GetEarnSummaryMessage),
     GetMmSummary(GetMmSummaryMessage),
@@ -176,8 +177,7 @@ pub struct QuoteMessage {
     pub rfq_id: Uuid,
     pub strike: Strike,
     pub price: Price,
-    #[serde_as(as = "TimestampSeconds<i64>")]
-    pub valid_until: SystemTime,
+    pub valid_until: QuoteExpiry,
     pub nonce: Nonce,
     pub order_id: OrderId,
     pub signature: String,
@@ -190,8 +190,7 @@ pub struct ReplaceQuoteMessage {
     pub rfq_id: Uuid,
     pub strike: Strike,
     pub price: Price,
-    #[serde_as(as = "TimestampSeconds<i64>")]
-    pub valid_until: SystemTime,
+    pub valid_until: QuoteExpiry,
     pub nonce: Nonce,
     pub order_id: OrderId,
     pub signature: String,
@@ -261,6 +260,7 @@ impl ClientMessage {
             Self::GetSubscriptions(m) => Some(m.request_id),
             Self::GetTokenCaps(m) => Some(m.request_id),
             Self::GetMyCaps(m) => Some(m.request_id),
+            Self::CheckQuote(m) => Some(m.request_id),
             Self::GetEarnSummary(m) => Some(m.request_id),
             Self::GetMmSummary(m) => Some(m.request_id),
             Self::GetTokenMarketsInfo(m) => Some(m.request_id),
@@ -290,6 +290,85 @@ impl ClientMessage {
             | Self::AcceptQuote(_)
             | Self::SubmitSignedSponsoredTx(_)
             | Self::Ping => None,
+        }
+    }
+}
+
+/// Transport lane. Control frames must never queue behind quote traffic.
+#[cfg(feature = "ws-client")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lane {
+    Control,
+    Data,
+}
+
+#[cfg(feature = "ws-client")]
+#[derive(Debug, Clone)]
+pub(crate) enum SubscriptionChange {
+    Subscribe(SubscribeData),
+    Unsubscribe(UnsubscribeData),
+    AddChannels(AddChannelsData),
+    RemoveChannels(RemoveChannelsData),
+    AddMints(AddMintsData),
+    RemoveMints(RemoveMintsData),
+}
+
+#[cfg(feature = "ws-client")]
+impl SubscriptionChange {
+    pub(crate) fn from_message(message: &ClientMessage) -> Option<Self> {
+        match message {
+            ClientMessage::Subscribe(data) => Some(Self::Subscribe(data.clone())),
+            ClientMessage::Unsubscribe(data) => Some(Self::Unsubscribe(data.clone())),
+            ClientMessage::AddChannels(data) => Some(Self::AddChannels(data.clone())),
+            ClientMessage::RemoveChannels(data) => Some(Self::RemoveChannels(data.clone())),
+            ClientMessage::AddMints(data) => Some(Self::AddMints(data.clone())),
+            ClientMessage::RemoveMints(data) => Some(Self::RemoveMints(data.clone())),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn request_id(&self) -> Uuid {
+        match self {
+            Self::Subscribe(data) => data.request_id,
+            Self::Unsubscribe(data) => data.request_id,
+            Self::AddChannels(data) => data.request_id,
+            Self::RemoveChannels(data) => data.request_id,
+            Self::AddMints(data) => data.request_id,
+            Self::RemoveMints(data) => data.request_id,
+        }
+    }
+}
+
+#[cfg(feature = "ws-client")]
+impl ClientMessage {
+    pub(crate) const fn requires_ready(&self) -> bool {
+        matches!(
+            self,
+            Self::Quote(_)
+                | Self::BatchQuotes(_)
+                | Self::ReplaceQuote(_)
+                | Self::CancelQuote(_)
+                | Self::CancelAllQuotes(_)
+                | Self::GetOrderStatus(_)
+                | Self::Subscribe(_)
+                | Self::Unsubscribe(_)
+                | Self::AddChannels(_)
+                | Self::RemoveChannels(_)
+                | Self::AddMints(_)
+                | Self::RemoveMints(_)
+        )
+    }
+
+    pub(crate) const fn lane(&self) -> Lane {
+        match self {
+            Self::Hello(_)
+            | Self::StartAuth(_)
+            | Self::ResumeAuth(_)
+            | Self::AuthChallenge(_)
+            | Self::Logout
+            | Self::Ping
+            | Self::CancelRfq(_) => Lane::Control,
+            _ => Lane::Data,
         }
     }
 }

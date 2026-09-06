@@ -4,7 +4,7 @@ use crate::ws::types::ClientMessage;
 
 use super::ManagedCommand;
 
-/// Opaque peer for acknowledging managed WebSocket commands in downstream tests.
+/// Test peer for acknowledging managed WebSocket commands.
 pub struct ManagedWsTestPeer {
     commands: mpsc::Receiver<ManagedCommand>,
 }
@@ -15,12 +15,12 @@ impl ManagedWsTestPeer {
         Self { commands }
     }
 
-    /// Receive and acknowledge one ordinary send command.
+    /// Acknowledge and return the next send command.
     pub async fn acknowledge_next_send(&mut self) -> Option<ClientMessage> {
         match self.commands.recv().await? {
-            ManagedCommand::Send { message, tx } => {
+            ManagedCommand::Send { message, tx, .. } => {
                 let _ = tx.send(Ok(()));
-                Some(message)
+                serde_json::from_str(message.as_str()).ok()
             }
             _ => None,
         }

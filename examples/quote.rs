@@ -1,10 +1,9 @@
-//! Subscribe to RFQs and send quotes with proper order_id computation and signing.
+//! Subscribe to RFQs and submit signed quotes.
 
 use acta_maker_sdk::ws::{client::WsClient, types::*};
 use acta_maker_sdk::{
-    AtomicNonceGenerator, BytesSigner, Nonce, OrderId, OrderPreimageArgs, Price, SignerLike,
-    WS_PROTOCOL_VERSION, compute_order_id, decode_base58_32, encode_base58,
-    sign_order_id_with_signer,
+    AtomicNonceGenerator, BytesSigner, Nonce, Price, QuoteExpiry, RfqBinding, SignerLike,
+    WS_PROTOCOL_VERSION,
 };
 use uuid::Uuid;
 
@@ -12,7 +11,7 @@ static NONCE_GEN: AtomicNonceGenerator = AtomicNonceGenerator::new();
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Deterministic example key only. Load a protected secret in a real maker.
+    // Example key. Never use it in production.
     let signer = BytesSigner::from_secret([1u8; 32]);
 
     let mut client = WsClient::connect("wss://devnet-api.acta.markets/maker").await?;
@@ -48,46 +47,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             }
             ServerMessage::RfqBroadcast(rfq) => {
-                // valid_until must be >= now + 310s.
-                // Server applies 300s settlement buffer, so quote is tradeable
-                // until valid_until - 300s.
-                let valid_until =
-                    std::time::SystemTime::now() + std::time::Duration::from_secs(350);
-                let nonce = NONCE_GEN.next_u64()?;
-                let price: u64 = 1_000_000_000; // your pricing logic here
+                // Quotes need 310 seconds of validity; 300 seconds are reserved for settlement.
+                let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
+                    .ok_or("system clock is before the Unix epoch")?;
 
-                // Build order_id from canonical preimage and sign it.
-                let args = OrderPreimageArgs {
-                    chain_id: rfq.market.chain_id.value(),
-                    program_id: decode_base58_32(&rfq.market.program_id)?,
-                    is_taker_buy: false,
-                    position_type: rfq.position_type,
-                    market: decode_base58_32(&rfq.market.market_pda)?,
-                    strike: rfq.strike.value(),
-                    quantity: rfq.quantity.value(),
-                    gross_price: price,
-                    valid_until: valid_until.duration_since(std::time::UNIX_EPOCH)?.as_secs(),
-                    maker: signer.pubkey_bytes(),
-                    taker: decode_base58_32(&rfq.taker)?,
-                    nonce,
-                };
+                let quote = RfqBinding::from_broadcast(&rfq)?
+                    .quote()
+                    .price(Price::new(1_000_000_000)) // your pricing logic here
+                    .valid_until(valid_until)
+                    .nonce(Nonce::new(NONCE_GEN.next_u64()?))
+                    .sign(&signer)?;
 
-                let order_id = compute_order_id(&args);
-                let signature = sign_order_id_with_signer(&order_id, &signer);
-
-                client
-                    .quote(QuoteMessage {
-                        rfq_id: rfq.rfq_id,
-                        strike: rfq.strike,
-                        price: Price::new(price),
-                        valid_until,
-                        nonce: Nonce::new(nonce),
-                        order_id: OrderId::new(order_id),
-                        signature: encode_base58(&signature),
-                    })
-                    .await?;
-
-                println!("quoted rfq={} strike={}", rfq.rfq_id, rfq.strike);
+                println!("quoted rfq={} strike={}", quote.rfq_id, quote.strike);
+                client.quote(quote).await?;
             }
             other => println!("server: {other:?}"),
         }

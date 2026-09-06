@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::ws::types::ServerMessage;
 
@@ -31,6 +31,7 @@ impl AsRef<ServerMessage> for ManagedInbound {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ManagedReceiveError {
     #[error("managed ws message stream closed")]
     Closed,
@@ -39,15 +40,20 @@ pub enum ManagedReceiveError {
 }
 
 pub struct ManagedMessageReceiver {
-    pub(super) inner: broadcast::Receiver<Arc<ManagedInbound>>,
+    pub(super) inner: broadcast::Receiver<ManagedInbound>,
+    /// Set under `GapPolicy::Reconnect`: a lag asks the session to reconnect.
+    pub(super) gap_tx: Option<mpsc::UnboundedSender<()>>,
 }
 
 impl ManagedMessageReceiver {
-    pub async fn recv(&mut self) -> Result<Arc<ManagedInbound>, ManagedReceiveError> {
+    pub async fn recv(&mut self) -> Result<ManagedInbound, ManagedReceiveError> {
         match self.inner.recv().await {
             Ok(message) => Ok(message),
             Err(broadcast::error::RecvError::Closed) => Err(ManagedReceiveError::Closed),
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                if let Some(gap_tx) = &self.gap_tx {
+                    let _ = gap_tx.send(());
+                }
                 Err(ManagedReceiveError::Gap { skipped })
             }
         }

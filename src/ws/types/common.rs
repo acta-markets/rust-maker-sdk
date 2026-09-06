@@ -1,7 +1,8 @@
+use crate::types::unix_time::UnixSeconds;
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
-use serde_with::{TimestampSeconds, serde_as};
+use serde_with::serde_as;
 use strum::IntoStaticStr;
 
 use crate::types::ids::{
@@ -9,10 +10,13 @@ use crate::types::ids::{
 };
 
 pub const FEATURE_QUOTE_EXPIRED: &str = "quote_expired";
+/// The engine cancels the session's open quotes when it disconnects.
+pub const FEATURE_CANCEL_ON_DISCONNECT: &str = "cancel_on_disconnect";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum WsChannel {
     Stats,
     Rfqs,
@@ -20,36 +24,59 @@ pub enum WsChannel {
     Positions,
     ChainEvents,
     Markets,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum WsEndpointKind {
     Maker,
     MakerData,
     Taker,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum PositionUpdateType {
     Created,
     Funded,
     Liquidated,
     Settled,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum PositionStatus {
     None,
     Open,
     Funded,
     Liquidated,
     Settled,
+    #[serde(other)]
+    Unknown,
+}
+
+/// Reconciliation detail reported alongside the public position status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
+pub enum PositionReconciliationStatus {
+    OrphanPending,
+    OrphanedClosed,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +100,7 @@ pub struct MarketDescriptor {
     pub market_pda: String,
     pub underlying_mint: String,
     pub quote_mint: String,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
     pub is_put: bool,
     pub collateral_mint: String,
@@ -119,14 +146,16 @@ pub struct PositionInfo {
     pub quote_mint: String,
     pub position_type: PositionType,
     pub status: PositionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation_status: Option<PositionReconciliationStatus>,
     pub strike: Strike,
     pub quantity: Quantity,
     pub price: Price,
     #[serde(default)]
     pub total_premium: Price,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_otm: Option<bool>,
@@ -144,7 +173,7 @@ pub struct TradeInfo {
     pub taker: String,
     pub maker: String,
     pub tx_signature: String,
-    #[serde_as(as = "TimestampSeconds<i64>")]
+    #[serde_as(as = "UnixSeconds")]
     pub executed_at: SystemTime,
 }
 

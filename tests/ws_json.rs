@@ -1,4 +1,7 @@
-use acta_maker_sdk::{Decimals, MarketId, Nonce, OrderId, PositionType, Price, RfqVersion, Strike};
+use acta_maker_sdk::{
+    Decimals, MarketId, Nonce, OrderId, OrderVersion, PositionType, Price, QuoteExpiry, RfqVersion,
+    Strike,
+};
 use proptest::prelude::*;
 
 use acta_maker_sdk::ws::types::*;
@@ -7,41 +10,58 @@ use std::time::{Duration, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[test]
-fn auth_success_parses_optional_expires_at() {
-    let raw_with_null = json!({
-        "type": "AuthSuccess",
-        "data": {
-            "session_id": "session-1",
-            "expires_at": null
-        }
-    });
-    let parsed_with_null: ServerMessage = serde_json::from_value(raw_with_null).unwrap();
-    match parsed_with_null {
-        ServerMessage::AuthSuccess(data) => {
-            assert_eq!(data.session_id, "session-1");
-            assert_eq!(data.expires_at, None);
-        }
-        _ => panic!("expected AuthSuccess"),
+fn auth_success_requires_expires_at() {
+    for data in [
+        json!({"session_id":"s"}),
+        json!({"session_id":"s","expires_at":null}),
+    ] {
+        assert!(
+            serde_json::from_value::<ServerMessage>(json!({"type":"AuthSuccess","data":data}))
+                .is_err()
+        );
     }
+    let message: ServerMessage = serde_json::from_value(json!({
+        "type":"AuthSuccess", "data":{"session_id":"s","expires_at":1_710_086_400}
+    }))
+    .unwrap();
+    let ServerMessage::AuthSuccess(data) = message else {
+        panic!("expected AuthSuccess")
+    };
+    assert_eq!(
+        data.expires_at,
+        UNIX_EPOCH + Duration::from_secs(1_710_086_400)
+    );
+}
 
-    let raw_with_expiry = json!({
-        "type": "AuthSuccess",
+#[test]
+fn order_lifecycle_frames_preserve_reconciliation_rank() {
+    let confirmed: ServerMessage = serde_json::from_value(json!({
+        "type": "OrderConfirmed",
         "data": {
-            "session_id": "session-2",
-            "expires_at": 1_710_086_400
+            "order_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+            "position_pda": "position",
+            "order_version": 4
         }
-    });
-    let parsed_with_expiry: ServerMessage = serde_json::from_value(raw_with_expiry).unwrap();
-    match parsed_with_expiry {
-        ServerMessage::AuthSuccess(data) => {
-            assert_eq!(data.session_id, "session-2");
-            assert_eq!(
-                data.expires_at,
-                Some(UNIX_EPOCH + Duration::from_secs(1_710_086_400))
-            );
+    }))
+    .unwrap();
+    let failed: ServerMessage = serde_json::from_value(json!({
+        "type": "OrderFailed",
+        "data": {
+            "order_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+            "reason": "local failure",
+            "order_version": 3
         }
-        _ => panic!("expected AuthSuccess"),
-    }
+    }))
+    .unwrap();
+
+    assert!(matches!(
+        confirmed,
+        ServerMessage::OrderConfirmed(data) if data.order_version == OrderVersion::CONFIRMED
+    ));
+    assert!(matches!(
+        failed,
+        ServerMessage::OrderFailed(data) if data.order_version == OrderVersion::FAILED
+    ));
 }
 
 #[test]
@@ -57,6 +77,7 @@ fn auth_error_parses_optional_message() {
     match parsed_with_message {
         ServerMessage::AuthError(data) => {
             assert_eq!(data.reason, "invalid_signature");
+            assert!(!data.is_session_expired());
             assert_eq!(data.message.as_deref(), Some("bad signature bytes"));
         }
         _ => panic!("expected AuthError"),
@@ -73,6 +94,7 @@ fn auth_error_parses_optional_message() {
     match parsed_without_message {
         ServerMessage::AuthError(data) => {
             assert_eq!(data.reason, "session_expired");
+            assert!(data.is_session_expired());
             assert_eq!(data.message, None);
         }
         _ => panic!("expected AuthError"),
@@ -129,6 +151,7 @@ fn server_message_parses_cases() {
                 "type": "ChainEvent",
                 "data": {
                     "event_type": "MakerRegistered",
+                    "instruction_index": 0,
                     "signature": "sig",
                     "slot": 1,
                     "owner": "owner",
@@ -288,8 +311,6 @@ fn server_error_market_metadata_incomplete_roundtrip() {
     }
 }
 
-// --- Tests moved from server.rs inline tests ---
-
 #[test]
 fn my_active_rfqs_data_requires_request_id() {
     let request_id = Uuid::new_v4();
@@ -350,8 +371,6 @@ fn indicative_prices_response_requires_request_id() {
     assert!(err.to_string().contains("request_id"));
 }
 
-// --- Tests moved from client.rs inline tests ---
-
 #[test]
 fn get_my_active_rfqs_roundtrip() {
     let request_id = Uuid::new_v4();
@@ -398,8 +417,6 @@ fn cancel_quote_roundtrip_includes_request_id() {
     }
 }
 
-// --- New tests ---
-
 #[test]
 fn welcome_roundtrip() {
     let msg = ServerMessage::Welcome(WelcomeData {
@@ -407,14 +424,17 @@ fn welcome_roundtrip() {
         server_version: "0.5.0".to_string(),
         min_supported_version: "1.0.0".to_string(),
         enabled_features: vec!["quote_expired".to_string()],
-        server_time_unix_ms: Some(UNIX_EPOCH + Duration::from_millis(1_700_000_000_000)),
+        server_time_unix_ms: UNIX_EPOCH + Duration::from_millis(1_700_000_000_000),
     });
     let json = serde_json::to_string(&msg).unwrap();
     let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
     match parsed {
         ServerMessage::Welcome(data) => {
             assert_eq!(data.protocol_version, "1.0.0");
-            assert!(data.server_time_unix_ms.is_some());
+            assert_eq!(
+                data.server_time_unix_ms,
+                UNIX_EPOCH + Duration::from_millis(1_700_000_000_000)
+            );
         }
         _ => panic!("expected Welcome"),
     }
@@ -465,6 +485,7 @@ fn rfq_broadcast_roundtrip() {
         quantity: Quantity::new(10),
         expires_at: UNIX_EPOCH + Duration::from_secs(1_700_000_100),
         taker: "taker_pubkey".to_string(),
+        sent_at_unix_ms: UNIX_EPOCH + Duration::from_millis(1_700_000_099_250),
         order_options: vec![RfqOrderOption {
             strike: Strike::new(100),
         }],
@@ -476,9 +497,25 @@ fn rfq_broadcast_roundtrip() {
             assert_eq!(data.rfq_id, rfq_id);
             assert_eq!(data.strike, Strike::new(100));
             assert_eq!(data.order_options.len(), 1);
+            assert_eq!(
+                data.sent_at_unix_ms,
+                UNIX_EPOCH + Duration::from_millis(1_700_000_099_250)
+            );
         }
         _ => panic!("expected RfqBroadcast"),
     }
+}
+
+#[test]
+fn rfq_broadcast_requires_sent_at() {
+    let raw = r#"{"type":"RfqBroadcast","data":{
+        "rfq_id":"6f0a4b6e-0000-4000-8000-000000000001",
+        "market":{"chain_id":0,"program_id":"p","market_pda":"m","underlying_mint":"u",
+                  "quote_mint":"q","expiry_ts":1700000000,"is_put":false,
+                  "collateral_mint":"c","settlement_mint":"s"},
+        "position_type":"covered_call","strike":100,"quantity":10,
+        "expires_at":1700000100,"taker":"t","order_options":[]}}"#;
+    assert!(parse_server_message(raw).is_err());
 }
 
 #[test]
@@ -515,7 +552,7 @@ fn quote_message_roundtrip() {
         rfq_id,
         strike: Strike::new(50),
         price: Price::new(100),
-        valid_until: UNIX_EPOCH + Duration::from_secs(999),
+        valid_until: QuoteExpiry::from_unix_seconds(999),
         nonce: Nonce::new(42),
         order_id,
         signature: "base58sig".to_string(),
@@ -620,7 +657,7 @@ proptest! {
             rfq_id,
             strike: Strike::new(strike),
             price: Price::new(price),
-            valid_until: UNIX_EPOCH + Duration::from_secs(valid_until),
+            valid_until: QuoteExpiry::from_unix_seconds(valid_until),
             nonce: Nonce::new(nonce),
             order_id,
             signature: "sig".to_string(),
@@ -633,7 +670,7 @@ proptest! {
                 prop_assert_eq!(decoded.rfq_id, rfq_id);
                 prop_assert_eq!(decoded.strike, Strike::new(strike));
                 prop_assert_eq!(decoded.price, Price::new(price));
-                prop_assert_eq!(decoded.valid_until, UNIX_EPOCH + Duration::from_secs(valid_until));
+                prop_assert_eq!(decoded.valid_until, QuoteExpiry::from_unix_seconds(valid_until));
                 prop_assert_eq!(decoded.nonce, Nonce::new(nonce));
                 prop_assert_eq!(decoded.order_id, order_id);
             }
@@ -708,8 +745,6 @@ proptest! {
     }
 }
 
-// --- New protocol message tests ---
-
 #[test]
 fn quote_rejected_roundtrip() {
     let rfq_id = Uuid::new_v4();
@@ -737,7 +772,7 @@ fn quote_rejected_without_message_field() {
     let msg = ServerMessage::QuoteRejected(QuoteRejectedMessage {
         rfq_id: Uuid::new_v4(),
         order_id: OrderId([0xcc; 32]),
-        reason: QuoteRejectReason::CapExceeded,
+        reason: QuoteRejectReason::CapExceeded(CapError::CapsUnavailable),
         message: None,
     });
     let json = serde_json::to_string(&msg).unwrap();
@@ -777,7 +812,7 @@ fn replace_quote_roundtrip() {
         rfq_id,
         strike: Strike::new(100_000_000_000),
         price: Price::new(5_000_000),
-        valid_until: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        valid_until: QuoteExpiry::from_unix_seconds(1_700_000_000),
         nonce: Nonce::new(42),
         order_id: OrderId([0xbb; 32]),
         signature: "test_sig".to_string(),
@@ -801,7 +836,7 @@ fn batch_quotes_roundtrip() {
         rfq_id: Uuid::new_v4(),
         strike: Strike::new(100_000_000_000),
         price: Price::new(5_000_000),
-        valid_until: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        valid_until: QuoteExpiry::from_unix_seconds(1_700_000_000),
         nonce: Nonce::new(1),
         order_id: OrderId([0xaa; 32]),
         signature: "sig1".to_string(),
@@ -810,7 +845,7 @@ fn batch_quotes_roundtrip() {
         rfq_id: Uuid::new_v4(),
         strike: Strike::new(110_000_000_000),
         price: Price::new(3_000_000),
-        valid_until: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        valid_until: QuoteExpiry::from_unix_seconds(1_700_000_000),
         nonce: Nonce::new(2),
         order_id: OrderId([0xbb; 32]),
         signature: "sig2".to_string(),
@@ -888,6 +923,118 @@ fn unknown_server_error_parses_to_unknown() {
 }
 
 #[test]
+fn unknown_nested_quote_reason_does_not_drop_the_connection() {
+    let parsed = parse_server_message(
+        r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-000000000001","order_id":"0000000000000000000000000000000000000000000000000000000000000002","reason":"future_rejection"}}"#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        parsed,
+        ServerMessage::QuoteRejected(QuoteRejectedMessage {
+            reason: QuoteRejectReason::Unknown,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn unknown_nested_batch_result_is_preserved() {
+    let order_id = OrderId::new([9_u8; 32]);
+    let raw = format!(
+        r#"{{"type":"BatchQuotesAck","data":{{"results":[{{"status":"deferred","data":{{"order_id":"{order_id}","retry_after_ms":5}}}}]}}}}"#
+    );
+    let parsed = parse_server_message(&raw).unwrap();
+
+    let ServerMessage::BatchQuotesAck(BatchQuotesAckMessage { results }) = parsed else {
+        panic!("expected batch acknowledgement");
+    };
+    let [BatchQuoteResult::Unknown(unknown)] = results.as_slice() else {
+        panic!("expected unknown batch result");
+    };
+    assert_eq!(unknown.status, "deferred");
+    assert_eq!(results[0].order_id(), Some(order_id));
+    assert_eq!(
+        unknown.data.as_ref().unwrap()["retry_after_ms"],
+        serde_json::json!(5)
+    );
+    let encoded = serde_json::to_string(&BatchQuoteResult::Unknown(unknown.clone())).unwrap();
+    assert!(encoded.contains(r#""status":"deferred""#));
+    assert!(encoded.contains(r#""retry_after_ms":5"#));
+}
+
+#[test]
+fn unknown_nested_chain_event_is_preserved() {
+    let parsed = parse_server_message(
+        r#"{"type":"ChainEvent","data":{"event_type":"PositionMigrated","signature":"sig"}}"#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        parsed,
+        ServerMessage::ChainEvent(ChainEventMessage::Unknown)
+    ));
+}
+
+#[test]
+fn chain_event_identity_requires_instruction_index() {
+    assert!(parse_server_message(
+        r#"{"type":"ChainEvent","data":{"event_type":"PositionSettled","signature":"sig","slot":1,"position":"position"}}"#,
+    ).is_err());
+    let identified = parse_server_message(
+        r#"{"type":"ChainEvent","data":{"event_type":"PositionSettled","signature":"sig","instruction_index":3,"slot":1,"position":"position"}}"#,
+    )
+    .unwrap();
+
+    let ServerMessage::ChainEvent(identified) = identified else {
+        panic!("expected identified chain event");
+    };
+    let identity = identified.identity().expect("canonical identity");
+    assert_eq!(identity.signature, "sig");
+    assert_eq!(identity.instruction_index, 3);
+}
+
+#[test]
+fn future_payload_of_known_error_stays_usable() {
+    // A future cap variant lands in CapError::Unknown with its payload intact.
+    let parsed = parse_server_message(
+        r#"{"type":"Error","data":{"type":"Cap","data":{"future_cap":{"limit":1}}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        parsed,
+        ServerMessage::Error(ServerError::Cap(CapError::Unknown(_)))
+    ));
+
+    // A known error whose payload no longer matches at all still degrades to
+    // UnknownServerError instead of dropping the frame.
+    let parsed = parse_server_message(
+        r#"{"type":"Error","data":{"type":"RateLimit","data":{"object":"payload"}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        parsed,
+        ServerMessage::Error(ServerError::Unknown(UnknownServerError {
+            error_type,
+            ..
+        })) if error_type == "RateLimit"
+    ));
+}
+
+#[test]
+fn unknown_nested_rate_limit_reason_is_preserved() {
+    let parsed = parse_server_message(
+        r#"{"type":"Error","data":{"type":"RateLimit","data":"future_bucket"}}"#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        parsed,
+        ServerMessage::Error(ServerError::RateLimit(RateLimitReason::Unknown))
+    ));
+}
+
+#[test]
 fn unknown_request_error_keeps_request_id() {
     let request_id = Uuid::new_v4();
     let parsed = parse_server_message(&format!(
@@ -931,10 +1078,22 @@ fn referral_protocol_messages_match_backend_wire_shape() {
 }
 
 #[test]
-fn my_quotes_default_requests_only_active_quotes() {
+fn my_quotes_default_requests_complete_live_quotes() {
     let request = GetMyQuotesMessage::default();
-    assert!(request.active_only);
+    assert_eq!(request.scope, MakerQuoteScope::Live);
     assert_eq!(request.limit, None);
+}
+
+#[test]
+fn my_quotes_requires_has_more_on_the_wire() {
+    let parsed = serde_json::from_value::<ServerMessage>(json!({
+        "type": "MyQuotes",
+        "data": {
+            "request_id": Uuid::new_v4(),
+            "quotes": []
+        }
+    }));
+    assert!(parsed.is_err(), "has_more is required on the wire");
 }
 
 #[test]
@@ -978,5 +1137,391 @@ fn wrong_endpoint_error_parses() {
             assert_eq!(allowed_endpoints, vec![WsEndpointKind::Maker]);
         }
         _ => panic!("Expected WrongEndpoint"),
+    }
+}
+
+#[test]
+fn maker_positions_reports_rows_the_server_cannot_describe() {
+    let request_id = Uuid::new_v4();
+    let raw = json!({
+        "type": "MakerPositions",
+        "data": {
+            "request_id": request_id,
+            "positions": [],
+            "unrenderable": [{
+                "pda": "Pos111",
+                "market": "Mkt111",
+                "created_at": 1_710_000_000,
+                "missing": ["underlying_symbol", "quote_decimals"]
+            }],
+            "has_more": true
+        }
+    });
+
+    let parsed: ServerMessage = serde_json::from_value(raw).unwrap();
+    let ServerMessage::MakerPositions(data) = parsed else {
+        panic!("expected MakerPositions");
+    };
+    assert_eq!(data.request_id, request_id);
+    assert_eq!(data.unrenderable.len(), 1);
+    assert_eq!(data.unrenderable[0].pda, "Pos111");
+    assert_eq!(data.unrenderable[0].market, MarketId::new("Mkt111"));
+    assert_eq!(
+        data.unrenderable[0].created_at,
+        UNIX_EPOCH + Duration::from_secs(1_710_000_000)
+    );
+    assert_eq!(
+        data.unrenderable[0].missing,
+        ["underlying_symbol", "quote_decimals"]
+    );
+    assert!(data.has_more);
+}
+
+#[test]
+fn maker_positions_parses_without_the_unrenderable_list() {
+    let raw = json!({
+        "type": "MakerPositions",
+        "data": {
+            "request_id": Uuid::new_v4(),
+            "positions": [],
+            "has_more": false
+        }
+    });
+
+    let parsed: ServerMessage = serde_json::from_value(raw).unwrap();
+    let ServerMessage::MakerPositions(data) = parsed else {
+        panic!("expected MakerPositions");
+    };
+    assert!(data.unrenderable.is_empty());
+}
+
+#[test]
+fn reconciliation_status_wire_names_are_stable() {
+    let parse = |raw: &str| -> PositionReconciliationStatus {
+        serde_json::from_str(&format!("\"{raw}\"")).unwrap()
+    };
+    assert_eq!(
+        parse("orphan_pending"),
+        PositionReconciliationStatus::OrphanPending
+    );
+    assert_eq!(
+        parse("orphaned_closed"),
+        PositionReconciliationStatus::OrphanedClosed
+    );
+    assert_eq!(
+        parse("something_the_server_added_later"),
+        PositionReconciliationStatus::Unknown
+    );
+}
+
+#[test]
+fn listing_cursors_ride_as_unix_seconds_and_stay_off_the_wire_when_unset() {
+    let request = GetMakerPositionsMessage {
+        cursor: Some(UNIX_EPOCH + Duration::from_secs(1_800_000_000)),
+        cursor_id: Some("PositionPda".to_string()),
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["cursor"], 1_800_000_000);
+    assert_eq!(json["cursor_id"], "PositionPda");
+
+    let bare = serde_json::to_value(GetMakerPositionsMessage::default()).unwrap();
+    assert!(bare.get("cursor").is_none());
+    assert!(bare.get("cursor_id").is_none());
+
+    let quotes = GetMyQuotesMessage {
+        scope: MakerQuoteScope::History,
+        cursor: Some(UNIX_EPOCH + Duration::from_secs(1_800_000_777)),
+        cursor_id: Some("00ff".repeat(16)),
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&quotes).unwrap();
+    assert_eq!(json["cursor"], 1_800_000_777);
+    let back: GetMyQuotesMessage = serde_json::from_value(json).unwrap();
+    assert_eq!(back.cursor, quotes.cursor);
+    assert_eq!(back.cursor_id, quotes.cursor_id);
+
+    let missing_scope = serde_json::from_value::<GetMyQuotesMessage>(json!({
+        "request_id": Uuid::new_v4(),
+        "limit": 5
+    }));
+    assert!(missing_scope.is_err(), "scope is required on the wire");
+}
+
+#[test]
+fn quote_rejected_cap_exceeded_carries_the_cap_error() {
+    let raw = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":{"cap_exceeded":"caps_unavailable"}}}"#;
+    match serde_json::from_str::<ServerMessage>(raw).unwrap() {
+        ServerMessage::QuoteRejected(data) => {
+            assert_eq!(
+                data.reason,
+                QuoteRejectReason::CapExceeded(CapError::CapsUnavailable)
+            );
+        }
+        _ => panic!("Expected QuoteRejected"),
+    }
+
+    let structured = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":{"cap_exceeded":{"maker_position_cap_exceeded":{"current":3,"limit":3}}}}}"#;
+    match serde_json::from_str::<ServerMessage>(structured).unwrap() {
+        ServerMessage::QuoteRejected(data) => assert!(matches!(
+            data.reason,
+            QuoteRejectReason::CapExceeded(CapError::MakerPositionCapExceeded {
+                current: 3,
+                limit: 3
+            })
+        )),
+        _ => panic!("Expected QuoteRejected"),
+    }
+
+    let plain = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":"invalid_strike"}}"#;
+    match serde_json::from_str::<ServerMessage>(plain).unwrap() {
+        ServerMessage::QuoteRejected(data) => {
+            assert_eq!(data.reason, QuoteRejectReason::InvalidStrike)
+        }
+        _ => panic!("Expected QuoteRejected"),
+    }
+}
+
+#[test]
+fn future_cap_variant_parses_as_unknown_instead_of_dropping_the_message() {
+    let object = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":{"cap_exceeded":{"portfolio_var_cap_exceeded":{"current":"1","limit":"2"}}}}}"#;
+    match serde_json::from_str::<ServerMessage>(object).unwrap() {
+        ServerMessage::QuoteRejected(data) => {
+            assert!(matches!(
+                data.reason,
+                QuoteRejectReason::CapExceeded(CapError::Unknown(_))
+            ));
+        }
+        _ => panic!("Expected QuoteRejected"),
+    }
+
+    let bare = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":{"cap_exceeded":"portfolio_var_cap_exceeded"}}}"#;
+    match serde_json::from_str::<ServerMessage>(bare).unwrap() {
+        ServerMessage::QuoteRejected(data) => {
+            assert!(matches!(
+                data.reason,
+                QuoteRejectReason::CapExceeded(CapError::Unknown(_))
+            ));
+        }
+        _ => panic!("Expected QuoteRejected"),
+    }
+
+    // A reason string this build does not know still parses as `Unknown`.
+    let reason = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":"quota_exhausted"}}"#;
+    match serde_json::from_str::<ServerMessage>(reason).unwrap() {
+        ServerMessage::QuoteRejected(data) => assert_eq!(data.reason, QuoteRejectReason::Unknown),
+        _ => panic!("Expected QuoteRejected"),
+    }
+}
+
+#[test]
+fn rfq_skipped_carries_optional_cap_detail() {
+    let raw = r#"{"type":"RfqSkipped","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","market_id":"m1","quantity":5,"reason":"maker_position_cap_exceeded","cap_detail":{"maker_position_cap_exceeded":{"current":10,"limit":10}}}}"#;
+    match serde_json::from_str::<ServerMessage>(raw).unwrap() {
+        ServerMessage::RfqSkipped(data) => {
+            assert!(matches!(
+                data.cap_detail,
+                Some(CapError::MakerPositionCapExceeded {
+                    current: 10,
+                    limit: 10
+                })
+            ));
+        }
+        _ => panic!("Expected RfqSkipped"),
+    }
+
+    let legacy = r#"{"type":"RfqSkipped","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","market_id":"m1","quantity":5,"reason":"other"}}"#;
+    match serde_json::from_str::<ServerMessage>(legacy).unwrap() {
+        ServerMessage::RfqSkipped(data) => assert!(data.cap_detail.is_none()),
+        _ => panic!("Expected RfqSkipped"),
+    }
+}
+
+#[test]
+fn cancel_quote_ack_requires_all_fields() {
+    let ack = serde_json::json!({
+        "type": "CancelQuoteAck",
+        "data": {
+            "request_id": "00000000-0000-0000-0000-000000000001",
+            "rfq_id": "00000000-0000-0000-0000-000000000002",
+            "cancelled_order_ids": []
+        }
+    });
+    let decoded: acta_maker_sdk::ws::types::ServerMessage =
+        serde_json::from_value(ack.clone()).unwrap();
+    assert!(matches!(
+        decoded,
+        acta_maker_sdk::ws::types::ServerMessage::CancelQuoteAck(_)
+    ));
+    for field in ["request_id", "rfq_id", "cancelled_order_ids"] {
+        let mut missing = ack.clone();
+        missing["data"].as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<acta_maker_sdk::ws::types::ServerMessage>(missing).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_identity_fields_are_required() {
+    let rfq_id = Uuid::new_v4();
+    let request_id = Uuid::new_v4();
+    let order_id = "01".repeat(32);
+    let cases = [
+        (
+            "RfqCreated",
+            "rfq_version",
+            json!({
+                "type": "RfqCreated",
+                "data": {
+                    "rfq_id": rfq_id,
+                    "rfq_version": 1,
+                    "expires_at": 1,
+                    "created_at": 1,
+                },
+            }),
+        ),
+        (
+            "RfqClosed",
+            "rfq_version",
+            json!({
+                "type": "RfqClosed",
+                "data": {
+                    "rfq_id": rfq_id,
+                    "rfq_version": 1,
+                    "reason": "expired",
+                    "closed_at": 1,
+                },
+            }),
+        ),
+        (
+            "RfqAvailableAgain",
+            "rfq_version",
+            json!({
+                "type": "RfqAvailableAgain",
+                "data": {
+                    "rfq_id": rfq_id,
+                    "rfq_version": 1,
+                    "reason": "signature_timeout",
+                    "available_again_at": 1,
+                },
+            }),
+        ),
+        (
+            "QuoteCancelled",
+            "order_ids",
+            json!({
+                "type": "QuoteCancelled",
+                "data": {
+                    "rfq_id": rfq_id,
+                    "order_ids": [],
+                    "reason": "requested",
+                    "cancelled_at": 1,
+                },
+            }),
+        ),
+        (
+            "OrderAccepted",
+            "order_version",
+            json!({
+                "type": "OrderAccepted",
+                "data": { "order_id": order_id.as_str(), "order_version": 1 },
+            }),
+        ),
+        (
+            "OrderSubmitted",
+            "order_version",
+            json!({
+                "type": "OrderSubmitted",
+                "data": {
+                    "order_id": order_id.as_str(),
+                    "tx_signature": "signature",
+                    "order_version": 2,
+                },
+            }),
+        ),
+        (
+            "OrderConfirmed",
+            "order_version",
+            json!({
+                "type": "OrderConfirmed",
+                "data": {
+                    "order_id": order_id.as_str(),
+                    "position_pda": "position",
+                    "order_version": 4,
+                },
+            }),
+        ),
+        (
+            "OrderFailed",
+            "order_version",
+            json!({
+                "type": "OrderFailed",
+                "data": {
+                    "order_id": order_id.as_str(),
+                    "reason": "failed",
+                    "order_version": 3,
+                },
+            }),
+        ),
+        (
+            "OrderStatus",
+            "state",
+            json!({
+                "type": "OrderStatus",
+                "data": {
+                    "request_id": request_id,
+                    "order_id": order_id.as_str(),
+                    "state": { "type": "pending" },
+                },
+            }),
+        ),
+    ];
+
+    for (message_type, field, mut payload) in cases {
+        let valid = serde_json::to_string(&payload).expect("serialize valid lifecycle fixture");
+        let _valid = parse_server_message(&valid)
+            .unwrap_or_else(|error| panic!("valid {message_type} fixture: {error}"));
+        let removed = payload["data"]
+            .as_object_mut()
+            .expect("message data object")
+            .remove(field);
+        assert!(removed.is_some(), "{message_type} fixture lacks {field}");
+        let malformed =
+            serde_json::to_string(&payload).expect("serialize malformed lifecycle fixture");
+        let error = parse_server_message(&malformed)
+            .expect_err("missing lifecycle identity field must fail");
+        assert!(
+            error.to_string().contains(field),
+            "{message_type} missing {field}: {error}"
+        );
+    }
+}
+
+#[test]
+fn required_wire_fields_preserve_values_and_reject_missing_or_null() {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/required_fields.json")).unwrap();
+    assert_eq!(cases.len(), 9);
+    for case in cases {
+        let field = case["field"].as_str().unwrap();
+        let message = &case["message"];
+        let parsed: ServerMessage = serde_json::from_value(message.clone()).unwrap();
+        let encoded = serde_json::to_value(parsed).unwrap();
+        assert_eq!(encoded["data"][field], message["data"][field]);
+        for null in [false, true] {
+            let mut incomplete = message.clone();
+            if null {
+                incomplete["data"][field] = serde_json::Value::Null;
+            } else {
+                incomplete["data"].as_object_mut().unwrap().remove(field);
+            }
+            assert!(
+                serde_json::from_value::<ServerMessage>(incomplete).is_err(),
+                "{} requires {field}",
+                message["type"]
+            );
+        }
     }
 }

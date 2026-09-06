@@ -8,6 +8,7 @@ pub use server_query::*;
 pub use server_quote::*;
 pub use server_rfq::*;
 
+use crate::types::unix_time::UnixMillis;
 use std::time::SystemTime;
 
 use crate::types::ids::DurationSeconds;
@@ -16,7 +17,7 @@ use crate::types::{
     RfqStateError, TakerStatus, UserRole,
 };
 use serde::{Deserialize, Serialize};
-use serde_with::{TimestampMilliSeconds, serde_as};
+use serde_with::serde_as;
 use strum::IntoStaticStr;
 use uuid::Uuid;
 
@@ -25,6 +26,7 @@ use super::market::MarketInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr, strum::VariantNames)]
 #[serde(tag = "type", content = "data")]
+#[non_exhaustive]
 pub enum ServerMessage {
     Welcome(WelcomeData),
     VersionMismatch(VersionMismatchData),
@@ -55,11 +57,13 @@ pub enum ServerMessage {
     MakerMarkets(MakerMarketsMessage),
     TokenCaps(TokenCapsData),
     MyCaps(MyCapsData),
+    QuoteCheck(QuoteCheckData),
     MyTrades(MyTradesMessage),
     EarnSummary(EarnSummaryData),
     MmSummary(MmSummaryData),
     TokenMarketsInfo(TokenMarketsInfoData),
     RfqSkipped(RfqSkippedMessage),
+    CancelQuoteAck(CancelQuoteAckMessage),
     CancelAllQuotesAck(CancelAllQuotesAckMessage),
     BatchQuotesAck(BatchQuotesAckMessage),
     Subscriptions(SubscriptionsMessage),
@@ -81,6 +85,7 @@ pub enum ServerMessage {
     Tokens(TokensData),
     TradeExecuted(TradeExecutedMessage),
     PositionUpdated(PositionUpdatedMessage),
+    MakerCapsUpdated(MakerCapsUpdatedMessage),
     StatsUpdate(StatsUpdateMessage),
     Pong(PongData),
     Error(ServerError),
@@ -152,6 +157,7 @@ pub struct MyReferralInfoData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum InviteErrorReason {
     InvalidCode,
     CodeExhausted,
@@ -161,22 +167,28 @@ pub enum InviteErrorReason {
     CodeOwnerBlacklisted,
     AlreadyRegistered,
     InternalError,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ClaimErrorReason {
     NotRegistered,
     InvalidFormat,
     CodeTaken,
     Reserved,
     InternalError,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(
     Debug, Clone, Serialize, Deserialize, IntoStaticStr, strum::VariantNames, thiserror::Error,
 )]
 #[serde(tag = "type", content = "data")]
+#[non_exhaustive]
 pub enum ServerError {
     #[error("Must be authenticated to {action}")]
     Unauthenticated { action: AuthRequiredAction },
@@ -297,9 +309,8 @@ pub struct WelcomeData {
     pub server_version: String,
     pub min_supported_version: String,
     pub enabled_features: Vec<String>,
-    #[serde_as(as = "Option<TimestampMilliSeconds<i64>>")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_time_unix_ms: Option<SystemTime>,
+    #[serde_as(as = "UnixMillis")]
+    pub server_time_unix_ms: SystemTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,7 +324,7 @@ pub struct VersionMismatchData {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PongData {
-    #[serde_as(as = "TimestampMilliSeconds<i64>")]
+    #[serde_as(as = "UnixMillis")]
     pub server_time_unix_ms: SystemTime,
 }
 
@@ -321,6 +332,7 @@ impl ServerMessage {
     #[must_use]
     pub const fn request_id(&self) -> Option<Uuid> {
         match self {
+            Self::CancelQuoteAck(m) => Some(m.request_id),
             Self::CancelAllQuotesAck(m) => Some(m.request_id),
             Self::SubscribeAck(m) => Some(m.request_id),
             Self::UnsubscribeAck(m) => Some(m.request_id),
@@ -341,6 +353,7 @@ impl ServerMessage {
             Self::IndicativePrices(m) => Some(m.request_id),
             Self::TokenCaps(m) => Some(m.request_id),
             Self::MyCaps(m) => Some(m.request_id),
+            Self::QuoteCheck(m) => Some(m.request_id),
             Self::EarnSummary(m) => Some(m.request_id),
             Self::MmSummary(m) => Some(m.request_id),
             Self::TokenMarketsInfo(m) => Some(m.request_id),
@@ -383,6 +396,7 @@ impl ServerMessage {
             | Self::Snapshot(_)
             | Self::TradeExecuted(_)
             | Self::PositionUpdated(_)
+            | Self::MakerCapsUpdated(_)
             | Self::StatsUpdate(_)
             | Self::Pong(_)
             | Self::Error(_)
@@ -394,8 +408,8 @@ impl ServerMessage {
 
 /// Parse a server frame, tolerating unknown message types and error codes
 /// (forward-compat): unknown `type` → [`ServerMessage::Unknown`], unknown
-/// error code → [`ServerError::Unknown`]. A known type with a malformed
-/// payload is still an error.
+/// error code or error payload → [`ServerError::Unknown`]. A known non-error
+/// message type with a malformed payload is still an error.
 pub fn parse_server_message(text: &str) -> Result<ServerMessage, serde_json::Error> {
     match serde_json::from_str::<ServerMessage>(text) {
         Ok(msg) => Ok(msg),
@@ -438,9 +452,6 @@ fn unknown_fallback(text: &str) -> Option<ServerMessage> {
     match tag.r#type.as_str() {
         "Error" => {
             let env = serde_json::from_str::<Envelope>(text).ok()?;
-            if ServerError::VARIANTS.contains(&env.data.r#type.as_str()) {
-                return None;
-            }
             tracing::debug!(error_type = %env.data.r#type, "unrecognized server error code");
             Some(ServerMessage::Error(ServerError::Unknown(
                 UnknownServerError {
@@ -451,9 +462,6 @@ fn unknown_fallback(text: &str) -> Option<ServerMessage> {
         }
         "RequestError" => {
             let env = serde_json::from_str::<RequestErrorWire>(text).ok()?;
-            if ServerError::VARIANTS.contains(&env.data.error.r#type.as_str()) {
-                return None;
-            }
             tracing::debug!(error_type = %env.data.error.r#type, "unrecognized server error code");
             Some(ServerMessage::RequestError(RequestErrorEnvelope {
                 request_id: env.data.request_id,

@@ -1,23 +1,22 @@
 use std::sync::Arc;
 
+use crate::orders::SignerLike;
 use crate::signing::{AsyncSignerLike, SigningError, sign_verified};
 use crate::wire::encode_base58;
 use crate::ws::types::HelloData;
 
 use super::ManagedWsConfig;
 
-pub type ChallengeSigner = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
-
 #[derive(Clone)]
 pub(crate) enum ChallengeSigning {
-    Local(ChallengeSigner),
+    Local(Arc<dyn SignerLike + Send + Sync>),
     Async(Arc<dyn AsyncSignerLike>),
 }
 
 impl ChallengeSigning {
     pub(crate) async fn sign(&self, challenge: &str) -> Result<String, SigningError> {
         match self {
-            Self::Local(signer) => signer(challenge).map_err(SigningError::new),
+            Self::Local(signer) => Ok(signer.sign_message_base58(challenge.as_bytes())),
             Self::Async(signer) => sign_verified(signer.as_ref(), challenge.as_bytes())
                 .await
                 .map(|signature| encode_base58(&signature)),

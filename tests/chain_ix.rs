@@ -11,7 +11,6 @@ fn test_pubkey(seed: u8) -> Pubkey {
 }
 
 fn token_program() -> Pubkey {
-    // SPL Token program ID
     Pubkey::new_from_array({
         let mut arr = [0u8; 32];
         arr[0] = 6;

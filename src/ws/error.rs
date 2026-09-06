@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum WsClientError {
     #[error("websocket error: {0}")]
     WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
@@ -19,6 +20,7 @@ pub enum WsClientError {
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WsTransportConfigError {
     #[error("connect timeout must be non-zero")]
     ZeroConnectTimeout,

@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main, feat/vaults]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo check --locked --no-default-features
+      - run: cargo check --locked --features ws-client
+      - run: cargo check --locked --features chain
+      - run: cargo check --locked --features chain-rpc
+      - run: cargo test --locked --all-features --no-fail-fast
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --all-features --no-deps
+      - run: cargo package --locked --allow-dirty --offline
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-features
+
+# scripts/check-protocol-tags.sh needs a rust-backend checkout, which is
+# private; run it locally via scripts/test.sh.

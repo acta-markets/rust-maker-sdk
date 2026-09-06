@@ -28,19 +28,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 client
                     .get_my_quotes(GetMyQuotesMessage {
                         request_id: uuid::Uuid::new_v4(),
-                        active_only: true,
-                        limit: None,
+                        scope: MakerQuoteScope::Live,
+                        ..Default::default()
                     })
                     .await?;
 
                 client
                     .get_maker_positions(GetMakerPositionsMessage {
                         request_id: uuid::Uuid::new_v4(),
-                        market: None,
-                        underlying_mint: None,
                         status: Some(vec!["open".to_string(), "funded".to_string()]),
-                        min_expiry_ts: None,
-                        limit: None,
+                        ..Default::default()
                     })
                     .await?;
 
