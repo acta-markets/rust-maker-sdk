@@ -456,6 +456,44 @@ async fn lifecycle_event_observers_see_the_matching_latest_state() {
 }
 
 #[tokio::test]
+async fn concurrent_close_waits_for_the_session_task() {
+    let (handle, _commands) = super::ManagedWsHandle::make_test_handle(1, 1);
+    let (finish_tx, finish_rx) = oneshot::channel();
+    *handle.task.lock().await = Some(tokio::spawn(async move {
+        finish_rx.await.unwrap();
+    }));
+    let other = handle.clone();
+    let first = handle.close();
+    let second = other.close();
+    tokio::pin!(first, second);
+
+    assert!(futures_util::poll!(&mut first).is_pending());
+    assert!(futures_util::poll!(&mut second).is_pending());
+    finish_tx.send(()).unwrap();
+    first.await.unwrap();
+    second.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_close_preserves_the_session_join_for_the_next_caller() {
+    let (handle, _commands) = super::ManagedWsHandle::make_test_handle(1, 1);
+    let (finish_tx, finish_rx) = oneshot::channel();
+    *handle.task.lock().await = Some(tokio::spawn(async move {
+        finish_rx.await.unwrap();
+    }));
+    {
+        let first = handle.close();
+        tokio::pin!(first);
+        assert!(futures_util::poll!(&mut first).is_pending());
+    }
+    let second = handle.close();
+    tokio::pin!(second);
+    assert!(futures_util::poll!(&mut second).is_pending());
+    finish_tx.send(()).unwrap();
+    second.await.unwrap();
+}
+
+#[tokio::test]
 async fn close_interrupts_a_stalled_websocket_handshake() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1404,6 +1442,58 @@ async fn ready_queries_are_enqueued_with_the_connection_epoch() {
         send_await.await.unwrap(),
         Err(SendAwaitError::Disconnected)
     ));
+}
+
+#[tokio::test]
+async fn indicative_response_rechecks_readiness_before_enqueue() {
+    let (handle, mut commands) = super::ManagedWsHandle::test_handle(2, 1);
+    let response = ClientMessage::IndicativePricesResponse(
+        crate::ws::types::IndicativePricesResponseMessage {
+            request_id: Uuid::new_v4(),
+            market: "market".into(),
+            position_type: crate::PositionType::CoveredCall,
+            prices: Vec::new(),
+        },
+    );
+    handle.inject_state(ManagedWsState::Ready {
+        connection_epoch: 1,
+    });
+    handle.ensure_ready().unwrap();
+    handle.inject_state(ManagedWsState::Connecting);
+
+    assert!(matches!(
+        handle.try_send(response.clone()),
+        Err(ManagedWsError::NotReady)
+    ));
+    let send = handle.send(response.clone());
+    tokio::pin!(send);
+    assert!(matches!(
+        futures_util::poll!(&mut send),
+        std::task::Poll::Ready(Err(ManagedWsError::NotReady))
+    ));
+    assert!(matches!(
+        commands.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    handle.inject_state(ManagedWsState::Ready {
+        connection_epoch: 2,
+    });
+    let send = handle.send(response);
+    tokio::pin!(send);
+    assert!(futures_util::poll!(&mut send).is_pending());
+    match commands.recv().await.unwrap() {
+        ManagedCommand::Send {
+            connection_epoch,
+            tx,
+            ..
+        } => {
+            assert_eq!(connection_epoch, Some(2));
+            tx.send(Ok(())).unwrap();
+        }
+        _ => panic!("expected Send"),
+    }
+    send.await.unwrap();
 }
 
 #[tokio::test]

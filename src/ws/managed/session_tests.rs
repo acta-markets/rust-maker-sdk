@@ -862,6 +862,25 @@ async fn pending_subscription_does_not_block_cancellation() {
     use crate::ws::types::{AddMintsData, CancelAllQuotesAckMessage, CancelAllQuotesMessage};
     use std::time::Duration;
 
+    async fn receive_command(
+        socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> ClientMessage {
+        loop {
+            match receive_client(socket).await {
+                ClientMessage::Ping => {
+                    send_server(
+                        socket,
+                        ServerMessage::Pong(crate::ws::types::PongData {
+                            server_time_unix_ms: std::time::SystemTime::UNIX_EPOCH,
+                        }),
+                    )
+                    .await;
+                }
+                command => return command,
+            }
+        }
+    }
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server_task = tokio::spawn(async move {
@@ -869,13 +888,15 @@ async fn pending_subscription_does_not_block_cancellation() {
         let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
         server_challenge_auth(&mut socket, "session").await;
         complete_quote_readiness(&mut socket).await;
-        assert!(matches!(
-            receive_client(&mut socket).await,
-            ClientMessage::AddMints(_)
-        ));
+        let command = receive_command(&mut socket).await;
+        assert!(
+            matches!(command, ClientMessage::AddMints(_)),
+            "expected AddMints, got {command:?}"
+        );
         // Leave AddMints unacknowledged. CancelAll must still reach the socket.
-        let ClientMessage::CancelAllQuotes(cancel) = receive_client(&mut socket).await else {
-            panic!("expected cancellation, not a second subscription mutation");
+        let command = receive_command(&mut socket).await;
+        let ClientMessage::CancelAllQuotes(cancel) = command else {
+            panic!("expected cancellation, got {command:?}");
         };
         send_server(
             &mut socket,

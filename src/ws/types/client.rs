@@ -347,6 +347,7 @@ impl ClientMessage {
             Self::Quote(_)
                 | Self::BatchQuotes(_)
                 | Self::ReplaceQuote(_)
+                | Self::IndicativePricesResponse(_)
                 | Self::CancelQuote(_)
                 | Self::CancelAllQuotes(_)
                 | Self::GetOrderStatus(_)

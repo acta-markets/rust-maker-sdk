@@ -364,11 +364,13 @@ impl ManagedWsHandle {
     }
 
     pub async fn close(&self) -> Result<(), ManagedWsError> {
-        let Some(task) = self.task.lock().await.take() else {
-            return Ok(());
-        };
         self.shutdown.request();
-        task.await.map_err(ManagedWsError::TaskJoin)?;
+        let mut task = self.task.lock().await;
+        if let Some(handle) = task.as_mut() {
+            let result = handle.await;
+            task.take();
+            result.map_err(ManagedWsError::TaskJoin)?;
+        }
         Ok(())
     }
 

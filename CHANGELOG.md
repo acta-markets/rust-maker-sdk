@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1 - 2026-09-10
+
+- Stop queued data-lane frames from being written during shutdown when the control lane is full.
+- Keep `close().await` waiting for session shutdown across concurrent callers and cancellation of an earlier close future.
+- Reject indicative price responses before Ready so a reconnect between the typed client's readiness check and enqueue cannot send an unbound response on the next connection.
+- Add regression tests for saturated queues, concurrent close calls and cancelled close futures. Public API and wire format are unchanged.
+- Handle interleaved heartbeats in the pending-subscription cancellation test.
+
 ## 0.4.0 - 2026-08-31
 
 - Breaking: `Welcome.server_time_unix_ms`, `AuthSuccess.expires_at`, `RfqBroadcast.sent_at_unix_ms` and `instruction_index` on all six known chain events are required. Missing/null values are rejected; existing timestamp units and protocol version are unchanged. Credential expiry applies to resume, not socket lifetime.

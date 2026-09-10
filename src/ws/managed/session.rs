@@ -519,16 +519,7 @@ async fn run_session(
 
     match end {
         AuthenticatedSessionEnd::CloseRequested | AuthenticatedSessionEnd::Terminated(_) => {
-            // Even if the control lane is full, dropping the lanes lets the
-            // writer drain and exit; the timeout only guards a stalled socket.
-            let _ = lanes.close();
-            drop(lanes);
-            if timeout(config.write_timeout, &mut writer_task)
-                .await
-                .is_err()
-            {
-                writer_task.abort();
-            }
+            lanes.close(writer_task, config.write_timeout).await;
         }
         AuthenticatedSessionEnd::Disconnected | AuthenticatedSessionEnd::CredentialsExpired => {
             drop(lanes);

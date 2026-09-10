@@ -16,7 +16,7 @@ Requires Rust 1.89 or later. Default features are empty.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.4.0", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.4.1", features = ["ws-client"] }
 ```
 
 | Feature | What it enables |
@@ -235,8 +235,8 @@ other strikes. Single-RFQ CancelQuote rejects a locked RFQ as a whole.
 With `cancel_on_disconnect` enabled, the same cleanup applies when a `Gap`
 causes a reconnect.
 
-For an application-requested stop, `close()` uses the control lane; an ongoing
-socket write can still delay it. A slowly draining quote queue does not by itself
+For an application-requested stop, `close()` discards queued data-lane frames;
+an ongoing socket write can still delay it. A slowly draining quote queue does not by itself
 force a disconnect. COD therefore supplies a disconnect fallback, not a bounded
 cancellation time.
 
@@ -510,7 +510,7 @@ cargo run --example managed_quote --features ws-client
 
 ## Documentation
 
-See the [Rust API reference](https://docs.rs/acta-maker-sdk/0.4.0) and the
+See the [Rust API reference](https://docs.rs/acta-maker-sdk/0.4.1) and the
 [maker integration guide](https://docs.acta.markets/quickstart/maker-rust-sdk).
 README examples are compiled as `no_run` doctests without opening live connections.
 

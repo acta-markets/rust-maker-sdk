@@ -86,9 +86,13 @@ impl WriterLanes {
             .map_err(|(full, _)| full)
     }
 
-    pub(super) fn close(&self) -> Result<(), LaneFull> {
-        self.enqueue(Lane::Control, WriterCommand::Close)
-            .map_err(|(full, _)| full)
+    pub(super) async fn close(self, mut task: JoinHandle<()>, write_timeout: Duration) {
+        let close_enqueued = self.enqueue(Lane::Control, WriterCommand::Close).is_ok();
+        drop(self);
+        if !close_enqueued || timeout(write_timeout, &mut task).await.is_err() {
+            task.abort();
+            let _ = task.await;
+        }
     }
 }
 
@@ -429,14 +433,29 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn close_does_not_drain_queued_trading_messages() {
+    async fn close_does_not_drain_queued_data_frames() {
         let sink = RecordingSink::default();
         let sent = Arc::clone(&sink.sent);
         let (events, _) = broadcast::channel(4);
         let (lanes, task) = spawn(sink, Duration::from_secs(1), 8, events);
         assert!(lanes.frame(data_frame(), None).is_ok());
-        assert!(lanes.close().is_ok());
-        task.await.unwrap();
+        lanes.close(task, Duration::from_secs(1)).await;
         assert!(sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn close_with_full_control_lane_does_not_drain_queued_data_frames() {
+        let sink = RecordingSink::default();
+        let sent = Arc::clone(&sink.sent);
+        let (events, _) = broadcast::channel(4);
+        let (lanes, task) = spawn(sink, Duration::from_secs(1), 1, events);
+        let (done_tx, done_rx) = oneshot::channel();
+        assert!(lanes.pong(Bytes::new()).is_ok());
+        assert!(lanes.frame(data_frame(), Some(done_tx)).is_ok());
+
+        lanes.close(task, Duration::from_secs(1)).await;
+
+        assert!(sent.lock().unwrap().is_empty());
+        assert!(done_rx.await.is_err());
     }
 }
