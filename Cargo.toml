@@ -1,12 +1,12 @@
 [package]
 name = "acta-maker-sdk"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
 description = "Rust SDK for Acta options market makers — WebSocket client, order signing, message types"
 repository = "https://github.com/acta-markets/rust-maker-sdk"
-documentation = "https://docs.rs/acta-maker-sdk"
+documentation = "https://beta.acta.markets/docs"
 keywords = ["rfq", "options", "defi", "solana", "market-maker"]
 categories = ["api-bindings"]
 readme = "README.md"

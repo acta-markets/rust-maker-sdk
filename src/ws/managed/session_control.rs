@@ -2,10 +2,7 @@ use crate::ws::types::{AuthErrorData, ServerError, ServerMessage};
 
 use super::ManagedWsTerminationReason;
 
-/// A control frame that ends the current session attempt.
-///
-/// "Keep going" is the absence of one, so a caller cannot be handed a
-/// non-failure where it expects a failure.
+/// A control failure that ends the current session attempt.
 pub(super) enum ControlFailure {
     Retry(String),
     ClearCredentials(String),

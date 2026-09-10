@@ -1,11 +1,5 @@
-//! Timestamp encodings that match the backend byte for byte.
-//!
-//! The backend writes every wire timestamp as an unsigned integer, truncating
-//! any sub-second remainder. `serde_with`'s `TimestampSeconds<i64>` rounds
-//! instead, so the two disagree for half of all sub-second inputs. That
-//! disagreement is what made a signed quote expiry travel as one second and
-//! verify as another; these adapters keep the SDK on the backend's convention
-//! so the same drift cannot appear on another field.
+//! Unsigned Unix timestamps truncate sub-second input, matching the backend.
+//! `serde_with::TimestampSeconds<i64>` rounds instead and can change a signed expiry.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

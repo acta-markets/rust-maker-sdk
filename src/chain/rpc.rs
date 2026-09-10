@@ -378,7 +378,7 @@ impl ChainClient {
                 signers.push(*signer);
             }
         }
-        tx.try_sign(&signers, recent)?;
+        sign_transaction(&mut tx, &signers, recent)?;
         self.rpc
             .send_and_confirm_transaction_with_spinner_and_commitment(&tx, self.commitment)
             .await
@@ -386,16 +386,13 @@ impl ChainClient {
     }
 }
 
-#[cfg(test)]
-fn build_signed_transaction(
-    instructions: Vec<Instruction>,
-    fee_payer: Pubkey,
-    signers: &[&dyn Signer],
+fn sign_transaction(
+    transaction: &mut Transaction,
+    signers: &[&(dyn Signer + Sync)],
     recent_blockhash: solana_sdk::hash::Hash,
-) -> Result<Transaction, ChainError> {
-    let mut transaction = Transaction::new_with_payer(&instructions, Some(&fee_payer));
+) -> Result<(), ChainError> {
     transaction.try_sign(signers, recent_blockhash)?;
-    Ok(transaction)
+    Ok(())
 }
 
 const TOKEN_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");

@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "acta-maker-sdk"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "bs58",
  "ed25519-dalek",

@@ -16,11 +16,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(msg) = client.next().await {
         match msg? {
             ServerMessage::AuthRequest(data) => {
-                // Sign with the registered maker key.
+                // Sign with the registered auth key; pubkey identifies the maker owner.
                 let auth = AuthChallengeData {
                     challenge: data.challenge,
                     signature: "base58-signature".to_string(),
-                    pubkey: "maker_signing_pubkey_base58".to_string(),
+                    pubkey: "maker_owner_pubkey_base58".to_string(),
                 };
                 client.auth_challenge(auth).await?;
             }

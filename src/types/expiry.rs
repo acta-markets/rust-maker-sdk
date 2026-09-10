@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Expiry of a signed quote, in whole Unix seconds.
 ///
-/// A [`SystemTime`] here would admit a sub-second fraction, which the preimage
-/// truncates and JSON rounds — signing one second and transmitting another.
-/// Conversion always truncates, matching the preimage.
+/// [`Self::from_system_time`] truncates sub-second input to match the preimage and wire value.
 #[derive(
     Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
@@ -22,7 +20,7 @@ impl QuoteExpiry {
 
     /// Truncate a [`SystemTime`] to whole Unix seconds.
     ///
-    /// Returns `None` for times before the Unix epoch or beyond `u64` seconds.
+    /// Returns `None` before the Unix epoch.
     #[must_use]
     pub fn from_system_time(time: SystemTime) -> Option<Self> {
         Some(Self(time.duration_since(UNIX_EPOCH).ok()?.as_secs()))
@@ -30,8 +28,7 @@ impl QuoteExpiry {
 
     /// Truncate `now + lifetime` to whole Unix seconds.
     ///
-    /// This is the usual way to build a quote expiry. Returns `None` if the
-    /// clock is before the Unix epoch or the result overflows `u64` seconds.
+    /// Returns `None` if addition overflows [`SystemTime`] or the result is before the epoch.
     #[must_use]
     pub fn after(lifetime: Duration) -> Option<Self> {
         Self::from_system_time(SystemTime::now().checked_add(lifetime)?)

@@ -99,10 +99,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
                     .ok_or("system clock is before the Unix epoch")?;
+                if valid_until.to_system_time() > rfq.market.expiry_ts {
+                    continue;
+                }
 
-                // `RfqBinding` decodes the RFQ's keys once and resolves the
-                // strikes it will accept; the builder derives the signed
-                // preimage and the wire message from the same values.
                 let quote = RfqBinding::from_broadcast(rfq)?
                     .quote()
                     .price(Price::new(1_000_000_000)) // your pricing logic
@@ -110,8 +110,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .nonce(Nonce::new(NONCE_GEN.next_u64()?))
                     .sign(signer_for_quotes.as_ref())?;
 
-                tracing::info!(rfq = %quote.rfq_id, strike = %quote.strike, "quoted");
-                client.quote(quote).await?;
+                tracing::info!(rfq = %quote.rfq_id, strike = %quote.strike, "submitting quote");
+                client
+                    .raw()
+                    .send_in_epoch(ClientMessage::Quote(quote), recovery_epoch)
+                    .await?;
             }
             ServerMessage::QuoteAcknowledged(ack) => {
                 tracing::info!(rfq = %ack.rfq_id, order = ?ack.order_id, "ack");

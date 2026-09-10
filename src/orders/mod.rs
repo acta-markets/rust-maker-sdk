@@ -187,9 +187,6 @@ pub fn order_preimage_hex(preimage: &[u8; ORDER_PREIMAGE_LEN]) -> String {
 /// Expanding the secret derives the public key, which costs about as much as
 /// the signature itself. Quoting in a loop should hold a [`BytesSigner`] and
 /// call [`sign_order_id_with_signer`] instead, so the key is expanded once.
-///
-/// # Errors
-/// Currently infallible; the signature is returned as `Ok`.
 pub fn sign_order_id_bytes(
     order_id: &[u8; ORDER_ID_LEN],
     signing_key_bytes: &[u8; 32],
@@ -200,9 +197,6 @@ pub fn sign_order_id_bytes(
 }
 
 /// Base58 form of [`sign_order_id_bytes`], and it re-expands the key the same way.
-///
-/// # Errors
-/// Currently infallible; the signature is returned as `Ok`.
 pub fn sign_order_id_base58(
     order_id: &[u8; ORDER_ID_LEN],
     signing_key_bytes: &[u8; 32],

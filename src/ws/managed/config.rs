@@ -170,11 +170,9 @@ impl ManagedWsConfig {
         .then_some(FEATURE_CANCEL_ON_DISCONNECT)
     }
 
-    /// Authenticate as this maker identity instead of the signer's own key.
+    /// Authenticate as this maker owner instead of the signer's public key.
     ///
-    /// The challenge signature is still produced by the configured signer.
-    /// Required with [`Self::new_async`] when the signer holds a delegated
-    /// auth key: the server expects the maker owner's public key here.
+    /// The configured signer signs the challenge. Set this for delegated auth keys.
     #[must_use]
     pub fn with_auth_pubkey(mut self, pubkey: impl Into<String>) -> Self {
         self.auth_pubkey = pubkey.into();

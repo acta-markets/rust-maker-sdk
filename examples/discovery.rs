@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let auth = AuthChallengeData {
                     challenge: data.challenge,
                     signature: "base58-signature".to_string(),
-                    pubkey: "maker_signing_pubkey_base58".to_string(),
+                    pubkey: "maker_owner_pubkey_base58".to_string(),
                 };
                 client.auth_challenge(auth).await?;
             }

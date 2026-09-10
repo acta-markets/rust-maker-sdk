@@ -50,6 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Quotes need 310 seconds of validity; 300 seconds are reserved for settlement.
                 let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
                     .ok_or("system clock is before the Unix epoch")?;
+                if valid_until.to_system_time() > rfq.market.expiry_ts {
+                    continue;
+                }
 
                 let quote = RfqBinding::from_broadcast(&rfq)?
                     .quote()
@@ -58,7 +61,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .nonce(Nonce::new(NONCE_GEN.next_u64()?))
                     .sign(&signer)?;
 
-                println!("quoted rfq={} strike={}", quote.rfq_id, quote.strike);
+                println!(
+                    "submitting quote rfq={} strike={}",
+                    quote.rfq_id, quote.strike
+                );
                 client.quote(quote).await?;
             }
             other => println!("server: {other:?}"),

@@ -1,10 +1,6 @@
 #![cfg(feature = "ws-client")]
 
-//! Pins the maker client surfaces.
-//!
-//! Send commands and the shared lifecycle delegates are generated from macros. Referencing each one by
-//! path makes a dropped or renamed entry a compile error rather than a silent
-//! removal from a published API.
+//! Compile-time API-surface checks for maker clients.
 
 use acta_maker_sdk::quote::{QuoteBuilder, RfqBinding};
 use acta_maker_sdk::ws::maker::{MakerDataClient, MakerQuoteClient};
@@ -62,7 +58,6 @@ fn every_data_plane_method_exists() {
     >::into_payload;
 }
 
-/// The quote-construction surface, so a rename cannot slip out silently.
 #[test]
 fn every_quote_construction_entry_point_exists() {
     let _ = RfqBinding::from_broadcast;
