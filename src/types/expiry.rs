@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 pub struct QuoteExpiry(u64);
 
 impl QuoteExpiry {
-    /// Wrap a Unix-seconds timestamp.
     #[must_use]
     pub const fn from_unix_seconds(seconds: u64) -> Self {
         Self(seconds)
@@ -39,16 +38,16 @@ impl QuoteExpiry {
         self.0
     }
 
-    /// The equivalent [`SystemTime`], exactly on a second boundary.
+    /// The equivalent [`SystemTime`], or `None` outside the platform's time range.
     #[must_use]
-    pub fn to_system_time(self) -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(self.0)
+    pub fn to_system_time(self) -> Option<SystemTime> {
+        UNIX_EPOCH.checked_add(Duration::from_secs(self.0))
     }
 
-    /// Seconds remaining until this expiry, or `None` once it has passed.
+    /// Time remaining, or `None` before `now` or outside the platform's time range.
     #[must_use]
     pub fn remaining_from(self, now: SystemTime) -> Option<Duration> {
-        self.to_system_time().duration_since(now).ok()
+        self.to_system_time()?.duration_since(now).ok()
     }
 }
 
@@ -67,12 +66,6 @@ impl From<u64> for QuoteExpiry {
 impl From<QuoteExpiry> for u64 {
     fn from(expiry: QuoteExpiry) -> Self {
         expiry.0
-    }
-}
-
-impl From<QuoteExpiry> for SystemTime {
-    fn from(expiry: QuoteExpiry) -> Self {
-        expiry.to_system_time()
     }
 }
 

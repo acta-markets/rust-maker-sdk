@@ -429,15 +429,9 @@ pub struct PositionUpdatedMessage {
     pub caps_snapshot: MakerCapsSnapshot,
 }
 
-/// Owner-only push: your capacity changed with no position event to ride on.
-///
-/// `Lifecycle` — a settled or liquidated position released capacity. Sent when
-/// the server's caps projection was actually replaced, not when the chain event
-/// was heard, so these ceilings are the ones now enforced.
-/// `Policy` — an administrator changed a limit that applies to you.
-///
-/// Best-effort: on reconnect re-read authoritative state rather than assuming
-/// every push arrived.
+/// Owner-only capacity update, emitted after the new caps take effect.
+/// `Lifecycle` follows settlement or liquidation; `Policy` follows an admin limit change.
+/// Delivery is best-effort: refresh authoritative state after reconnect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MakerCapsUpdatedMessage {
     pub caps_snapshot: MakerCapsSnapshot,
@@ -516,9 +510,7 @@ pub enum ChainEventMessage {
     Unknown,
 }
 
-/// Stable identity for an on-chain instruction event.
-///
-/// Known events are identified by transaction signature and instruction index.
+/// Known on-chain events are keyed by transaction signature and instruction index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChainEventIdentity<'a> {
     pub signature: &'a str,

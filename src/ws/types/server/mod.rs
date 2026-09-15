@@ -149,10 +149,10 @@ pub struct MyReferralInfoData {
     pub request_id: Uuid,
     pub referral_code: ReferralCode,
     pub status: TakerStatus,
-    pub total_invited: i64,
-    pub invited_this_period: i64,
+    pub total_invited: u64,
+    pub invited_this_period: u64,
     pub max_invites_per_period: u32,
-    pub next_slot_frees_in_seconds: i64,
+    pub next_slot_frees_in_seconds: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

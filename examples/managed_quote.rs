@@ -1,10 +1,12 @@
 //! Quote RFQs with `MakerQuoteClient`.
 
+mod common;
+
 use acta_maker_sdk::ws::maker::MakerQuoteClient;
 use acta_maker_sdk::ws::managed::*;
 use acta_maker_sdk::ws::types::*;
 use acta_maker_sdk::{
-    AtomicNonceGenerator, BytesSigner, Nonce, Price, QuoteExpiry, RfqBinding, WS_PROTOCOL_VERSION,
+    AtomicNonceGenerator, Nonce, Price, QuoteExpiry, RfqBinding, WS_PROTOCOL_VERSION,
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -15,20 +17,22 @@ static NONCE_GEN: AtomicNonceGenerator = AtomicNonceGenerator::new();
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    // Example key. Never use it in production.
-    let signer = Arc::new(BytesSigner::from_secret([1u8; 32]));
+    let common::Config { signer, owner, url } = common::load()?;
+    let maker_owner = acta_maker_sdk::decode_base58_32(&owner)?;
+    let signer = Arc::new(signer);
     let signer_for_quotes = Arc::clone(&signer);
 
     let config = ManagedWsConfig::new(
-        "wss://devnet-api.acta.markets/maker",
+        url,
         HelloData {
             protocol_version: WS_PROTOCOL_VERSION.to_string(),
             features: vec!["quote_expired".to_string()],
             client_name: Some("maker-bot".to_string()),
-            client_version: Some("0.1.0".to_string()),
+            client_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
         signer,
     )
+    .with_auth_pubkey(owner)
     .low_latency()
     .with_initial_subscribe(SubscribeData {
         request_id: Uuid::new_v4(),
@@ -42,7 +46,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut events = client.subscribe_events();
     tokio::spawn(async move {
-        while let Ok(event) = events.recv().await {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "session event logger lagged");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             match event {
                 ManagedWsEvent::Authenticated => tracing::info!("authenticated"),
                 ManagedWsEvent::Ready => tracing::info!("ready"),
@@ -99,12 +111,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
                     .ok_or("system clock is before the Unix epoch")?;
-                if valid_until.to_system_time() > rfq.market.expiry_ts {
+                if valid_until
+                    .to_system_time()
+                    .ok_or("quote expiry exceeds SystemTime")?
+                    > rfq.market.expiry_ts
+                {
                     continue;
                 }
 
                 let quote = RfqBinding::from_broadcast(rfq)?
                     .quote()
+                    .maker_owner(maker_owner)
                     .price(Price::new(1_000_000_000)) // your pricing logic
                     .valid_until(valid_until)
                     .nonce(Nonce::new(NONCE_GEN.next_u64()?))

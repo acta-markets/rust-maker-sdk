@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.3 - 2026-09-18
+
+- Native SOL funding reads the maker and position ATAs in one RPC when both are needed. Rent, fee reserve and final wallet-budget checks are preserved.
+- Settlement amount calculation cancels decimal scales before multiplication, avoiding intermediate overflow when the result fits in `u64`.
+- Decode the on-chain `Closed` position status.
+- Add optional `GlobalStats.usd` with separate notional and premium totals as decimal dollar strings, plus the number of priced confirmed trades. Older snapshots without USD values remain readable.
+- Network examples load a Solana keypair file, support a separate maker owner, and complete the Hello → Welcome → StartAuth handshake. README includes setup and run commands.
+
+- `QuoteExpiry::to_system_time` returns `Option<SystemTime>` and `From<QuoteExpiry> for SystemTime` is removed. Use `expiry.to_system_time().ok_or(...)` instead of an infallible conversion. Out-of-range wire timestamps retain their exact u64 value and no longer panic; `remaining_from` returns `None` for them.
+
+- Derive and verify the RFQ market PDA before quote signing, including program, chain, option type and collateral/settlement mints. `RfqBinding::from_broadcast` uses the SDK's Acta program; `from_broadcast_for_program` accepts an explicitly configured deployment ID. Neither path trusts the endpoint to select the program.
+- Validate the canonical maker authentication challenge before calling local or asynchronous signers, including reconnects and mid-session challenges. Raw-client examples use the same validator. Order signing bytes are unchanged.
+- Decode referral counters as `u64`, matching the server and accepting its full range. Client code with explicit `i64` annotations must update those annotations.
+- Ignore unknown subscription channels during recovery instead of sending `Unsubscribe("unknown")`. Unknown trading states still reject.
+
 ## 0.4.2 - 2026-09-10
 
 - `managed_quote` sends with its recovered epoch, so stale quotes cannot cross a reconnect.

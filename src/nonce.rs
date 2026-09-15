@@ -33,11 +33,9 @@ impl NonceGenerator {
     }
 }
 
-/// Lock-free atomic nonce generator for concurrent use.
-///
-/// Uses an atomic counter offset by an entropy base. Values are unique until
-/// the `u64` counter wraps.
-/// Call [`init()`](Self::init) once before use to seed from OS entropy.
+/// Atomic counter offset by a lazily initialized OS-entropy seed.
+/// Counter arithmetic wraps modulo 2^64.
+/// Call [`Self::init`] to check entropy availability before the first nonce.
 pub struct AtomicNonceGenerator {
     counter: AtomicU64,
     entropy_base: AtomicU64,

@@ -106,7 +106,7 @@ pub struct RfqSkippedMessage {
 pub struct ActiveRfqInfo {
     pub rfq_id: Uuid,
     pub market: MarketId,
-    /// Taker pubkey: an `order_id` preimage input, so a re-read RFQ can be quoted.
+    /// Taker public key included in the `order_id` preimage.
     pub taker: String,
     pub position_type: PositionType,
     pub strike: Strike,

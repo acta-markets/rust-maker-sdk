@@ -26,6 +26,64 @@ impl SignerLike for ExplodingSigner {
         panic!("signer exploded")
     }
 }
+
+impl crate::AsyncSignerLike for ExplodingSigner {
+    fn pubkey_bytes(&self) -> [u8; 32] {
+        [7; 32]
+    }
+
+    fn sign_message<'a>(&'a self, _: &'a [u8]) -> crate::signing::SigningFuture<'a> {
+        panic!("async signer must not receive a rejected challenge")
+    }
+}
+
+#[tokio::test]
+async fn invalid_auth_never_reaches_either_signer() {
+    let base = config("ws://localhost/maker".into());
+    let sync = ManagedWsConfig::new(
+        "ws://localhost/maker",
+        base.hello(),
+        Arc::new(ExplodingSigner),
+    );
+    let asynchronous = ManagedWsConfig::new_async(
+        "ws://localhost/maker",
+        base.hello(),
+        Arc::new(ExplodingSigner),
+    );
+    for challenge in ["x".repeat(32), "é".repeat(16), "challenge".to_owned()] {
+        for config in [&sync, &asynchronous] {
+            let error = super::auth::build_auth_response(config, &challenge)
+                .await
+                .expect_err("reject before signing");
+            assert_eq!(error.to_string(), "invalid maker authentication challenge");
+        }
+    }
+}
+
+#[tokio::test]
+async fn canonical_auth_signs_original_bytes_for_delegated_owner() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let signer = BytesSigner::from_secret([1; 32]);
+    let owner = BytesSigner::from_secret([2; 32]).pubkey_base58();
+    let config = config("ws://localhost/maker".into()).with_auth_pubkey(&owner);
+    let challenge = crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE;
+    let response = super::auth::build_auth_response(&config, challenge)
+        .await
+        .expect("canonical delegated auth");
+    assert_eq!(response.pubkey, owner);
+    assert_ne!(response.pubkey, signer.pubkey_base58());
+    assert_eq!(response.challenge, challenge);
+    let signature = crate::wire::decode_base58_64(&response.signature).expect("signature");
+    VerifyingKey::from_bytes(&signer.pubkey_bytes())
+        .expect("key")
+        .verify(challenge.as_bytes(), &Signature::from_bytes(&signature))
+        .expect("signature binds original auth bytes");
+    assert_ne!(
+        signature,
+        crate::orders::sign_order_id_with_signer(&[0; 32], &signer)
+    );
+}
 use crate::ws::types::{
     ActiveRfqsData, AuthErrorData, AuthRequestData, AuthSuccessData, ClientMessage,
     FEATURE_CANCEL_ON_DISCONNECT, HelloData, MakerPositionCapInfo, MakerQuoteScope, MmSummaryData,
@@ -478,7 +536,7 @@ async fn cancel_on_disconnect_is_requested_and_verified_in_welcome() {
             send_server(
                 &mut socket,
                 ServerMessage::AuthRequest(AuthRequestData {
-                    challenge: "challenge".to_string(),
+                    challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
                 }),
             )
             .await;
@@ -570,7 +628,7 @@ async fn managed_auth_resumes_then_falls_back_only_when_expired() {
             send_server(
                 &mut socket,
                 ServerMessage::AuthRequest(AuthRequestData {
-                    challenge: "challenge".to_string(),
+                    challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
                 }),
             )
             .await;
@@ -633,7 +691,7 @@ async fn managed_auth_resumes_then_falls_back_only_when_expired() {
             send_server(
                 &mut socket,
                 ServerMessage::AuthRequest(AuthRequestData {
-                    challenge: "fresh-challenge".to_string(),
+                    challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
                 }),
             )
             .await;
@@ -651,7 +709,7 @@ async fn managed_auth_resumes_then_falls_back_only_when_expired() {
             .await;
             match receive_client(&mut socket).await {
                 ClientMessage::AuthChallenge(data) => {
-                    assert_eq!(data.challenge, "fresh-challenge");
+                    assert_eq!(data.challenge, crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE);
                 }
                 other => panic!("expected auth challenge response, got {other:?}"),
             }
@@ -699,7 +757,7 @@ async fn a_panicked_session_task_publishes_session_panicked() {
         send_server(
             &mut socket,
             ServerMessage::AuthRequest(AuthRequestData {
-                challenge: "challenge".to_string(),
+                challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
             }),
         )
         .await;
@@ -758,7 +816,7 @@ async fn server_challenge_auth(
     send_server(
         socket,
         ServerMessage::AuthRequest(AuthRequestData {
-            challenge: "challenge".to_string(),
+            challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
         }),
     )
     .await;
@@ -1113,4 +1171,58 @@ async fn reconnect_limit_during_strikes_reports_the_auth_rejection() {
             if reason == "invalid_signature"
     ));
     let _ = server_task.await;
+}
+
+#[tokio::test]
+async fn invalid_mid_session_challenge_never_enters_writer_lane() {
+    use crate::ws::error::WsClientError;
+    use crate::ws::types::{AuthRequestData, ServerMessage};
+    let base = config("ws://localhost/maker".into());
+    let config = ManagedWsConfig::new(
+        "ws://localhost/maker",
+        base.hello(),
+        Arc::new(ExplodingSigner),
+    );
+    let (frames_tx, mut frames_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Box::pin(futures_util::sink::unfold(frames_tx, |tx, frame| {
+        futures_util::future::ready(
+            tx.send(frame)
+                .map(|()| tx)
+                .map_err(|_| WsClientError::ConnectionClosed),
+        )
+    }));
+    let (events, _) = broadcast::channel(8);
+    let (lanes, writer_task) =
+        super::writer::spawn(sink, std::time::Duration::from_secs(1), 8, events.clone());
+    let (_shutdown, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let (messages, _) = broadcast::channel(8);
+    let mut sequence = 0;
+    let mut inbound = InboundPublisher {
+        tx: &messages,
+        connection_epoch: 1,
+        sequence: &mut sequence,
+    };
+    let mut tracker = super::AwaitTracker::new(8);
+    let result = super::session_message::handle_ws_read(
+        Some(Ok(ServerMessage::AuthRequest(AuthRequestData {
+            challenge: "x".repeat(32),
+        }))),
+        &lanes,
+        &config,
+        &mut tracker,
+        &mut inbound,
+        &events,
+        &mut shutdown_rx,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Some(AuthenticatedSessionEnd::Disconnected)
+    ));
+    drop(lanes);
+    writer_task.await.expect("writer drains and closes");
+    assert!(
+        frames_rx.recv().await.is_none(),
+        "no auth response may be queued"
+    );
 }

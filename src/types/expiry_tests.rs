@@ -32,7 +32,8 @@ fn json_is_a_bare_integer_of_whole_seconds() {
 #[test]
 fn round_trip_through_system_time_is_stable() {
     let expiry = QuoteExpiry::from_unix_seconds(1_700_000_123);
-    let back = QuoteExpiry::from_system_time(expiry.to_system_time()).expect("in range");
+    let back = QuoteExpiry::from_system_time(expiry.to_system_time().expect("representable"))
+        .expect("in range");
     assert_eq!(back, expiry);
 }
 
@@ -60,7 +61,29 @@ fn after_produces_a_whole_second_expiry() {
     let expiry = QuoteExpiry::after(Duration::from_secs(300)).expect("clock after epoch");
     let seconds = expiry
         .to_system_time()
+        .expect("representable")
         .duration_since(UNIX_EPOCH)
         .expect("after epoch");
     assert_eq!(seconds.subsec_nanos(), 0);
+}
+
+#[test]
+fn unrepresentable_wire_expiry_is_preserved_without_panicking() {
+    let expiry: QuoteExpiry = serde_json::from_str("18446744073709551615").unwrap();
+    assert_eq!(expiry.as_unix_seconds(), u64::MAX);
+    assert_eq!(
+        serde_json::to_string(&expiry).unwrap(),
+        "18446744073709551615"
+    );
+    assert_eq!(expiry.to_system_time(), None);
+    assert_eq!(expiry.remaining_from(UNIX_EPOCH), None);
+}
+
+proptest::proptest! {
+    #[test]
+    fn every_wire_timestamp_has_a_checked_platform_conversion(seconds in proptest::prelude::any::<u64>()) {
+        let expiry = QuoteExpiry::from_unix_seconds(seconds);
+        proptest::prop_assert_eq!(expiry.to_system_time(), UNIX_EPOCH.checked_add(Duration::from_secs(seconds)));
+        proptest::prop_assert_eq!(expiry.as_unix_seconds(), seconds);
+    }
 }

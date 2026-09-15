@@ -1,9 +1,10 @@
 //! Subscribe to RFQs and submit signed quotes.
 
-use acta_maker_sdk::ws::{client::WsClient, types::*};
+mod common;
+
+use acta_maker_sdk::ws::{client::WsClient, managed::normalize_maker_ws_url, types::*};
 use acta_maker_sdk::{
-    AtomicNonceGenerator, BytesSigner, Nonce, Price, QuoteExpiry, RfqBinding, SignerLike,
-    WS_PROTOCOL_VERSION,
+    AtomicNonceGenerator, Nonce, Price, QuoteExpiry, RfqBinding, SignerLike, WS_PROTOCOL_VERSION,
 };
 use uuid::Uuid;
 
@@ -11,28 +12,29 @@ static NONCE_GEN: AtomicNonceGenerator = AtomicNonceGenerator::new();
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Example key. Never use it in production.
-    let signer = BytesSigner::from_secret([1u8; 32]);
-
-    let mut client = WsClient::connect("wss://devnet-api.acta.markets/maker").await?;
+    let common::Config { signer, owner, url } = common::load()?;
+    let maker_owner = acta_maker_sdk::decode_base58_32(&owner)?;
+    let mut client = WsClient::connect(&normalize_maker_ws_url(&url)).await?;
 
     client
         .send_hello(HelloData {
             protocol_version: WS_PROTOCOL_VERSION.to_string(),
             features: vec![],
             client_name: Some("maker-bot".to_string()),
-            client_version: Some("0.1.0".to_string()),
+            client_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         })
         .await?;
 
     while let Some(msg) = client.next().await {
         match msg? {
+            ServerMessage::Welcome(_) => client.start_auth(owner.clone()).await?,
             ServerMessage::AuthRequest(data) => {
+                acta_maker_sdk::ws::auth::validate_maker_auth_challenge(&data.challenge)?;
                 client
                     .auth_challenge(AuthChallengeData {
                         challenge: data.challenge.clone(),
                         signature: signer.sign_message_base58(data.challenge.as_bytes()),
-                        pubkey: signer.pubkey_base58(),
+                        pubkey: owner.clone(),
                     })
                     .await?;
             }
@@ -50,12 +52,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Quotes need 310 seconds of validity; 300 seconds are reserved for settlement.
                 let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
                     .ok_or("system clock is before the Unix epoch")?;
-                if valid_until.to_system_time() > rfq.market.expiry_ts {
+                if valid_until
+                    .to_system_time()
+                    .ok_or("quote expiry exceeds SystemTime")?
+                    > rfq.market.expiry_ts
+                {
                     continue;
                 }
 
                 let quote = RfqBinding::from_broadcast(&rfq)?
                     .quote()
+                    .maker_owner(maker_owner)
                     .price(Price::new(1_000_000_000)) // your pricing logic here
                     .valid_until(valid_until)
                     .nonce(Nonce::new(NONCE_GEN.next_u64()?))
@@ -67,6 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 client.quote(quote).await?;
             }
+            ServerMessage::AuthError(error) => return Err(format!("{error:?}").into()),
+            ServerMessage::VersionMismatch(error) => return Err(error.message.into()),
+            ServerMessage::Error(error) => return Err(format!("{error:?}").into()),
             other => println!("server: {other:?}"),
         }
     }

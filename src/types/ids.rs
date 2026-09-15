@@ -23,7 +23,7 @@ define_numeric_newtype!(
 );
 
 impl Price {
-    /// Apply a protocol fee in basis points using the contract's rounding rule.
+    /// Subtract a floor-rounded per-unit fee, saturating at zero.
     #[must_use]
     pub fn after_fee_bps(self, bps: u16) -> Self {
         let fee = u128::from(self.0) * u128::from(bps) / 10_000;
@@ -47,7 +47,7 @@ impl OrderVersion {
     pub const FAILED: Self = Self::new(3);
     /// An authoritative on-chain confirmation.
     pub const CONFIRMED: Self = Self::new(4);
-    /// No authoritative order exists for the requested id.
+    /// The server has no authoritative record for the requested order ID.
     pub const NOT_FOUND: Self = Self::new(0);
 }
 define_numeric_newtype!(Slot, u64);

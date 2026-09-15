@@ -117,3 +117,16 @@ fn market_layout_keeps_token_programs_distinct_from_oracles() {
     assert_eq!(market.underlying_token_program_id, underlying_program);
     assert_eq!(market.quote_token_program_id, quote_program);
 }
+
+#[test]
+fn closed_position_tombstone_decodes_without_reopening_the_position() {
+    let program_id = Pubkey::new_unique();
+    let mut data = vec![0; POSITION_MIN_LEN];
+    data[ACCOUNT_OFFSET_DISCRIMINATOR] = POSITION_DISCRIMINATOR;
+    data[ACCOUNT_OFFSET_VERSION] = 1;
+    data[POSITION_OFFSET_STATUS] = 5;
+    data[POSITION_OFFSET_ORDER_ID..POSITION_OFFSET_ORDER_ID + 32].fill(7);
+    let position = parse_position(&account(program_id, data), &program_id).unwrap();
+    assert_eq!(position.status, PositionStatus::Closed);
+    assert_eq!(position.order_id, OrderId::new([7; 32]));
+}

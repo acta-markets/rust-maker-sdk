@@ -1,3 +1,5 @@
+pub mod auth;
+
 #[cfg(feature = "ws-client")]
 pub mod client;
 

@@ -1,14 +1,4 @@
-//! Correct-by-construction quote assembly.
-//!
-//! A quote is two things that must agree exactly: the signed order preimage and
-//! the [`QuoteMessage`] that carries it. They repeat `strike`, `price`,
-//! `valid_until` and `nonce`, and the `order_id` must hash precisely those
-//! values. Filling both by hand makes every field an opportunity for a silent
-//! `order_id preimage mismatch` rejection.
-//!
-//! [`RfqBinding`] decodes an RFQ's identities once and resolves its strike set;
-//! [`QuoteBuilder`] then derives the preimage and the message from a single
-//! resolved set of values, so the two cannot disagree.
+//! Build the signed preimage and quote message from the same validated RFQ terms.
 
 use crate::orders::{OrderPreimageArgs, SignerLike, compute_order_id, sign_order_id_with_signer};
 use crate::signing::{AsyncSignerLike, SigningError};
@@ -29,9 +19,10 @@ pub enum QuoteBuildError {
         source: WireError,
     },
 
-    /// The engine only admits quotes on strikes the RFQ asked for
-    /// (`RfqBroadcast.strike` plus `order_options`), so an unlisted strike is
-    /// rejected here rather than after a round trip.
+    #[error("rfq market does not match trusted signing terms: {0}")]
+    MarketBinding(&'static str),
+
+    /// Strike is absent from `RfqBroadcast.strike` and `order_options`.
     #[error("strike {requested} is not offered by this rfq; offered: {offered:?}")]
     StrikeNotOffered {
         requested: Strike,
@@ -45,10 +36,7 @@ pub enum QuoteBuildError {
     Signing(#[from] SigningError),
 }
 
-/// An RFQ with its identities decoded and its strike set resolved.
-///
-/// Build one per RFQ and reuse it for every quote and replacement on that RFQ:
-/// the base58 decoding and strike resolution happen once.
+/// Validated RFQ identities and strikes. Reuse for quotes and replacements.
 #[derive(Debug, Clone)]
 pub struct RfqBinding {
     rfq_id: Uuid,
@@ -70,9 +58,21 @@ impl RfqBinding {
     /// Decode and validate an inbound [`RfqBroadcastMessage`].
     ///
     /// # Errors
-    /// Returns [`QuoteBuildError::Identity`] if the program, market or taker key
-    /// is not valid base58.
+    /// Rejects malformed identities and inconsistent market descriptors. The
+    /// program is pinned to [`crate::ACTA_PROGRAM_ID`], not the WS endpoint.
     pub fn from_broadcast(rfq: &RfqBroadcastMessage) -> Result<Self, QuoteBuildError> {
+        Self::from_broadcast_for_program(rfq, crate::ACTA_PROGRAM_ID)
+    }
+
+    /// Use a caller-configured deployment ID, never an ID copied from the RFQ.
+    ///
+    /// # Errors
+    /// Rejects identities or market terms inconsistent with the expected program.
+    pub fn from_broadcast_for_program(
+        rfq: &RfqBroadcastMessage,
+        expected_program: [u8; 32],
+    ) -> Result<Self, QuoteBuildError> {
+        let market = validate_market_binding(rfq, expected_program)?;
         let mut offered_strikes = Vec::with_capacity(1 + rfq.order_options.len());
         offered_strikes.push(rfq.strike);
         offered_strikes.extend(
@@ -85,8 +85,8 @@ impl RfqBinding {
         Ok(Self {
             rfq_id: rfq.rfq_id,
             chain_id: rfq.market.chain_id.value(),
-            program_id: identity("market.program_id", &rfq.market.program_id)?,
-            market: identity("market.market_pda", &rfq.market.market_pda)?,
+            program_id: expected_program,
+            market,
             taker: identity("taker", &rfq.taker)?,
             position_type: rfq.position_type,
             quantity: rfq.quantity,
@@ -100,8 +100,7 @@ impl RfqBinding {
         self.rfq_id
     }
 
-    /// The size the engine prices this quote against. It comes from the RFQ, not
-    /// from the maker, but it is part of the signed preimage.
+    /// RFQ quantity in underlying atoms, included in the signed preimage.
     #[must_use]
     pub const fn quantity(&self) -> Quantity {
         self.quantity
@@ -131,7 +130,62 @@ impl RfqBinding {
     }
 }
 
-/// The maker-supplied half of a quote, after validation.
+fn validate_market_binding(
+    rfq: &RfqBroadcastMessage,
+    expected_program: [u8; 32],
+) -> Result<[u8; 32], QuoteBuildError> {
+    use QuoteBuildError::MarketBinding;
+    use solana_pubkey::Pubkey;
+
+    let descriptor = &rfq.market;
+    if descriptor.chain_id.value() != 0 {
+        return Err(MarketBinding("chain_id"));
+    }
+    if identity("market.program_id", &descriptor.program_id)? != expected_program {
+        return Err(MarketBinding("program_id"));
+    }
+    if descriptor.is_put != (rfq.position_type == PositionType::CashSecuredPut) {
+        return Err(MarketBinding("position_type"));
+    }
+    let underlying = identity("market.underlying_mint", &descriptor.underlying_mint)?;
+    let quote = identity("market.quote_mint", &descriptor.quote_mint)?;
+    let (collateral, settlement) = if descriptor.is_put {
+        (quote, underlying)
+    } else {
+        (underlying, quote)
+    };
+    if identity("market.collateral_mint", &descriptor.collateral_mint)? != collateral
+        || identity("market.settlement_mint", &descriptor.settlement_mint)? != settlement
+    {
+        return Err(MarketBinding("collateral/settlement mint"));
+    }
+    let expiry = descriptor
+        .expiry_ts
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| MarketBinding("expiry_ts"))?;
+    if expiry.subsec_nanos() != 0 || expiry.as_secs() > i64::MAX as u64 {
+        return Err(MarketBinding("expiry_ts"));
+    }
+    let expected_market = Pubkey::try_find_program_address(
+        &[
+            b"market",
+            &underlying,
+            &quote,
+            &expiry.as_secs().to_le_bytes(),
+            &[u8::from(descriptor.is_put)],
+        ],
+        &Pubkey::new_from_array(expected_program),
+    )
+    .ok_or(MarketBinding("market PDA derivation"))?
+    .0
+    .to_bytes();
+    let market = identity("market.market_pda", &descriptor.market_pda)?;
+    if market != expected_market {
+        return Err(MarketBinding("market_pda"));
+    }
+    Ok(market)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Resolved {
     strike: Strike,
@@ -174,12 +228,8 @@ impl QuoteBuilder<'_> {
         self
     }
 
-    /// The maker identity signed into the order preimage.
-    ///
-    /// The server reconstructs the preimage with the session's authenticated
-    /// maker owner. When quotes are signed by a delegated key, set the owner
-    /// here or every quote is rejected as `order_id preimage mismatch`.
-    /// Defaults to the signing key's own public key.
+    /// Authenticated maker owner used in the signed preimage.
+    /// Set this when a delegated key signs; defaults to the signer's public key.
     pub const fn maker_owner(mut self, owner: [u8; 32]) -> Self {
         self.maker = Some(owner);
         self
@@ -213,7 +263,6 @@ impl QuoteBuilder<'_> {
         OrderPreimageArgs {
             chain_id: self.binding.chain_id,
             program_id: self.binding.program_id,
-            // Maker-quoted RFQs are always sells from the maker's side.
             is_taker_buy: false,
             position_type: self.binding.position_type,
             market: self.binding.market,
@@ -227,11 +276,8 @@ impl QuoteBuilder<'_> {
         }
     }
 
-    /// The exact preimage the server will reconstruct for this quote.
-    ///
-    /// Exposed so a maker can inspect the bytes or sign them out of band.
-    /// `maker` is the signing key's fallback identity; an owner set with
-    /// [`Self::maker_owner`] wins, matching the `sign` paths.
+    /// Preimage fields for inspection or external signing.
+    /// [`Self::maker_owner`] overrides the fallback `maker`, as in the sign paths.
     ///
     /// # Errors
     /// See [`QuoteBuildError`].
@@ -242,10 +288,8 @@ impl QuoteBuilder<'_> {
 
     /// Sign with a local key.
     ///
-    /// The builder is borrowed, so it can be signed more than once — useful for
-    /// quoting several strikes off one binding. Give each quote its own nonce:
-    /// signing twice with the same one reproduces the same `order_id`, which
-    /// the server rejects as a duplicate.
+    /// Re-signing identical terms reproduces the same `order_id`.
+    /// Use a fresh nonce for a new quote.
     ///
     /// # Errors
     /// See [`QuoteBuildError`].
@@ -286,9 +330,6 @@ impl QuoteBuilder<'_> {
         ))
     }
 
-    /// Assemble the message from the same `resolved` values the preimage used.
-    /// This is the only place a `QuoteMessage` is built, so the wire fields and
-    /// the signed fields are the same values by construction.
     fn assemble(
         &self,
         resolved: Resolved,
@@ -308,11 +349,7 @@ impl QuoteBuilder<'_> {
 }
 
 impl QuoteMessage {
-    /// Turn this signed quote into a replacement for an earlier order.
-    ///
-    /// A replacement is the same signed quote plus the order it supersedes, so
-    /// it is a conversion rather than a second signing path — which keeps it
-    /// available to remote signers too.
+    /// Attach the replaced order ID without changing or re-signing this quote.
     #[must_use]
     pub fn into_replacement(self, old_order_id: OrderId) -> ReplaceQuoteMessage {
         ReplaceQuoteMessage {

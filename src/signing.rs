@@ -4,11 +4,9 @@ use std::pin::Pin;
 use ed25519_dalek::{Signature, VerifyingKey};
 use thiserror::Error;
 
-/// A signing operation whose implementation may wait for external I/O.
 pub type SigningFuture<'a> =
     Pin<Box<dyn Future<Output = Result<[u8; 64], SigningError>> + Send + 'a>>;
 
-/// Failure returned by an asynchronous signing provider.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{message}")]
 pub struct SigningError {

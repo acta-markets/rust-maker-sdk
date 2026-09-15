@@ -127,7 +127,6 @@ impl InboundPublisher<'_> {
     }
 }
 
-/// Receiving ends of the handle's channels.
 pub(super) struct HandleInputs {
     pub(super) cmd_rx: mpsc::Receiver<ManagedCommand>,
     pub(super) cancel_rx: mpsc::UnboundedReceiver<u64>,
@@ -210,8 +209,7 @@ pub(super) async fn run_managed_ws(
                     }
                     SessionEnd::AuthenticationFailed => {}
                     SessionEnd::Terminated(reason) => {
-                        // A lone invalid_signature can be a signer or server
-                        // glitch; only a streak proves bad credentials.
+                        // Retry isolated invalid_signature failures; bound repeated rejections.
                         let strike = matches!(
                             &reason,
                             ManagedWsTerminationReason::AuthenticationRejected {
@@ -561,7 +559,6 @@ pub(super) fn terminate(
     );
 }
 
-/// Outcome of a connection phase that races a deadline against shutdown.
 enum Phase<T> {
     ShutdownRequested,
     TimedOut,

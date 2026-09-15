@@ -22,15 +22,12 @@ pub trait MakerDataRequest: private::Sealed + Sized {
     const RESPONSE_TYPE: &'static str;
 
     fn into_message(self) -> ClientMessage;
-    /// Extract the typed payload.
-    ///
     /// # Errors
     /// Returns the original message when its variant is not this request's
     /// response.
     fn into_response(message: ServerMessage) -> Result<Self::Response, Box<ServerMessage>>;
 }
 
-/// A typed response, owning its payload.
 pub struct MakerResponse<T> {
     payload: T,
 }
@@ -75,7 +72,6 @@ pub enum MakerDataRequestError {
 }
 
 impl MakerDataRequestError {
-    /// Borrow the server error without cloning its payload.
     #[must_use]
     pub fn server_error(&self) -> Option<&ServerError> {
         match self {

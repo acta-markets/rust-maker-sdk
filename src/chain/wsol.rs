@@ -11,7 +11,8 @@ use super::ChainError;
 pub const DEFAULT_SOL_RESERVE_LAMPORTS: u64 = 1_200_000;
 pub const NATIVE_MINT: Pubkey = solana_sdk::pubkey!("So11111111111111111111111111111111111111112");
 
-const TOKEN_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+pub(crate) const TOKEN_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
 const SPL_TOKEN_SYNC_NATIVE: u8 = 17;
 const SYSTEM_INSTRUCTION_TRANSFER: u32 = 2;
@@ -132,6 +133,7 @@ pub(crate) fn decide_wrap(
 
 pub(crate) async fn plan_wsol_wrap(
     rpc: &RpcClient,
+    account: Option<Account>,
     request: WsolWrapRequest,
 ) -> Result<WrapPlan, ChainError> {
     let WsolWrapRequest {
@@ -144,15 +146,6 @@ pub(crate) async fn plan_wsol_wrap(
         fee_payer,
         additional_ata_rent_lamports,
     } = request;
-    if token_program != TOKEN_PROGRAM_ID {
-        return Err(ChainError::InvalidNativeTokenProgram(token_program));
-    }
-
-    let account = rpc
-        .get_account_with_commitment(&funding_ata, rpc.commitment())
-        .await
-        .map_err(ChainError::from)?
-        .value;
     let (existing_wsol, ata_rent_lamports) = match account {
         Some(account) => (parse_wsol_balance(&account, &owner, &token_program)?, 0),
         None if allow_account_creation => {

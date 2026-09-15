@@ -115,7 +115,9 @@ impl DesiredSubscriptions {
         let extra_channels = actual
             .channels
             .iter()
-            .filter(|channel| !self.current.channels.contains(channel))
+            .filter(|channel| {
+                **channel != WsChannel::Unknown && !self.current.channels.contains(channel)
+            })
             .copied()
             .collect::<Vec<_>>();
         let unsubscribe = (!extra_channels.is_empty()).then(|| UnsubscribeData {
@@ -263,5 +265,28 @@ mod tests {
             recovery.subscribe.quote_mints,
             Some(vec!["quote".to_string()])
         );
+    }
+    #[test]
+    fn recovery_never_sends_an_unknown_channel_back_to_the_server() {
+        let desired = DesiredSubscriptions::from_initial(Some(&initial()));
+        for (actual, expected) in [
+            (vec![WsChannel::Unknown], None),
+            (
+                vec![WsChannel::Trades, WsChannel::Unknown],
+                Some(vec![WsChannel::Trades]),
+            ),
+        ] {
+            let recovery = desired.recovery(&SubscriptionsMessage {
+                request_id: Uuid::new_v4(),
+                channels: actual,
+                underlying_mints: None,
+                quote_mints: None,
+            });
+            assert_eq!(
+                recovery.unsubscribe.map(|message| message.channels),
+                expected
+            );
+            assert_eq!(recovery.subscribe.channels, vec![WsChannel::Rfqs]);
+        }
     }
 }

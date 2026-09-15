@@ -184,9 +184,8 @@ pub fn order_preimage_hex(preimage: &[u8; ORDER_PREIMAGE_LEN]) -> String {
 
 /// Sign an order id from raw secret bytes.
 ///
-/// Expanding the secret derives the public key, which costs about as much as
-/// the signature itself. Quoting in a loop should hold a [`BytesSigner`] and
-/// call [`sign_order_id_with_signer`] instead, so the key is expanded once.
+/// Derives the public key on each call. Reuse [`BytesSigner`] with
+/// [`sign_order_id_with_signer`] when signing repeatedly.
 pub fn sign_order_id_bytes(
     order_id: &[u8; ORDER_ID_LEN],
     signing_key_bytes: &[u8; 32],

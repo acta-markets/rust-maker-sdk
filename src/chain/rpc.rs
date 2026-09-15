@@ -231,6 +231,9 @@ impl ChainClient {
         if expected_settlement == 0 {
             return Err(ChainError::InvalidAccountData);
         }
+        if settlement_program != crate::chain::wsol::TOKEN_PROGRAM_ID {
+            return Err(ChainError::InvalidNativeTokenProgram(settlement_program));
+        }
         let funding_ata = crate::chain::ix::derive_associated_token_address(
             &args.maker_owner,
             &settlement_mint,
@@ -241,21 +244,36 @@ impl ChainClient {
             &settlement_mint,
             &settlement_program,
         );
-        let additional_ata_rent_lamports = if args.create_atas
-            && fee_payer == args.maker_owner
-            && self
-                .rpc
-                .get_account_with_commitment(&position_funding_ata, self.commitment)
-                .await?
-                .value
-                .is_none()
-        {
-            token_account_rent_lamports(&self.rpc).await?
-        } else {
-            0
-        };
+        let (funding_account, additional_ata_rent_lamports) =
+            if args.create_atas && fee_payer == args.maker_owner {
+                let [position_account, funding_account]: [Option<Account>; 2] = self
+                    .rpc
+                    .get_multiple_accounts_with_commitment(
+                        &[position_funding_ata, funding_ata],
+                        self.commitment,
+                    )
+                    .await?
+                    .value
+                    .try_into()
+                    .map_err(|_| ChainError::InvalidAccountData)?;
+                let rent = if position_account.is_none() {
+                    token_account_rent_lamports(&self.rpc).await?
+                } else {
+                    0
+                };
+                (funding_account, rent)
+            } else {
+                (
+                    self.rpc
+                        .get_account_with_commitment(&funding_ata, self.commitment)
+                        .await?
+                        .value,
+                    0,
+                )
+            };
         match plan_wsol_wrap(
             &self.rpc,
+            funding_account,
             WsolWrapRequest {
                 owner: args.maker_owner,
                 funding_ata,
@@ -288,7 +306,6 @@ impl ChainClient {
         }
     }
 
-    /// Fetch and parse a position account. Returns full position details for pre-flight validation.
     pub async fn fetch_position_info(
         &self,
         position_pda: &Pubkey,

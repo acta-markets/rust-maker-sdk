@@ -24,20 +24,27 @@ fn scaled_quote_amount(
     quote_decimals: u8,
     underlying_decimals: u8,
 ) -> Result<u64, ChainError> {
+    if quote_decimals > 18 || underlying_decimals > 18 {
+        return Err(ChainError::SettlementAmountOverflow);
+    }
     let quote_scale = 10u128
         .checked_pow(u32::from(quote_decimals))
         .ok_or(ChainError::SettlementAmountOverflow)?;
     let underlying_scale = 10u128
         .checked_pow(u32::from(underlying_decimals))
         .ok_or(ChainError::SettlementAmountOverflow)?;
-    let numerator = u128::from(strike)
-        .checked_mul(u128::from(quantity))
-        .and_then(|value| value.checked_mul(quote_scale))
-        .ok_or(ChainError::SettlementAmountOverflow)?;
     let denominator = u128::from(PRICE_SCALE)
         .checked_mul(underlying_scale)
         .ok_or(ChainError::SettlementAmountOverflow)?;
-    let amount = numerator / denominator;
+    let numerator = u128::from(strike) * u128::from(quantity);
+    // Both scales are powers of ten: cancel before multiplying, without rounding twice.
+    let amount = if quote_scale <= denominator {
+        numerator / (denominator / quote_scale)
+    } else {
+        numerator
+            .checked_mul(quote_scale / denominator)
+            .ok_or(ChainError::SettlementAmountOverflow)?
+    };
     u64::try_from(amount).map_err(|_| ChainError::SettlementAmountOverflow)
 }
 

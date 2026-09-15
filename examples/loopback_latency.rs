@@ -1,6 +1,7 @@
 //! Loopback latency of the managed client: how long a command takes from
 //! `try_send` to the peer's socket, and how long an inbound message takes from
-//! the peer's socket to a subscriber. Run with `--release`.
+//! the peer's socket to a subscriber.
+//! Run: `cargo run --release --features ws-client --example loopback_latency`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -76,7 +77,12 @@ async fn authenticate_peer(socket: &mut Socket) {
     server_send(
         socket,
         &ServerMessage::AuthRequest(AuthRequestData {
-            challenge: "challenge".to_string(),
+            challenge: concat!(
+                "Acta RFQ Authentication\n\nSign this message to authenticate your wallet.\n\n",
+                "Nonce: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+                "Issued At: 2026-09-15T00:00:00Z\n"
+            )
+            .to_string(),
         }),
     )
     .await;
@@ -303,7 +309,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     println!(
-        "loopback, low_latency profile, release build; one frame in flight, inbound paced at {:?}",
+        "loopback, low_latency profile; one frame in flight, inbound paced at {:?}",
         INBOUND_PACING
     );
     percentiles("try_send -> peer socket", &mut enqueue_to_wire);

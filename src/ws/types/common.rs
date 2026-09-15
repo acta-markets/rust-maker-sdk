@@ -127,8 +127,19 @@ pub struct TokenInfo {
     pub symbol: String,
 }
 
+/// USD totals from prices captured at signed-transaction submission.
+/// Amounts are decimal dollar strings; priced count exposes historical gaps.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsdTradeStats {
+    pub notional_24h: String,
+    pub premium_24h: String,
+    pub priced_trades_24h: u32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GlobalStats {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usd: Option<UsdTradeStats>,
     pub total_volume_24h: Volume,
     pub total_trades_24h: TradeCount,
     pub total_price_24h: Volume,
@@ -196,4 +207,32 @@ pub struct MarketStats {
 #[must_use]
 pub const fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod usd_stats_tests {
+    use super::*;
+
+    #[test]
+    fn old_snapshots_remain_readable_and_usd_amounts_stay_exact() {
+        let old = serde_json::to_value(GlobalStats::default()).unwrap();
+        assert!(old.get("usd").is_none());
+        assert!(
+            serde_json::from_value::<GlobalStats>(old)
+                .unwrap()
+                .usd
+                .is_none()
+        );
+        let stats = GlobalStats {
+            usd: Some(UsdTradeStats {
+                notional_24h: "9007199254740993.000000001".into(),
+                premium_24h: "0.000000009".into(),
+                priced_trades_24h: 2,
+            }),
+            ..GlobalStats::default()
+        };
+        let decoded: GlobalStats =
+            serde_json::from_str(&serde_json::to_string(&stats).unwrap()).unwrap();
+        assert_eq!(decoded.usd, stats.usd);
+    }
 }

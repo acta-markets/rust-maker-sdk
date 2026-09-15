@@ -34,6 +34,7 @@ pub(super) async fn build_auth_response(
     config: &ManagedWsConfig,
     challenge: &str,
 ) -> Result<AuthChallengeData, SigningError> {
+    crate::ws::auth::validate_maker_auth_challenge(challenge)?;
     let signature = config.challenge_signing.sign(challenge).await?;
     Ok(AuthChallengeData {
         challenge: challenge.to_owned(),
@@ -53,8 +54,7 @@ pub(super) async fn authenticate(
         .await
         .map_err(|_| WsClientError::Timeout)??;
 
-    // Protocol negotiation is a real phase boundary: authentication may depend
-    // on the negotiated version/features and must not be pipelined behind Hello.
+    // Wait for negotiated features before authenticating.
     loop {
         let message = match client.next().await {
             Some(Ok(msg)) => msg,

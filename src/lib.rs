@@ -21,6 +21,9 @@ pub use error::ActaSdkError;
 
 pub const WS_PROTOCOL_VERSION: &str = "1.0.0";
 
+pub const ACTA_PROGRAM_ID: [u8; 32] =
+    solana_pubkey::pubkey!("33Ezs5eoa16QyPW8wifnyz2nCyMEcq2crqkVBNjnTE8U").to_bytes();
+
 pub use quote::{QuoteBuildError, QuoteBuilder, RfqBinding};
 
 pub use types::PRICE_SCALE;

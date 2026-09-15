@@ -6,9 +6,14 @@ use crate::types::ids::ChainId;
 use crate::ws::types::{MarketDescriptor, RfqOrderOption};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const PROGRAM: [u8; 32] = [7u8; 32];
-const MARKET: [u8; 32] = [9u8; 32];
+const PROGRAM: [u8; 32] =
+    solana_pubkey::pubkey!("33Ezs5eoa16QyPW8wifnyz2nCyMEcq2crqkVBNjnTE8U").to_bytes();
 const TAKER: [u8; 32] = [11u8; 32];
+
+fn market() -> [u8; 32] {
+    // Golden derived with @solana/web3.js for the descriptor in broadcast().
+    solana_pubkey::pubkey!("6E9r7Y4Q7mVpNDUJ47dYAdNQAZN1u3FxrutUWAfjL4zb").to_bytes()
+}
 
 fn signer() -> BytesSigner {
     BytesSigner::from_secret([3u8; 32])
@@ -20,7 +25,7 @@ fn broadcast(strike: u64, alternatives: &[u64]) -> RfqBroadcastMessage {
         market: MarketDescriptor {
             chain_id: ChainId::new(0),
             program_id: encode_base58(&PROGRAM),
-            market_pda: encode_base58(&MARKET),
+            market_pda: encode_base58(&market()),
             underlying_mint: encode_base58(&[1u8; 32]),
             quote_mint: encode_base58(&[2u8; 32]),
             expiry_ts: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
@@ -47,11 +52,7 @@ fn binding(strike: u64, alternatives: &[u64]) -> RfqBinding {
     RfqBinding::from_broadcast(&broadcast(strike, alternatives)).expect("valid identities")
 }
 
-/// The bug this module exists to prevent: a `valid_until` with a sub-second
-/// fraction used to be truncated into the preimage but rounded onto the wire,
-/// so roughly every other quote was signed for one second and transmitted for
-/// another. The server reconstructs the preimage from the wire value, so the
-/// two must be the same integer.
+// Regression: serialization rounded sub-seconds while the preimage truncated them.
 #[test]
 fn wire_valid_until_is_the_value_that_was_signed() {
     let fractional = SystemTime::UNIX_EPOCH + Duration::from_millis(1_800_000_000_700);
@@ -77,8 +78,6 @@ fn wire_valid_until_is_the_value_that_was_signed() {
     assert_eq!(on_the_wire, 1_800_000_000);
 }
 
-/// The server recomputes `order_id` from the wire fields. Rebuilding the
-/// preimage from the transmitted message must reproduce the same id.
 #[test]
 fn order_id_recomputes_from_the_transmitted_message() {
     let signer = signer();
@@ -99,7 +98,7 @@ fn order_id_recomputes_from_the_transmitted_message() {
         program_id: PROGRAM,
         is_taker_buy: false,
         position_type: PositionType::CoveredCall,
-        market: MARKET,
+        market: market(),
         strike: decoded.strike.value(),
         quantity: 5,
         gross_price: decoded.price.value(),
@@ -242,7 +241,6 @@ fn a_replacement_carries_the_same_signed_identity() {
     assert_eq!(replacement.signature, quote.signature);
 }
 
-/// Stands in for an HSM or a remote signing service.
 struct RemoteSigner(BytesSigner);
 
 impl AsyncSignerLike for RemoteSigner {
@@ -255,9 +253,6 @@ impl AsyncSignerLike for RemoteSigner {
     }
 }
 
-/// A maker whose key lives behind a remote signer must be able to build both a
-/// quote and a replacement. Replacement used to be a second signing method that
-/// only accepted a local key, which left remote signers unable to replace.
 #[tokio::test]
 async fn a_remote_signer_can_produce_a_quote_and_a_replacement() {
     let remote = RemoteSigner(signer());
@@ -273,7 +268,6 @@ async fn a_remote_signer_can_produce_a_quote_and_a_replacement() {
         .await
         .expect("remote signs");
 
-    // Identical to what the local key produces for the same inputs.
     assert_eq!(
         quote.order_id,
         builder.sign(&signer()).expect("signs").order_id
@@ -287,9 +281,6 @@ async fn a_remote_signer_can_produce_a_quote_and_a_replacement() {
     assert_eq!(replacement.valid_until, quote.valid_until);
 }
 
-/// A delegated quote-signing key signs, but the server reconstructs the
-/// preimage with the authenticated maker owner. The owner set on the builder
-/// must land in the preimage while the signature stays the signer's.
 #[test]
 fn delegated_signer_puts_the_maker_owner_in_the_preimage() {
     let signer = signer();
@@ -312,7 +303,7 @@ fn delegated_signer_puts_the_maker_owner_in_the_preimage() {
         program_id: PROGRAM,
         is_taker_buy: false,
         position_type: PositionType::CoveredCall,
-        market: MARKET,
+        market: market(),
         strike: quote.strike.value(),
         quantity: 5,
         gross_price: quote.price.value(),
@@ -327,8 +318,6 @@ fn delegated_signer_puts_the_maker_owner_in_the_preimage() {
         builder.sign(&signer).expect("signs").order_id
     );
 
-    // preimage_args agrees with the sign paths: a set owner wins over the
-    // signer-key fallback argument.
     let args = builder
         .clone()
         .maker_owner(owner)
@@ -365,4 +354,83 @@ async fn delegated_async_signer_matches_the_local_path() {
         quote.order_id,
         builder.sign(&signer()).expect("signs").order_id
     );
+}
+
+#[test]
+fn put_binding_requires_the_locally_selected_program_and_seed_terms() {
+    let custom_program = [4; 32];
+    let mut rfq = broadcast(100, &[]);
+    rfq.market.program_id = encode_base58(&custom_program);
+    rfq.market.is_put = true;
+    rfq.position_type = PositionType::CashSecuredPut;
+    rfq.market.collateral_mint = rfq.market.quote_mint.clone();
+    rfq.market.settlement_mint = rfq.market.underlying_mint.clone();
+    let pda = solana_pubkey::Pubkey::find_program_address(
+        &[
+            b"market",
+            &[1; 32],
+            &[2; 32],
+            &2_000_000_000u64.to_le_bytes(),
+            &[1],
+        ],
+        &solana_pubkey::Pubkey::new_from_array(custom_program),
+    )
+    .0
+    .to_bytes();
+    rfq.market.market_pda = encode_base58(&pda);
+    assert!(matches!(
+        RfqBinding::from_broadcast(&rfq),
+        Err(QuoteBuildError::MarketBinding(_))
+    ));
+    let binding = RfqBinding::from_broadcast_for_program(&rfq, custom_program)
+        .expect("configured deployment");
+    let preimage = binding
+        .quote()
+        .price(Price::new(1))
+        .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
+        .nonce(Nonce::new(1))
+        .preimage_args(TAKER)
+        .expect("preimage");
+    assert_eq!(preimage.program_id, custom_program);
+    assert_eq!(preimage.market, pda);
+    assert_eq!(preimage.position_type, PositionType::CashSecuredPut);
+    rfq.market.expiry_ts += Duration::from_millis(1);
+    assert!(RfqBinding::from_broadcast_for_program(&rfq, custom_program).is_err());
+}
+
+#[test]
+fn broadcast_binding_rejects_descriptor_substitution() {
+    let valid = broadcast(100, &[]);
+    assert!(RfqBinding::from_broadcast(&valid).is_ok());
+    for field in [
+        "program",
+        "chain",
+        "market",
+        "underlying",
+        "quote",
+        "expiry",
+        "is_put",
+        "position_type",
+        "collateral",
+        "settlement",
+    ] {
+        let mut rfq = valid.clone();
+        match field {
+            "program" => rfq.market.program_id = encode_base58(&[4; 32]),
+            "chain" => rfq.market.chain_id = ChainId::new(1),
+            "market" => rfq.market.market_pda = encode_base58(&[4; 32]),
+            "underlying" => rfq.market.underlying_mint = encode_base58(&[4; 32]),
+            "quote" => rfq.market.quote_mint = encode_base58(&[4; 32]),
+            "expiry" => rfq.market.expiry_ts += Duration::from_secs(1),
+            "is_put" => rfq.market.is_put = true,
+            "position_type" => rfq.position_type = PositionType::CashSecuredPut,
+            "collateral" => rfq.market.collateral_mint = encode_base58(&[4; 32]),
+            "settlement" => rfq.market.settlement_mint = encode_base58(&[4; 32]),
+            _ => unreachable!(),
+        }
+        assert!(
+            RfqBinding::from_broadcast(&rfq).is_err(),
+            "accepted substituted {field}"
+        );
+    }
 }

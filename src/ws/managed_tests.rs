@@ -706,7 +706,7 @@ async fn authenticate_test_peer(
     send_server_message(
         socket,
         ServerMessage::AuthRequest(AuthRequestData {
-            challenge: "challenge".to_string(),
+            challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
         }),
     )
     .await;
