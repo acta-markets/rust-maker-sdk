@@ -2,9 +2,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-/// Expiry of a signed quote, in whole Unix seconds.
-///
-/// [`Self::from_system_time`] truncates sub-second input to match the preimage and wire value.
+/// Signed-quote expiry in whole Unix seconds.
+/// [`SystemTime`] conversion truncates to match the signed preimage.
 #[derive(
     Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
@@ -12,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct QuoteExpiry(u64);
 
 impl QuoteExpiry {
+    /// Wrap a Unix-seconds timestamp.
     #[must_use]
     pub const fn from_unix_seconds(seconds: u64) -> Self {
         Self(seconds)
@@ -44,7 +44,7 @@ impl QuoteExpiry {
         UNIX_EPOCH.checked_add(Duration::from_secs(self.0))
     }
 
-    /// Time remaining, or `None` before `now` or outside the platform's time range.
+    /// Time remaining, or `None` for an expired or unrepresentable timestamp.
     #[must_use]
     pub fn remaining_from(self, now: SystemTime) -> Option<Duration> {
         self.to_system_time()?.duration_since(now).ok()

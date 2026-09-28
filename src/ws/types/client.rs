@@ -8,6 +8,7 @@ use strum::IntoStaticStr;
 use uuid::Uuid;
 
 use super::client_query::*;
+use super::client_vault::*;
 use super::common::{MarketDescriptor, WsChannel};
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]
@@ -17,6 +18,7 @@ use super::common::{MarketDescriptor, WsChannel};
 pub enum ClientMessage {
     Hello(HelloData),
     StartAuth(StartAuthData),
+    StartVaultAuth(StartVaultAuthData),
     ResumeAuth(ResumeAuthData),
     Logout,
     AuthChallenge(AuthChallengeData),
@@ -28,6 +30,8 @@ pub enum ClientMessage {
     RfqRequest(RfqRequestMessage),
     AcceptQuote(AcceptQuoteMessage),
     SubmitSignedSponsoredTx(SubmitSignedSponsoredTxData),
+    SwapQuote(SwapQuoteData),
+    SwapSubmit(SwapSubmitData),
     CancelRfq(CancelRfqData),
     GetIndicativePrices(GetIndicativePricesMessage),
     GetPositions(GetPositionsMessage),
@@ -277,8 +281,12 @@ impl ClientMessage {
             Self::GetMyReferralInfo(m) => Some(m.request_id),
             Self::RedeemInvite(m) => Some(m.request_id),
             Self::ClaimReferralCode(m) => Some(m.request_id),
+            Self::SwapQuote(m) => Some(m.request_id),
+            Self::SwapSubmit(m) => Some(m.request_id),
+
             Self::Hello(_)
             | Self::StartAuth(_)
+            | Self::StartVaultAuth(_)
             | Self::ResumeAuth(_)
             | Self::Logout
             | Self::AuthChallenge(_)
@@ -350,6 +358,12 @@ impl ClientMessage {
                 | Self::IndicativePricesResponse(_)
                 | Self::CancelQuote(_)
                 | Self::CancelAllQuotes(_)
+                | Self::RfqRequest(_)
+                | Self::AcceptQuote(_)
+                | Self::SubmitSignedSponsoredTx(_)
+                | Self::CancelRfq(_)
+                | Self::SwapQuote(_)
+                | Self::SwapSubmit(_)
                 | Self::GetOrderStatus(_)
                 | Self::Subscribe(_)
                 | Self::Unsubscribe(_)
@@ -364,6 +378,7 @@ impl ClientMessage {
         match self {
             Self::Hello(_)
             | Self::StartAuth(_)
+            | Self::StartVaultAuth(_)
             | Self::ResumeAuth(_)
             | Self::AuthChallenge(_)
             | Self::Logout

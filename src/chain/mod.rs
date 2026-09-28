@@ -9,6 +9,9 @@ pub mod rpc;
 #[cfg(feature = "chain-rpc")]
 mod settlement;
 
+#[cfg(feature = "vault-chain")]
+pub mod vault;
+
 #[cfg(feature = "chain-rpc")]
 pub mod wsol;
 

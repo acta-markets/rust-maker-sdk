@@ -21,7 +21,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::ws::client::PreparedClientMessage;
 use crate::ws::error::WsClientError;
-use crate::ws::types::{ClientMessage, ServerMessage};
+use crate::ws::types::{ClientMessage, ServerMessage, VaultAuthSuccessData};
 
 pub use config::{GapPolicy, ManagedWsConfig, ManagedWsConfigError};
 pub use endpoint::{
@@ -30,6 +30,8 @@ pub use endpoint::{
 };
 pub use inbound::{ManagedInbound, ManagedMessageReceiver, ManagedReceiveError};
 pub use outbound::{OutboundMessageError, SendTicket};
+#[cfg(feature = "vault")]
+pub(crate) use signer::ChallengeSigning;
 pub use state::{ManagedWsState, ManagedWsTerminationReason, WaitUntilReadyError};
 #[cfg(feature = "test-helpers")]
 pub use test_peer::ManagedWsTestPeer;
@@ -137,6 +139,7 @@ pub struct ManagedWsHandle {
     initial_messages_rx: Arc<StdMutex<Option<broadcast::Receiver<ManagedInbound>>>>,
     initial_events_rx: Arc<StdMutex<Option<broadcast::Receiver<ManagedWsEvent>>>>,
     state_rx: watch::Receiver<ManagedWsState>,
+    vault_auth_rx: watch::Receiver<Option<VaultAuthSuccessData>>,
     shutdown: Arc<ShutdownOnLastHandle>,
     next_await_id: Arc<AtomicU64>,
     task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -197,6 +200,18 @@ impl ManagedWsHandle {
     #[must_use]
     pub fn state(&self) -> ManagedWsState {
         self.state_rx.borrow().clone()
+    }
+
+    /// Vault grant for the current connection, as the server saw it at auth; `None` on maker sessions.
+    #[must_use]
+    pub fn vault_auth(&self) -> Option<VaultAuthSuccessData> {
+        self.vault_auth_rx.borrow().clone()
+    }
+
+    /// Follow vault authentications and invalidation (`None`) across reconnects.
+    #[must_use]
+    pub fn subscribe_vault_auth(&self) -> watch::Receiver<Option<VaultAuthSuccessData>> {
+        self.vault_auth_rx.clone()
     }
 
     #[must_use]
@@ -386,6 +401,7 @@ impl ManagedWsHandle {
         let (events_tx, initial_events_rx) = broadcast::channel(broadcast_buffer);
         let (state_tx, state_rx) = watch::channel(ManagedWsState::Connecting);
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let (_vault_auth_tx, vault_auth_rx) = watch::channel(None);
         (
             Self {
                 cmd_tx,
@@ -396,6 +412,7 @@ impl ManagedWsHandle {
                 initial_messages_rx: Arc::new(StdMutex::new(Some(initial_messages_rx))),
                 initial_events_rx: Arc::new(StdMutex::new(Some(initial_events_rx))),
                 state_rx,
+                vault_auth_rx,
                 shutdown: Arc::new(ShutdownOnLastHandle { tx: shutdown_tx }),
                 next_await_id: Arc::new(AtomicU64::new(1)),
                 task: Arc::new(tokio::sync::Mutex::new(None)),
@@ -460,6 +477,7 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
     let (events_tx, initial_events_rx) = broadcast::channel(broadcast_buffer);
     let (state_tx, state_rx) = watch::channel(ManagedWsState::Connecting);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (vault_auth_tx, vault_auth_rx) = watch::channel(None);
 
     let session = session::run_managed_ws(
         config,
@@ -472,6 +490,7 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
         events_tx.clone(),
         state_tx.clone(),
         shutdown_rx,
+        vault_auth_tx.clone(),
     );
     // The handle keeps the broadcast senders alive, so a panicked session task
     // would leave subscribers waiting forever unless the panic is published.
@@ -480,6 +499,7 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
     let task = tokio::spawn(async move {
         use futures_util::FutureExt;
         if let Err(payload) = std::panic::AssertUnwindSafe(session).catch_unwind().await {
+            vault_auth_tx.send_if_modified(|grant| grant.take().is_some());
             session::terminate(
                 &panic_events_tx,
                 &panic_state_tx,
@@ -498,6 +518,7 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
         initial_messages_rx: Arc::new(StdMutex::new(Some(initial_messages_rx))),
         initial_events_rx: Arc::new(StdMutex::new(Some(initial_events_rx))),
         state_rx,
+        vault_auth_rx,
         shutdown: Arc::new(ShutdownOnLastHandle { tx: shutdown_tx }),
         next_await_id: Arc::new(AtomicU64::new(1)),
         task: Arc::new(tokio::sync::Mutex::new(Some(task))),

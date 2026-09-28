@@ -265,7 +265,6 @@ proptest! {
 
 #[test]
 fn order_id_matches_contract_golden_vector() {
-    // Same fixed input and expected bytes as program/src/utils/order_hash.rs.
     let preimage = build_order_preimage(&OrderPreimageArgs {
         chain_id: 0x0102030405060708,
         is_taker_buy: true,

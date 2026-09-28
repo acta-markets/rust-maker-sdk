@@ -15,7 +15,7 @@ pub enum ReferralCodeFormatError {
 pub struct ReferralCode(String);
 
 impl ReferralCode {
-    /// Parse and normalize a referral code using the backend contract.
+    /// Trim, uppercase and validate a backend referral code.
     ///
     /// # Errors
     /// Returns [`ReferralCodeFormatError::Length`] for a trimmed length outside

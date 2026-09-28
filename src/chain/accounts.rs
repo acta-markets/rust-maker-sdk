@@ -8,7 +8,6 @@ const ACCOUNT_OFFSET_VERSION: usize = 1;
 const POSITION_DISCRIMINATOR: u8 = 1;
 const MARKET_DISCRIMINATOR: u8 = 4;
 
-/// On-chain position status discriminant.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PositionStatus {
@@ -17,7 +16,6 @@ pub enum PositionStatus {
     Funded = 2,
     Liquidated = 3,
     Settled = 4,
-    Closed = 5,
 }
 
 impl TryFrom<u8> for PositionStatus {
@@ -30,7 +28,6 @@ impl TryFrom<u8> for PositionStatus {
             2 => Ok(Self::Funded),
             3 => Ok(Self::Liquidated),
             4 => Ok(Self::Settled),
-            5 => Ok(Self::Closed),
             other => Err(ChainError::UnknownPositionStatus(other)),
         }
     }

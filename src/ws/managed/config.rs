@@ -9,9 +9,7 @@ use super::signer::ChallengeSigning;
 use crate::orders::SignerLike;
 use std::sync::Arc;
 
-/// What the session does when a message subscriber falls behind the inbound
-/// ring. The subscriber always gets `Gap`; this decides whether the session
-/// also reconnects so a fresh snapshot follows.
+/// Whether an inbound `Gap` also triggers reconnect and state recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum GapPolicy {
@@ -22,11 +20,22 @@ pub enum GapPolicy {
     Reconnect,
 }
 
-// Bounds ring slots; retained payload memory depends on traffic.
+// Bounds ring slots, not retained payload bytes; payload sizes depend on traffic.
 const MAX_INBOUND_RING_SLOTS: usize = 65_536;
 const MAX_OUTBOUND_QUEUE_WIRE_BYTES: usize = 256 * 1024 * 1024;
 const SERVER_MAX_BATCH_QUOTES: usize = 50;
 const SERVER_MAX_CLIENT_MESSAGE_BYTES: usize = 32 * 1024;
+
+/// How the session proves its identity after `Welcome`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AuthFlow {
+    /// `StartAuth` / `ResumeAuth` as a maker.
+    Maker,
+    /// `StartVaultAuth` as a vault operator. The server issues no resumable
+    /// session, so every reconnect re-runs the challenge.
+    #[cfg_attr(not(feature = "vault"), allow(dead_code))]
+    Vault { vault_pda: String },
+}
 
 #[derive(Clone)]
 pub struct ManagedWsConfig {
@@ -34,6 +43,7 @@ pub struct ManagedWsConfig {
     pub endpoint: MakerWsEndpoint,
     pub(super) auth_pubkey: String,
     pub(super) challenge_signing: ChallengeSigning,
+    pub(crate) auth_flow: AuthFlow,
     pub(super) initial_subscribe: Option<SubscribeData>,
     pub reconnect_delay: Duration,
     pub max_reconnect_delay: Duration,
@@ -80,7 +90,7 @@ impl ManagedWsConfig {
         Self::new_with_signing(url, hello, auth_pubkey, ChallengeSigning::Local(signer))
     }
 
-    pub(super) fn new_with_signing(
+    pub(crate) fn new_with_signing(
         url: impl Into<String>,
         hello: HelloData,
         auth_pubkey: String,
@@ -91,6 +101,7 @@ impl ManagedWsConfig {
             endpoint: MakerWsEndpoint::Quote,
             auth_pubkey,
             challenge_signing,
+            auth_flow: AuthFlow::Maker,
             initial_subscribe: None,
             reconnect_delay: Duration::from_millis(250),
             max_reconnect_delay: Duration::from_secs(5),
@@ -115,7 +126,7 @@ impl ManagedWsConfig {
         }
     }
 
-    /// Shorter liveness deadlines, larger queues, and reconnect on inbound gaps.
+    /// Short liveness deadlines, larger buffers and reconnect on inbound gaps.
     #[must_use]
     pub const fn low_latency(mut self) -> Self {
         self.ping_interval = Duration::from_secs(2);
@@ -170,9 +181,8 @@ impl ManagedWsConfig {
         .then_some(FEATURE_CANCEL_ON_DISCONNECT)
     }
 
-    /// Authenticate as this maker owner instead of the signer's public key.
-    ///
-    /// The configured signer signs the challenge. Set this for delegated auth keys.
+    /// Set the maker owner's identity when using a delegated auth signer.
+    /// The configured signer still signs the challenge.
     #[must_use]
     pub fn with_auth_pubkey(mut self, pubkey: impl Into<String>) -> Self {
         self.auth_pubkey = pubkey.into();
@@ -183,6 +193,27 @@ impl ManagedWsConfig {
     pub const fn with_endpoint(mut self, endpoint: MakerWsEndpoint) -> Self {
         self.endpoint = endpoint;
         self
+    }
+
+    /// Authenticate on `/vault` as an operator of `vault_pda`.
+    #[cfg(feature = "vault")]
+    pub(crate) fn with_vault_auth(mut self, vault_pda: String) -> Self {
+        self.auth_flow = AuthFlow::Vault { vault_pda };
+        // Fresh vault authentication enables this feed on the server.
+        self.initial_subscribe = Some(SubscribeData {
+            request_id: uuid::Uuid::new_v4(),
+            channels: vec![crate::ws::types::WsChannel::Vaults],
+            underlying_mints: None,
+            quote_mints: None,
+        });
+        self.with_endpoint(MakerWsEndpoint::Vault)
+    }
+
+    pub(crate) fn vault_pda(&self) -> Option<&str> {
+        match &self.auth_flow {
+            AuthFlow::Vault { vault_pda } => Some(vault_pda),
+            AuthFlow::Maker => None,
+        }
     }
 
     #[must_use]
@@ -248,6 +279,9 @@ impl ManagedWsConfig {
         if self.endpoint == MakerWsEndpoint::Data && self.initial_subscribe.is_some() {
             return Err(ManagedWsConfigError::InitialSubscribeOnDataEndpoint);
         }
+        if (self.endpoint == MakerWsEndpoint::Vault) != self.vault_pda().is_some() {
+            return Err(ManagedWsConfigError::VaultEndpointAuthMismatch);
+        }
         if let Some(subscribe) = &self.initial_subscribe {
             let message = ClientMessage::Subscribe(subscribe.clone());
             let prepared = PreparedClientMessage::new(&message)
@@ -295,6 +329,7 @@ fn validate_server_limit(
     Ok(())
 }
 
+/// Bound slot count; parsed messages have variable size, so this is not a byte limit.
 fn validate_slot_cap(
     field: &'static str,
     capacity: usize,
@@ -345,6 +380,8 @@ pub enum ManagedWsConfigError {
     InvalidReconnectJitter,
     #[error("initial subscriptions are not supported by the maker data endpoint")]
     InitialSubscribeOnDataEndpoint,
+    #[error("the vault endpoint requires the vault auth flow, and vice versa")]
+    VaultEndpointAuthMismatch,
     #[error("initial subscription is {actual} bytes, maximum is {limit}")]
     InitialSubscribeTooLarge { actual: usize, limit: usize },
     #[error("{field} is {configured}, server maximum is {limit}")]

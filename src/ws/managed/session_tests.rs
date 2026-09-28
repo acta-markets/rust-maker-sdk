@@ -5,7 +5,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::auth::AuthenticationError;
+use super::auth::{AuthOutcome, AuthenticationError};
 use super::{
     AuthenticatedSessionEnd, InboundPublisher, SessionEnd, SessionFailure, auth::authenticate,
     ready::establish,
@@ -84,6 +84,70 @@ async fn canonical_auth_signs_original_bytes_for_delegated_owner() {
         crate::orders::sign_order_id_with_signer(&[0; 32], &signer)
     );
 }
+#[cfg(feature = "vault")]
+#[tokio::test]
+async fn vault_auth_binds_both_identities_before_either_signer() {
+    let operator = crate::wire::encode_base58(&[7; 32]);
+    let vault = crate::wire::encode_base58(&[8; 32]);
+    let other = crate::wire::encode_base58(&[9; 32]);
+    let base = config("ws://localhost/vault".into());
+    let sync = ManagedWsConfig::new(
+        "ws://localhost/vault",
+        base.hello(),
+        Arc::new(ExplodingSigner),
+    )
+    .with_vault_auth(vault.clone());
+    let asynchronous = ManagedWsConfig::new_async(
+        "ws://localhost/vault",
+        base.hello(),
+        Arc::new(ExplodingSigner),
+    )
+    .with_vault_auth(vault.clone());
+    let canonical = crate::ws::auth::test_vault_auth_challenge(&operator, &vault);
+    let invalid = [
+        "x".repeat(32),
+        crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_owned(),
+        crate::ws::auth::test_vault_auth_challenge(&other, &vault),
+        crate::ws::auth::test_vault_auth_challenge(&operator, &other),
+        canonical.replace("Acta RFQ Authentication", "Acta Admin Authentication"),
+        canonical.replace("2026-09-15", "2026-02-30"),
+        canonical.replace("Nonce: ", "Nonce: a"),
+        format!("{canonical}\n"),
+    ];
+    for challenge in invalid {
+        for config in [&sync, &asynchronous] {
+            let error = super::auth::build_auth_response(config, &challenge)
+                .await
+                .expect_err("reject before signing");
+            assert_eq!(error.to_string(), "invalid vault authentication challenge");
+        }
+    }
+    assert!(crate::ws::auth::validate_maker_auth_challenge(&canonical).is_err());
+}
+
+#[cfg(feature = "vault")]
+#[tokio::test]
+async fn canonical_vault_auth_signs_original_operator_challenge() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let signer = Arc::new(BytesSigner::from_secret([5; 32]));
+    let vault = crate::wire::encode_base58(&[8; 32]);
+    let base = config("ws://localhost/vault".into());
+    let config = ManagedWsConfig::new("ws://localhost/vault", base.hello(), signer.clone())
+        .with_vault_auth(vault.clone());
+    let challenge = crate::ws::auth::test_vault_auth_challenge(&signer.pubkey_base58(), &vault);
+    let response = super::auth::build_auth_response(&config, &challenge)
+        .await
+        .expect("canonical vault auth");
+    assert_eq!(response.challenge, challenge);
+    assert_eq!(response.pubkey, signer.pubkey_base58());
+    let signature = crate::wire::decode_base58_64(&response.signature).expect("signature");
+    VerifyingKey::from_bytes(&signer.pubkey_bytes())
+        .expect("key")
+        .verify(challenge.as_bytes(), &Signature::from_bytes(&signature))
+        .expect("original bytes");
+}
+
 use crate::ws::types::{
     ActiveRfqsData, AuthErrorData, AuthRequestData, AuthSuccessData, ClientMessage,
     FEATURE_CANCEL_ON_DISCONNECT, HelloData, MakerPositionCapInfo, MakerQuoteScope, MmSummaryData,
@@ -91,6 +155,10 @@ use crate::ws::types::{
     SubscribeAckData, SubscribeData, SubscriptionsMessage, UnsubscribeAckData, WelcomeData,
     WsChannel,
 };
+
+fn maker_auth() -> AuthOutcome {
+    AuthOutcome { vault: None }
+}
 
 fn config(url: String) -> ManagedWsConfig {
     ManagedWsConfig::new(
@@ -226,7 +294,7 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
     };
 
     let desired = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
-    establish(&mut client, &config, &mut inbound, &desired)
+    establish(&mut client, &config, &mut inbound, &desired, &maker_auth())
         .await
         .expect("ready quote session");
     server_task.await.expect("test server task");
@@ -326,7 +394,7 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
     };
 
     let desired = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
-    let error = establish(&mut client, &config, &mut inbound, &desired)
+    let error = establish(&mut client, &config, &mut inbound, &desired, &maker_auth())
         .await
         .expect_err("a partial Live quote response fails the barrier");
     let my_quotes_id = server_task.await.expect("test server task");
@@ -384,7 +452,7 @@ async fn data_readiness_skips_quote_subscription_recovery() {
     let desired = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
 
     assert!(
-        establish(&mut client, &config, &mut inbound, &desired)
+        establish(&mut client, &config, &mut inbound, &desired, &maker_auth())
             .await
             .is_err()
     );
@@ -394,15 +462,29 @@ async fn data_readiness_skips_quote_subscription_recovery() {
 async fn receive_client(
     socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
 ) -> ClientMessage {
-    let message = socket
-        .next()
-        .await
-        .expect("client message")
-        .expect("valid websocket message");
-    let Message::Text(text) = message else {
-        panic!("expected client text message");
-    };
-    serde_json::from_str(&text).expect("valid client protocol message")
+    loop {
+        let message = socket
+            .next()
+            .await
+            .expect("client message")
+            .expect("valid websocket message");
+        let Message::Text(text) = message else {
+            panic!("expected client text message");
+        };
+        let message: ClientMessage =
+            serde_json::from_str(&text).expect("valid client protocol message");
+        if matches!(message, ClientMessage::Ping) {
+            send_server(
+                socket,
+                ServerMessage::Pong(crate::ws::types::PongData {
+                    server_time_unix_ms: std::time::SystemTime::now(),
+                }),
+            )
+            .await;
+        } else {
+            return message;
+        }
+    }
 }
 
 async fn send_server(
@@ -498,7 +580,9 @@ where
         sequence: &mut sequence,
     };
 
-    let result = authenticate(&mut client, &config, &mut inbound, resume_session_id).await;
+    let result = authenticate(&mut client, &config, &mut inbound, resume_session_id)
+        .await
+        .map(|_| ());
     server_task.await.expect("test server task");
     result
 }

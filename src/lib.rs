@@ -37,6 +37,9 @@ pub use types::invite::{
     REFERRAL_CODE_MAX_LEN, REFERRAL_CODE_MIN_LEN, RESERVED_CODES, ReferralCode,
     ReferralCodeFormatError, TakerStatus, is_reserved,
 };
+pub use types::vault::{
+    VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection, VaultSwapMode,
+};
 
 #[cfg(feature = "chain")]
 pub mod chain;
@@ -62,6 +65,12 @@ pub use ws::managed::{
     normalize_maker_ws_url_for_endpoint, spawn_managed_ws,
 };
 pub use ws::types::{ClientMessage, ServerMessage};
+#[cfg(feature = "vault")]
+pub use ws::vault::{
+    VaultClientError, VaultOperatorClient, VaultOperatorConfig, VaultProjection,
+    VaultProjectionReceiver, VaultRequestError, VaultTxError, ensure_deadline_ahead,
+    sign_transaction_base64, sign_transaction_base64_unverified,
+};
 
 pub use nonce::{AtomicNonceGenerator, NonceError, NonceGenerator};
 pub use orders::{

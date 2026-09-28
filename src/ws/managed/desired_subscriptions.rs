@@ -46,6 +46,10 @@ impl DesiredSubscriptions {
         }
     }
 
+    pub(super) fn wants_vault_feed(&self) -> bool {
+        self.current.channels.contains(&WsChannel::Vaults)
+    }
+
     #[must_use]
     pub(super) fn has_pending(&self) -> bool {
         self.pending.is_some()

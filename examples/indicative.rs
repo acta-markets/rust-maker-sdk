@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .map(|&strike| IndicativeStrikePrice {
                         strike,
-                        price: Price::new(1_500_000_000), // your pricing logic
+                        price: Price::new(1_500_000_000),
                     })
                     .collect();
 

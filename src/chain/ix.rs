@@ -177,7 +177,7 @@ pub fn build_fund_position_ixs(
     Ok(ixs)
 }
 
-// On-chain program instruction discriminants (must match Solana program)
+// Must match on-chain instruction discriminants.
 #[repr(u8)]
 enum InstructionKind {
     DepositPremium = 4,
@@ -201,11 +201,18 @@ pub fn derive_associated_token_address(
     mint: &Pubkey,
     token_program: &Pubkey,
 ) -> Pubkey {
+    derive_associated_token_address_with_bump(owner, mint, token_program).0
+}
+
+pub(crate) fn derive_associated_token_address_with_bump(
+    owner: &Pubkey,
+    mint: &Pubkey,
+    token_program: &Pubkey,
+) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[owner.as_ref(), token_program.as_ref(), mint.as_ref()],
         &ASSOCIATED_TOKEN_PROGRAM_ID,
     )
-    .0
 }
 
 fn create_associated_token_account_idempotent_ix(
@@ -230,7 +237,12 @@ fn create_associated_token_account_idempotent_ix(
     }
 }
 
-const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
+pub(crate) const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
+pub(crate) const SYSTEM_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("11111111111111111111111111111111");
 const RENT_SYSVAR_ID: Pubkey = solana_sdk::pubkey!("SysvarRent111111111111111111111111111111111");
+pub(crate) const TOKEN_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+pub(crate) const TOKEN_2022_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");

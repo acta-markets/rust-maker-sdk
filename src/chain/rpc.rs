@@ -8,8 +8,9 @@ use solana_sdk::{
 use crate::chain::ChainError;
 use crate::chain::accounts::{MarketInfo, PositionInfo, parse_market, parse_position};
 use crate::chain::ix::{
-    DepositPremiumIxArgs, FundPositionIxArgs, WithdrawPremiumIxArgs, build_deposit_premium_ixs,
-    build_fund_position_ixs, build_withdraw_premium_ixs,
+    DepositPremiumIxArgs, FundPositionIxArgs, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    WithdrawPremiumIxArgs, build_deposit_premium_ixs, build_fund_position_ixs,
+    build_withdraw_premium_ixs,
 };
 use crate::chain::settlement::required_settlement;
 use crate::chain::wsol::{
@@ -411,10 +412,6 @@ fn sign_transaction(
     transaction.try_sign(signers, recent_blockhash)?;
     Ok(())
 }
-
-const TOKEN_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const TOKEN_2022_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
 fn ensure_supported_token_program(program: Pubkey) -> Result<Pubkey, ChainError> {
     if program == TOKEN_PROGRAM_ID || program == TOKEN_2022_PROGRAM_ID {

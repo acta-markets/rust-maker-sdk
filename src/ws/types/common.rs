@@ -24,6 +24,7 @@ pub enum WsChannel {
     Positions,
     ChainEvents,
     Markets,
+    Vaults,
     #[serde(other)]
     Unknown,
 }
@@ -36,6 +37,7 @@ pub enum WsEndpointKind {
     Maker,
     MakerData,
     Taker,
+    Vault,
     #[serde(other)]
     Unknown,
 }

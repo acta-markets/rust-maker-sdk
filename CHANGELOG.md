@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.3-vaults.1
+
+- The `vault-chain` feature adds `chain::vault`: `VaultManager` builds `SetAcceptingDeposits`, `ProcessVaultEquity` (and the idle-withdrawal variant), `ProcessDeposits`, `ProcessWithdrawals`, `ProcessFinalWithdrawal` and `FinalizeVaultCycle`, plus batch helpers chunked by `CAPITAL_TX_USERS` (three users fit the 1232-byte packet) and `vault_capital_batch_compute_units`.
+- Vault governance instructions: `propose_update`, `apply_update`, `cancel_update`, `rotate_delegate`, `disable_delegate`.
+- `VaultAccount` / `VaultRequest` decoders, `oracle_source_pyth_feed` and `pyth_price_feed_account`.
+- Crank decision `next_step`, `WindowTracker` and `plan_withdrawals`; `examples/vault_capital.rs` runs the cycle over RPC.
+- Checked transaction signing decodes once, compares the locally approved message before deadlines, and preserves other signature slots for legacy/v0 transactions.
+- `VaultSwapMode::Closing` encodes `closing` for governance-controlled terminal second-to-main conversion; normal maker/RFQ messages are unchanged.
+- Projection adjacency rejects older, duplicate and wrapped versions; the operator example keeps its cursor monotonic.
+- `can_maker()` requires a Ready delegate grant; governance retains permitted maker-state reads.
+- `ManagedWsHandle::send_in_epoch` binds sends to the applied recovery snapshot; stale epochs reject before enqueue and after reconnect. Concurrent vault swap failures retain their own correlation, including out-of-order `trading_paused`.
+- Vault grants clear on connection end, failed recovery, or task panic. `VaultDelegatePermissions::can_maker()` / `can_taker()` require Ready and the current connection grant; reconnect replaces grants.
+- The `vault` feature adds `VaultOperatorConfig` / `VaultOperatorClient` on `/vault`: `StartVaultAuth` signs with the operator key on each reconnect (never `ResumeAuth`); taker reads reconcile on every auth and maker reads when the delegate may quote; `sign_quote` uses the vault as `maker_owner`; `sign_transaction_base64` signs sponsored fills and swaps with local deadline rejection; `swap_quote` and `swap_submit` correlate; `subscribe_projections()` streams `VaultProjectionAdvanced`; `MakerWsEndpoint::Vault` and `ManagedWsHandle::vault_auth()` expose the path.
+- Vault-only wire types: `StartVaultAuth`, `SwapQuote`, `SwapSubmit` (`ClientMessage`); `VaultAuthSuccess`, `VaultProjectionAdvanced`, `SwapQuoteResult`, `SwapSubmitResult` (`ServerMessage`); `WsEndpointKind::Vault`, `WsChannel::Vaults`, `VaultOperatorKind`, `VaultDelegatePermissions`, `VaultSwapMode`, and `VaultSwapDirection`. Makers are unchanged.
+- `PositionStatus::Closed` is removed and status `5` decodes as `UnknownPositionStatus(5)`: the vault program has no `Closed` status.
+
 ## 0.4.3 - 2026-09-18
 
 - Native SOL funding reads the maker and position ATAs in one RPC when both are needed. Rent, fee reserve and final wallet-budget checks are preserved.

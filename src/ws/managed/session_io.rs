@@ -11,8 +11,7 @@ use crate::ws::managed::tracker::AwaitTracker;
 use crate::ws::managed::{ManagedCommand, ManagedWsConfig, ManagedWsError, SendAwaitError};
 use crate::ws::types::ClientMessage;
 
-/// Route a handle command onto the writer lanes. Never blocks: a full lane is
-/// reported to the caller, and the socket itself is the writer task's problem.
+/// Enqueue without blocking; report a full writer lane to the caller.
 pub(super) fn handle_command(
     maybe_cmd: Option<ManagedCommand>,
     lanes: &WriterLanes,

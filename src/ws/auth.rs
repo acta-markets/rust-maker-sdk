@@ -1,31 +1,54 @@
 use crate::SigningError;
 
-const MAKER_AUTH_PREFIX: &str =
-    "Acta RFQ Authentication\n\nSign this message to authenticate your wallet.\n\nNonce: ";
+const AUTH_PREFIX: &str =
+    "Acta RFQ Authentication\n\nSign this message to authenticate your wallet.\n\n";
 
-/// Validate the maker authentication message before passing it to a signer.
-///
-/// Maker challenges have no wallet line: the response identifies the owner,
-/// while its registered signing key may be different. This message format is
-/// disjoint from the raw 32-byte order id. Freshness is checked by the server.
-///
-/// # Errors
-/// Rejects a message outside the server's canonical maker-auth format.
 pub fn validate_maker_auth_challenge(challenge: &str) -> Result<(), SigningError> {
-    let invalid = || SigningError::new("invalid maker authentication challenge");
-    let body = challenge
-        .strip_prefix(MAKER_AUTH_PREFIX)
-        .ok_or_else(invalid)?;
-    let (nonce, timestamp) = body.split_once("\nIssued At: ").ok_or_else(invalid)?;
-    if nonce.len() != 64
-        || !nonce
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        || !timestamp.strip_suffix('\n').is_some_and(is_utc_seconds)
+    if challenge
+        .strip_prefix(AUTH_PREFIX)
+        .is_some_and(valid_nonce_and_time)
     {
+        Ok(())
+    } else {
+        Err(SigningError::new("invalid maker authentication challenge"))
+    }
+}
+
+/// Validate before handing the challenge to any signer.
+pub fn validate_vault_auth_challenge(
+    challenge: &str,
+    operator: &str,
+    vault: &str,
+) -> Result<(), SigningError> {
+    let invalid = || SigningError::new("invalid vault authentication challenge");
+    crate::wire::decode_base58_32(operator).map_err(|_| invalid())?;
+    crate::wire::decode_base58_32(vault).map_err(|_| invalid())?;
+    let body = challenge
+        .strip_prefix(AUTH_PREFIX)
+        .and_then(|s| s.strip_prefix("Wallet: "))
+        .and_then(|s| s.strip_prefix(operator))
+        .and_then(|s| s.strip_prefix('\n'))
+        .and_then(|s| s.strip_suffix(vault))
+        .and_then(|s| s.strip_suffix("\nVault: "))
+        .ok_or_else(invalid)?;
+    if !valid_nonce_and_time(body) {
         return Err(invalid());
     }
     Ok(())
+}
+
+fn valid_nonce_and_time(body: &str) -> bool {
+    let Some((nonce, timestamp)) = body
+        .strip_prefix("Nonce: ")
+        .and_then(|s| s.split_once("\nIssued At: "))
+    else {
+        return false;
+    };
+    nonce.len() == 64
+        && nonce
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && timestamp.strip_suffix('\n').is_some_and(is_utc_seconds)
 }
 
 fn is_utc_seconds(timestamp: &str) -> bool {
@@ -59,6 +82,13 @@ pub(crate) const TEST_MAKER_AUTH_CHALLENGE: &str = concat!(
     "Nonce: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
     "Issued At: 2026-09-15T00:00:00Z\n"
 );
+
+#[cfg(test)]
+pub(crate) fn test_vault_auth_challenge(operator: &str, vault: &str) -> String {
+    let challenge =
+        TEST_MAKER_AUTH_CHALLENGE.replace("Nonce: ", &format!("Wallet: {operator}\nNonce: "));
+    format!("{challenge}\nVault: {vault}")
+}
 
 #[cfg(test)]
 mod tests {

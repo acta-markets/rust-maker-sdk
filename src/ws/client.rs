@@ -55,7 +55,7 @@ pub(crate) struct WsReader {
     stream: SplitStream<Socket>,
 }
 
-// Avoid a per-frame allocation.
+// Transient stack value; boxing the message would add an allocation per frame.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum WsFrame {
     Message(ServerMessage),

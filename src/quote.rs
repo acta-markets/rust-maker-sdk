@@ -1,4 +1,6 @@
-//! Build the signed preimage and quote message from the same validated RFQ terms.
+//! Quote assembly: [`RfqBinding`] decodes identities and resolves offered strikes;
+//! [`QuoteBuilder`] derives the signed preimage and [`QuoteMessage`] from the
+//! same strike, price, expiry and nonce.
 
 use crate::orders::{OrderPreimageArgs, SignerLike, compute_order_id, sign_order_id_with_signer};
 use crate::signing::{AsyncSignerLike, SigningError};
@@ -22,7 +24,7 @@ pub enum QuoteBuildError {
     #[error("rfq market does not match trusted signing terms: {0}")]
     MarketBinding(&'static str),
 
-    /// Strike is absent from `RfqBroadcast.strike` and `order_options`.
+    /// Strike absent from `RfqBroadcast.strike` and `order_options`.
     #[error("strike {requested} is not offered by this rfq; offered: {offered:?}")]
     StrikeNotOffered {
         requested: Strike,
@@ -36,7 +38,9 @@ pub enum QuoteBuildError {
     Signing(#[from] SigningError),
 }
 
-/// Validated RFQ identities and strikes. Reuse for quotes and replacements.
+/// An RFQ with its identities decoded and its strike set resolved.
+///
+/// Reuse per RFQ to avoid repeated decoding and strike resolution.
 #[derive(Debug, Clone)]
 pub struct RfqBinding {
     rfq_id: Uuid,
@@ -100,7 +104,7 @@ impl RfqBinding {
         self.rfq_id
     }
 
-    /// RFQ quantity in underlying atoms, included in the signed preimage.
+    /// RFQ quantity used for pricing and included in the signed preimage.
     #[must_use]
     pub const fn quantity(&self) -> Quantity {
         self.quantity
@@ -228,8 +232,8 @@ impl QuoteBuilder<'_> {
         self
     }
 
-    /// Authenticated maker owner used in the signed preimage.
-    /// Set this when a delegated key signs; defaults to the signer's public key.
+    /// Maker owner in the signed preimage; defaults to the signer's public key.
+    /// With delegated signing, set the authenticated owner to match the server.
     pub const fn maker_owner(mut self, owner: [u8; 32]) -> Self {
         self.maker = Some(owner);
         self
@@ -263,6 +267,7 @@ impl QuoteBuilder<'_> {
         OrderPreimageArgs {
             chain_id: self.binding.chain_id,
             program_id: self.binding.program_id,
+            // Maker-quoted RFQs are always sells from the maker's side.
             is_taker_buy: false,
             position_type: self.binding.position_type,
             market: self.binding.market,
@@ -276,8 +281,11 @@ impl QuoteBuilder<'_> {
         }
     }
 
-    /// Preimage fields for inspection or external signing.
-    /// [`Self::maker_owner`] overrides the fallback `maker`, as in the sign paths.
+    /// The exact preimage the server will reconstruct for this quote.
+    ///
+    /// Exposed so a maker can inspect the bytes or sign them out of band.
+    /// `maker` is the signing key's fallback identity; an owner set with
+    /// [`Self::maker_owner`] wins, matching the `sign` paths.
     ///
     /// # Errors
     /// See [`QuoteBuildError`].
@@ -288,12 +296,14 @@ impl QuoteBuilder<'_> {
 
     /// Sign with a local key.
     ///
-    /// Re-signing identical terms reproduces the same `order_id`.
-    /// Use a fresh nonce for a new quote.
+    /// Reusable builder. Give each quote a fresh nonce to avoid duplicate order IDs.
     ///
     /// # Errors
     /// See [`QuoteBuildError`].
-    pub fn sign<S: SignerLike>(&self, signer: &S) -> Result<QuoteMessage, QuoteBuildError> {
+    pub fn sign<S: SignerLike + ?Sized>(
+        &self,
+        signer: &S,
+    ) -> Result<QuoteMessage, QuoteBuildError> {
         let (resolved, order_id, signature) = self.sign_parts(signer)?;
         Ok(self.assemble(resolved, order_id, signature))
     }
@@ -316,7 +326,7 @@ impl QuoteBuilder<'_> {
         Ok(self.assemble(resolved, order_id, signature))
     }
 
-    fn sign_parts<S: SignerLike>(
+    fn sign_parts<S: SignerLike + ?Sized>(
         &self,
         signer: &S,
     ) -> Result<(Resolved, [u8; 32], [u8; 64]), QuoteBuildError> {
@@ -349,7 +359,7 @@ impl QuoteBuilder<'_> {
 }
 
 impl QuoteMessage {
-    /// Attach the replaced order ID without changing or re-signing this quote.
+    /// Add the replaced order's ID without signing again; supports remote signers.
     #[must_use]
     pub fn into_replacement(self, old_order_id: OrderId) -> ReplaceQuoteMessage {
         ReplaceQuoteMessage {

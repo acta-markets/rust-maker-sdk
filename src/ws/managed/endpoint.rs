@@ -3,6 +3,8 @@
 pub enum MakerWsEndpoint {
     Quote,
     Data,
+    /// Vault operator plane (`/vault`); requires the vault auth flow.
+    Vault,
 }
 
 impl MakerWsEndpoint {
@@ -10,6 +12,7 @@ impl MakerWsEndpoint {
         match self {
             Self::Quote => "/maker",
             Self::Data => "/maker/data",
+            Self::Vault => "/vault",
         }
     }
 }
@@ -28,6 +31,8 @@ pub fn normalize_maker_ws_url_for_endpoint(url: &str, endpoint: MakerWsEndpoint)
     let base = if let Some(base) = url.strip_suffix("/maker/data") {
         base
     } else if let Some(base) = url.strip_suffix("/maker") {
+        base
+    } else if let Some(base) = url.strip_suffix("/vault") {
         base
     } else {
         url.as_ref()

@@ -1,6 +1,6 @@
 #![cfg(feature = "ws-client")]
 
-//! Compile-time API-surface checks for maker clients.
+//! Compile-time checks for public maker methods, including macro-generated APIs.
 
 use acta_maker_sdk::quote::{QuoteBuilder, RfqBinding};
 use acta_maker_sdk::ws::maker::{MakerDataClient, MakerQuoteClient};

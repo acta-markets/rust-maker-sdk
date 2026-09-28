@@ -2,11 +2,13 @@ mod server_auth;
 mod server_query;
 mod server_quote;
 mod server_rfq;
+mod server_vault;
 
 pub use server_auth::*;
 pub use server_query::*;
 pub use server_quote::*;
 pub use server_rfq::*;
+pub use server_vault::*;
 
 use crate::types::unix_time::UnixMillis;
 use std::time::SystemTime;
@@ -32,6 +34,7 @@ pub enum ServerMessage {
     VersionMismatch(VersionMismatchData),
     AuthRequest(AuthRequestData),
     AuthSuccess(AuthSuccessData),
+    VaultAuthSuccess(VaultAuthSuccessData),
     AuthError(AuthErrorData),
     LogoutSuccess(LogoutSuccessData),
     RfqCreated(RfqCreatedMessage),
@@ -98,6 +101,9 @@ pub enum ServerMessage {
     InviteRedeemed(InviteRedeemedData),
     ReferralCodeClaimed(ReferralCodeClaimedData),
     MyReferralInfo(MyReferralInfoData),
+    VaultProjectionAdvanced(VaultProjectionAdvancedData),
+    SwapQuoteResult(SwapQuoteResultData),
+    SwapSubmitResult(SwapSubmitResultData),
     /// Forward-compat: any message type this SDK version doesn't know yet.
     Unknown(UnknownServerMessage),
 }
@@ -361,10 +367,15 @@ impl ServerMessage {
             Self::InviteRedeemed(m) => Some(m.request_id),
             Self::ReferralCodeClaimed(m) => Some(m.request_id),
             Self::MyReferralInfo(m) => Some(m.request_id),
+            Self::SwapQuoteResult(m) => Some(m.request_id),
+            Self::SwapSubmitResult(m) => Some(m.request_id),
+
             Self::Welcome(_)
             | Self::VersionMismatch(_)
             | Self::AuthRequest(_)
             | Self::AuthSuccess(_)
+            | Self::VaultAuthSuccess(_)
+            | Self::VaultProjectionAdvanced(_)
             | Self::AuthError(_)
             | Self::LogoutSuccess(_)
             | Self::RfqCreated(_)

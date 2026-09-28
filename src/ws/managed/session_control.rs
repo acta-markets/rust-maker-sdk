@@ -2,7 +2,7 @@ use crate::ws::types::{AuthErrorData, ServerError, ServerMessage};
 
 use super::ManagedWsTerminationReason;
 
-/// A control failure that ends the current session attempt.
+/// A control frame that ends the current session attempt.
 pub(super) enum ControlFailure {
     Retry(String),
     ClearCredentials(String),
@@ -29,8 +29,7 @@ pub(super) fn classify(message: &ServerMessage) -> Option<ControlFailure> {
     }
 }
 
-/// An `AuthError` frame always ends the attempt, so this is total: an
-/// unrecognised reason is retryable rather than "keep going".
+/// Every `AuthError` ends the attempt; unknown reasons trigger a retry.
 pub(super) fn classify_auth_error(error: &AuthErrorData) -> ControlFailure {
     let code = error.reason.as_str();
     let message = error.message.as_deref();
@@ -49,12 +48,17 @@ fn classify_code(code: &str, message: Option<&str>) -> Option<ControlFailure> {
         | "maker_unregistered"
         | "maker_not_registered"
         | "invalid_pubkey"
-        | "invalid_signature" => Some(ControlFailure::Terminate(
+        | "invalid_signature"
+        | "invalid_operator"
+        | "invalid_vault"
+        | "operator_mismatch"
+        | "vault_operator_unauthorized" => Some(ControlFailure::Terminate(
             ManagedWsTerminationReason::AuthenticationRejected {
                 reason: code.to_string(),
                 message: message.map(str::to_owned),
             },
         )),
+        "vault_session_invalidated" => Some(ControlFailure::Retry(format_detail(code, message))),
         "session_expired" => Some(ControlFailure::ClearCredentials(format_detail(
             code, message,
         ))),
