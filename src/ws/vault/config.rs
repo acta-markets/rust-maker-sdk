@@ -9,7 +9,6 @@ use crate::ws::types::HelloData;
 #[derive(Clone)]
 pub struct VaultOperatorConfig {
     pub managed: ManagedWsConfig,
-    /// Deadline for correlated requests (`swap_quote`).
     pub request_timeout: Duration,
     pub(super) vault_pda: String,
     pub(super) operator: Arc<dyn SignerLike + Send + Sync>,
@@ -39,7 +38,6 @@ impl VaultOperatorConfig {
         }
     }
 
-    /// Adjust the underlying managed configuration, e.g. `low_latency()`.
     #[must_use]
     pub fn with_managed(mut self, adjust: impl FnOnce(ManagedWsConfig) -> ManagedWsConfig) -> Self {
         self.managed = adjust(self.managed);

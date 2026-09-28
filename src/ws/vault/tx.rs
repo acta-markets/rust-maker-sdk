@@ -1,8 +1,3 @@
-//! Operator-side signing of server-built transactions.
-//!
-//! Fill the operator's signature slot in a legacy or v0 transaction without
-//! changing its message bytes or other signatures.
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
@@ -161,8 +156,7 @@ fn read_compact_u16(bytes: &[u8], pos: &mut usize) -> Result<usize, VaultTxError
 }
 
 pub fn ensure_deadline_ahead(field: &'static str, deadline: &str) -> Result<u64, VaultTxError> {
-    let now = unix_now()?;
-    ensure_deadline_ahead_at(field, deadline, now)
+    ensure_deadline_ahead_at(field, deadline, unix_now()?)
 }
 
 pub(super) fn ensure_deadline_ahead_at(

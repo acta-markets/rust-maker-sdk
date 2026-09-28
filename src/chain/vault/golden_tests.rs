@@ -276,7 +276,6 @@ fn governance_instructions_match_golden() {
     let policy = VaultPolicyUpdate {
         max_open_positions: 3,
         max_rebalance_drift_bps: 150,
-        min_rebalance_interval_secs: 600,
         min_main_liquidity_bps: 2_500,
     };
     let mut actual: Vec<_> = [
@@ -321,7 +320,7 @@ fn governance_instructions_match_golden() {
             "3901d007c80000000000000000000000000000000000000000000000000000000000/5/45c03854ef6a24bc",
             "3902f6ffffffffffffffffffffffffffffff00000000000000000000000000000000/5/87e39b3943882b86",
             "39030500000007000000000000000000000000000000000000000000000000000000/5/8e0cd501f9328fa8",
-            "39040300960058020000c40900000000000000000000000000000000000000000000/5/48194846a6c25808",
+            "390403009600c4090000000000000000000000000000000000000000000000000000/5/48194846a6c25808",
             "39051e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e/5/9104fa0231f4964e",
             "3a00/5/fe62d7f8ecca4dde",
             "3b00/5/abdc1cc51536dfb6",
@@ -355,8 +354,8 @@ fn vault_account_decodes_golden_fields() {
     let mut data = patterned(VaultAccount::LEN);
     data[..5].copy_from_slice(&[9, 1, 255, 3, 1]);
     data[12..16].copy_from_slice(&3u32.to_le_bytes());
-    data[418] = 1;
-    data[419] = 0;
+    data[402] = 1;
+    data[403] = 0;
     let v = VaultAccount::parse(&data).unwrap();
     assert_eq!(
         (v.phase, v.safety, v.equity_computed, v.accepting_deposits),

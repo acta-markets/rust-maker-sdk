@@ -39,17 +39,14 @@ pub(super) enum VaultIx {
     DisableVaultDelegate = 72,
 }
 
-/// Work a capital batch makes the runtime do; feeds [`vault_capital_batch_compute_units`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapitalBatchShape {
     pub users: u32,
-    /// Destinations that may need creation, up to two per user.
     pub created_destinations: u32,
     /// Off-curve PDA search steps, including ATA creation searches.
     pub derivation_steps: u32,
 }
 
-/// Compute units to reserve for `ProcessDeposits` or `ProcessWithdrawals`.
 #[must_use]
 pub fn vault_capital_batch_compute_units(shape: CapitalBatchShape) -> u32 {
     let users = shape.users.min(batch_users(VAULT_CAPITAL_BATCH_USERS));
@@ -87,12 +84,10 @@ fn max_creation_steps(
         .sum()
 }
 
-/// Inputs of a [`VaultManager`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VaultManagerArgs {
     pub program_id: Pubkey,
     pub vault_id: [u8; 32],
-    /// Transaction signer: governance, the delegate, or a permissionless fallback caller.
     pub actor: Pubkey,
     /// Authority stored in the vault's current delegate account.
     pub delegate_authority: Pubkey,
@@ -103,7 +98,6 @@ pub struct VaultManagerArgs {
     pub second_token_program: Pubkey,
 }
 
-/// Addresses derived once per vault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VaultAddresses {
     pub vault: Pubkey,
@@ -118,7 +112,6 @@ pub struct VaultAddresses {
     pub manager_stake_ata: Pubkey,
 }
 
-/// Builds capital-cycle and governance instructions for one vault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VaultManager {
     pub(super) args: VaultManagerArgs,
@@ -126,7 +119,6 @@ pub struct VaultManager {
 }
 
 impl VaultManager {
-    /// Builds a manager for `actor` from a decoded vault account.
     pub fn from_vault(
         program_id: Pubkey,
         actor: Pubkey,
@@ -145,7 +137,6 @@ impl VaultManager {
         })
     }
 
-    /// Validates the inputs and derives the vault addresses.
     pub fn new(args: VaultManagerArgs) -> Result<Self, VaultChainError> {
         if args.vault_id == [0; 32]
             || args.actor == Pubkey::default()
@@ -192,7 +183,6 @@ impl VaultManager {
         Ok(Self { args, addresses })
     }
 
-    /// `SetAcceptingDeposits`: opens or closes the deposit window.
     #[must_use]
     pub fn set_accepting_deposits(&self, accepting: bool) -> Instruction {
         self.instruction(
@@ -208,7 +198,6 @@ impl VaultManager {
         )
     }
 
-    /// `ProcessVaultEquity` priced by the two Pyth price-update accounts.
     #[must_use]
     pub fn process_equity(
         &self,
@@ -242,7 +231,6 @@ impl VaultManager {
         )
     }
 
-    /// `ProcessVaultEquity` for an idle vault, carrying the user's withdraw request.
     #[must_use]
     pub fn process_idle_withdrawal(
         &self,
@@ -256,7 +244,6 @@ impl VaultManager {
         ix
     }
 
-    /// `ProcessDeposits` for up to [`VAULT_CAPITAL_BATCH_USERS`] users.
     pub fn process_deposits(&self, users: &[Pubkey]) -> Result<Instruction, VaultChainError> {
         let users: Vec<_> = users.iter().map(|user| (*user, None, None)).collect();
         self.process_deposits_with_destinations(&users)
@@ -310,7 +297,6 @@ impl VaultManager {
         Ok(self.instruction(VaultIx::ProcessDeposits, accounts, &[]))
     }
 
-    /// One `ProcessDeposits` per chunk of [`CAPITAL_TX_USERS`] users.
     pub fn process_deposit_batches(
         &self,
         users: &[Pubkey],
@@ -322,7 +308,6 @@ impl VaultManager {
             .collect()
     }
 
-    /// `ProcessWithdrawals` for up to [`VAULT_CAPITAL_BATCH_USERS`] users.
     pub fn process_withdrawals(&self, users: &[Pubkey]) -> Result<Instruction, VaultChainError> {
         let users: Vec<_> = users.iter().map(|user| (*user, None)).collect();
         self.process_withdrawals_with_share_destinations(&users)
@@ -374,7 +359,6 @@ impl VaultManager {
         Ok(self.instruction(VaultIx::ProcessWithdrawals, accounts, &[]))
     }
 
-    /// One `ProcessWithdrawals` per chunk of [`CAPITAL_TX_USERS`] users.
     pub fn process_withdrawal_batches(
         &self,
         users: &[Pubkey],
@@ -386,13 +370,11 @@ impl VaultManager {
             .collect()
     }
 
-    /// `ProcessFinalWithdrawal`: redeems the last holder in both pair legs.
     #[must_use]
     pub fn process_final_withdrawal(&self, user: Pubkey) -> Instruction {
         self.process_final_withdrawal_with_share_destination(user, None)
     }
 
-    /// `ProcessFinalWithdrawal` with an optional share return override.
     #[must_use]
     pub fn process_final_withdrawal_with_share_destination(
         &self,
@@ -448,7 +430,6 @@ impl VaultManager {
         )
     }
 
-    /// `FinalizeVaultCycle`: returns the vault to idle once capital is processed.
     #[must_use]
     pub fn finalize_cycle(&self) -> Instruction {
         self.instruction(
@@ -466,7 +447,6 @@ impl VaultManager {
         )
     }
 
-    /// Deposit batch shape with every destination possibly missing.
     #[must_use]
     pub fn deposit_batch_shape_conservative(&self, users: &[Pubkey]) -> CapitalBatchShape {
         self.deposit_batch_shape_with_destinations(users, users.len(), users.len())
@@ -518,7 +498,6 @@ impl VaultManager {
         }
     }
 
-    /// Withdrawal batch shape with every destination possibly missing.
     #[must_use]
     pub fn withdrawal_batch_shape_conservative(&self, users: &[Pubkey]) -> CapitalBatchShape {
         self.withdrawal_batch_shape_with_destinations(users, users.len(), users.len())

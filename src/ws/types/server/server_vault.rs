@@ -11,7 +11,6 @@ pub struct VaultAuthSuccessData {
     pub permissions: VaultDelegatePermissions,
 }
 
-/// Committed cursor. Reload HTTP vault detail on a newer version or stream gap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultProjectionAdvancedData {
     pub vault_pda: String,
@@ -32,7 +31,6 @@ pub struct SwapQuoteResultData {
     pub quoted_out_amount: String,
     pub minimum_out_amount: String,
     pub valid_until: String,
-    pub route_hash: String,
 }
 
 /// Durable enqueue acknowledgement, not chain confirmation.

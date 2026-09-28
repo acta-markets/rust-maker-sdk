@@ -242,7 +242,9 @@ pub(crate) const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
 pub(crate) const SYSTEM_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("11111111111111111111111111111111");
 const RENT_SYSVAR_ID: Pubkey = solana_sdk::pubkey!("SysvarRent111111111111111111111111111111111");
+#[cfg(any(feature = "chain-rpc", feature = "vault-chain"))]
 pub(crate) const TOKEN_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+#[cfg(any(feature = "chain-rpc", feature = "vault-chain"))]
 pub(crate) const TOKEN_2022_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");

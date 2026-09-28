@@ -15,15 +15,13 @@ impl VaultProjection {
         self.data.version
     }
 
-    /// Whether this version is exactly one greater than `previous_version`.
-    /// Older and duplicate versions also return `false`.
     #[must_use]
     pub const fn follows(&self, previous_version: u64) -> bool {
-        self.data.version > previous_version && self.data.version - previous_version == 1
+        matches!(previous_version.checked_add(1), Some(next) if next == self.data.version)
     }
 }
 
-/// Yields only `VaultProjectionAdvanced`; detect version gaps with [`VaultProjection::follows`].
+/// Yields only `VaultProjectionAdvanced`.
 pub struct VaultProjectionReceiver {
     inner: ManagedMessageReceiver,
 }

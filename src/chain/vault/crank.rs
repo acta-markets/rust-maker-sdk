@@ -1,15 +1,9 @@
-//! Capital-cycle crank decision: `ProcessVaultEquity` -> `ProcessWithdrawals` /
-//! `ProcessDeposits` -> `FinalizeVaultCycle`, one idempotent step per pass.
-//! The chain re-validates every transition, so a stale view costs one rejected
-//! transaction, never a wrong state.
-
 use std::time::{Duration, Instant};
 
 use solana_sdk::pubkey::Pubkey;
 
 use super::{VaultAccount, VaultPhase, VaultSafety};
 
-/// The next capital step for a vault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapitalStep {
     CloseDeposits,
@@ -20,21 +14,18 @@ pub enum CapitalStep {
     FinalizeCycle,
 }
 
-/// How long the deposit window has been in its current state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WindowClock {
     pub open_for: Option<Duration>,
     pub closed_for: Option<Duration>,
 }
 
-/// Remembers when the observed deposit window last flipped; a restart starts a fresh window.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WindowTracker {
     state: Option<(bool, Instant)>,
 }
 
 impl WindowTracker {
-    /// Records the observed window state and returns how long it has held.
     pub fn observe(&mut self, open: bool, now: Instant) -> WindowClock {
         let since = match self.state {
             Some((was_open, since)) if was_open == open => since,
@@ -58,9 +49,6 @@ impl WindowTracker {
     }
 }
 
-/// Operator cadence. An open window blocks new positions, so the crank keeps it
-/// open `deposit_window`, then closed `trading_window`; `reopen: false` leaves
-/// reopening to governance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowPolicy {
     pub reopen: bool,
@@ -68,7 +56,6 @@ pub struct WindowPolicy {
     pub trading_window: Duration,
 }
 
-/// Vault state the decision reads, from the backend listing or the account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VaultView {
     pub phase: VaultPhase,
@@ -92,7 +79,6 @@ impl From<&VaultAccount> for VaultView {
     }
 }
 
-/// The single step to take now, mirroring the on-chain state machine.
 #[must_use]
 pub fn next_step(
     view: VaultView,
@@ -111,7 +97,6 @@ pub fn next_step(
         (Frozen | Closing | WithdrawOnly, _) if view.pending_deposits > 0 => {
             Some(CapitalStep::ProcessDeposits)
         }
-        // Frozen only blocks new risk and deposits; a cycle still finishes.
         (Normal | Frozen, ProcessingCapital) => Some(if !view.equity_computed {
             CapitalStep::ComputeEquity
         } else if view.safety == Normal && view.pending_deposits > 0 {
@@ -144,7 +129,6 @@ pub fn next_step(
     }
 }
 
-/// Which pending withdrawals go into this pass.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WithdrawalPlan {
     pub partial: Vec<Pubkey>,
@@ -152,9 +136,7 @@ pub struct WithdrawalPlan {
     pub final_user: Option<Pubkey>,
 }
 
-/// Splits `(user, shares)` requests against the live share supply. The contract
-/// checks each request against the running supply, so a queue that would drain
-/// it holds the largest request back for the final-redemption path.
+/// A queue that would drain the share supply holds its largest request back for the final redemption.
 #[must_use]
 pub fn plan_withdrawals(requests: &[(Pubkey, u64)], total_shares: u64) -> WithdrawalPlan {
     let mut plan = WithdrawalPlan::default();

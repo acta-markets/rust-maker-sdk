@@ -1,6 +1,3 @@
-//! Vault capital operation on chain: PDAs, account decoders, instruction
-//! builders, and the capital-cycle crank decision.
-
 mod account;
 mod crank;
 mod error;

@@ -1,10 +1,8 @@
 use solana_sdk::pubkey::Pubkey;
 
-/// Pyth push-oracle program that owns sponsored price-update accounts.
 pub const PYTH_PUSH_ORACLE_ID: Pubkey =
     solana_sdk::pubkey!("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
 
-/// Price-update account of a Pyth feed on a push-oracle shard.
 #[must_use]
 pub fn pyth_price_feed_account(feed_id: &[u8; 32], shard: u16) -> Pubkey {
     Pubkey::find_program_address(&[&shard.to_le_bytes(), feed_id], &PYTH_PUSH_ORACLE_ID).0

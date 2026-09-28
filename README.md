@@ -23,7 +23,7 @@ For the vault API:
 
 ```toml
 [dependencies]
-acta-maker-sdk = { git = "https://github.com/acta-markets/rust-maker-sdk", branch = "feat/vaults", features = ["vault"] }
+acta-maker-sdk = { version = "=0.4.3-vaults.1", features = ["vault"] }
 ```
 
 Build quotes with `RfqBinding::from_broadcast`: it verifies the market PDA from
@@ -414,11 +414,11 @@ subscriptions and projections share one connection.
   in `maker_owner`. `sign_sponsored_tx` and `sign_swap` check
   `signature_deadline` and `valid_until` locally. Offline signing
   needs no connection and grants no execution permission. The safe signing helpers require the exact message independently built or approved
-  by your application. Use the contract SDK `VaultManagerPlanner` with the local
+  by your application. Build it, for example with `VaultManagerPlanner` from `@acta-markets/ts-sdk`, from the local
   order/route, payer, permissions, blockhash and lookup tables. Every message byte
   must match before the key is used. Do not copy the expected bytes from the server
-  transaction. Explicit `_unverified` helpers retain the old server-trust behavior
-  for controlled tests; they do not verify intent.
+  transaction. Explicit `_unverified` helpers trust the server bytes and are
+  for controlled tests only; they do not verify intent.
 - **Readiness:** each auth fetches `GetMyActiveRfqs` and `GetPositions`.
   A grant with maker permission also fetches `GetMmSummary`, `GetActiveRfqs`
   and `GetMyQuotes { scope: Live }`.
@@ -484,7 +484,8 @@ the prepared template remains valid.
 `VaultProjectionAdvanced` is a versioned cursor, not an execution result.
 Ignore duplicate/older versions; reload HTTP vault detail on every newer version
 or stream gap. `VaultProjection::follows(previous)` checks adjacency only.
-`examples/vault_operator.rs` shows cursor handling and sponsored signing;
+`examples/vault_operator.rs` shows cursor handling and sponsored signing
+(with the `_unverified` helpers, so it is not production signing);
 the application supplies the HTTP reload and risk accounting.
 
 ## Funding positions with native SOL
@@ -590,12 +591,6 @@ use `as_unix_seconds()` when no platform-date conversion is needed. The infallib
 `u64` instead of `i64`. Order-signing bytes and the WebSocket protocol version
 are unchanged.
 
-## Upgrading from 0.4.3
-
-`PositionStatus::Closed` was removed: the vault program has no such status, and
-status `5` decodes as `UnknownPositionStatus(5)`. Exhaustive matches on
-`PositionStatus` must drop that arm.
-
 ## Signing and server limits
 
 Quotes sign the 32-byte SHA-256 order ID derived from a fixed 182-byte preimage.
@@ -644,6 +639,9 @@ Clippy, rustdoc and the Cargo package. The wire check needs the matching backend
 checkout at `../rust-backend`, or `ACTA_BACKEND_DIR` set to its path. Package
 verification runs offline after the build has populated the dependency cache.
 It does not publish the crate or connect to a deployed Acta service.
+
+With `../acta-contract` checked out, `cargo test --manifest-path scripts/vault-parity/Cargo.toml`
+checks vault instruction builders against `acta-contract-sdk`.
 
 ## Documentation
 

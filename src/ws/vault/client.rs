@@ -107,8 +107,7 @@ impl VaultOperatorClient {
         self.operator.pubkey_base58()
     }
 
-    /// Grant for this connection; `None` before authentication and after it ends.
-    /// May be present while initial reads are still pending.
+    /// `None` before authentication and after it ends.
     #[must_use]
     pub fn auth(&self) -> Option<VaultAuthSuccessData> {
         self.inner.vault_auth()
@@ -119,7 +118,7 @@ impl VaultOperatorClient {
         self.auth().map(|auth| auth.permissions)
     }
 
-    /// Ready delegate with maker permission; execution still checks current authority.
+    /// Execution still checks current authority.
     #[must_use]
     pub fn can_maker(&self) -> bool {
         self.inner.is_ready()
@@ -129,7 +128,7 @@ impl VaultOperatorClient {
             })
     }
 
-    /// Ready with taker permission at authentication; execution still checks current authority.
+    /// Execution still checks current authority.
     #[must_use]
     pub fn can_taker(&self) -> bool {
         self.inner.is_ready()
@@ -143,10 +142,6 @@ impl VaultOperatorClient {
         self.inner.subscribe_vault_auth()
     }
 
-    /// Sign with the primary delegate, using the vault address as `maker_owner`.
-    ///
-    /// # Errors
-    /// See [`QuoteBuildError`].
     pub fn sign_quote(&self, quote: &QuoteBuilder<'_>) -> Result<QuoteMessage, QuoteBuildError> {
         quote
             .clone()
@@ -194,11 +189,6 @@ impl VaultOperatorClient {
         self.send(ClientMessage::AcceptQuote(payload)).await
     }
 
-    /// Sign the sponsored fill transaction from `SponsoredTxToSign` with the
-    /// operator key. Rejected locally once `signature_deadline` has passed.
-    ///
-    /// # Errors
-    /// See [`VaultTxError`].
     pub fn sign_sponsored_tx(
         &self,
         to_sign: &SponsoredTxToSignData,
@@ -254,11 +244,6 @@ impl VaultOperatorClient {
         .await
     }
 
-    /// Sign a swap transaction with the operator key. Rejected locally once
-    /// `valid_until` has passed. The result is ready for [`Self::swap_submit`].
-    ///
-    /// # Errors
-    /// See [`VaultTxError`].
     pub fn sign_swap(
         &self,
         quote: &SwapQuoteResultData,
@@ -317,7 +302,6 @@ impl VaultOperatorClient {
         self.inner.subscribe_messages()
     }
 
-    /// Only `VaultProjectionAdvanced`, with its `version` for gap detection.
     pub fn subscribe_projections(&self) -> VaultProjectionReceiver {
         VaultProjectionReceiver::new(self.inner.subscribe_messages())
     }
@@ -368,7 +352,6 @@ impl VaultOperatorClient {
                 response,
             });
         }
-        // The inbound ring shares the `Arc`, so unwrapping rarely succeeds.
         let owned = match Arc::try_unwrap(response) {
             Ok(owned) => owned,
             Err(shared) => (*shared).clone(),

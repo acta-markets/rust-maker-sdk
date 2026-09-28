@@ -1,5 +1,3 @@
-//! Vault operator session on the `/vault` endpoint (feature `vault`).
-
 mod client;
 mod config;
 mod projection;

@@ -171,11 +171,9 @@ fn vault_swap_results_roundtrip_without_claiming_chain_confirmation() {
         quoted_out_amount: "41".to_string(),
         minimum_out_amount: "40".to_string(),
         valid_until: "123".to_string(),
-        route_hash: "ab".repeat(32),
     });
     let expected = format!(
-        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":"123","route_hash":"{}"}}}}"#,
-        "ab".repeat(32)
+        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":"123"}}}}"#
     );
     let ServerMessage::SwapQuoteResult(data) = assert_server_wire(&quote, &expected) else {
         panic!("expected SwapQuoteResult");

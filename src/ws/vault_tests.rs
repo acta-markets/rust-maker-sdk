@@ -453,7 +453,6 @@ async fn swap_quote_is_correlated_and_times_out_without_a_reply() {
                 quoted_out_amount: "990".to_string(),
                 minimum_out_amount: "985".to_string(),
                 valid_until: "0".to_string(),
-                route_hash: "route".to_string(),
             }),
         )
         .await;
@@ -718,7 +717,6 @@ async fn expired_submit_before_is_rejected_locally() {
         quoted_out_amount: "1".into(),
         minimum_out_amount: "1".into(),
         valid_until: "1".into(),
-        route_hash: String::new(),
     };
     assert!(matches!(
         client.sign_swap(&swap, b"different message"),

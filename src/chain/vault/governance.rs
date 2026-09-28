@@ -11,16 +11,13 @@ use crate::chain::ix::SYSTEM_PROGRAM_ID;
 const CAPABILITIES_KNOWN_MASK: u32 = (1 << 3) - 1;
 const MAX_REBALANCE_DRIFT_BPS: u16 = 200;
 
-/// Risk policy carried by [`VaultGovernanceUpdate::Policy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VaultPolicyUpdate {
     pub max_open_positions: u16,
     pub max_rebalance_drift_bps: u16,
-    pub min_rebalance_interval_secs: u32,
     pub min_main_liquidity_bps: u16,
 }
 
-/// A timelocked vault parameter change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultGovernanceUpdate {
     CapLimit(u64),
@@ -38,7 +35,6 @@ pub enum VaultGovernanceUpdate {
     GovernanceAuthority(Pubkey),
 }
 
-/// Update slot; each kind has its own pending-update account.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultGovernanceUpdateKind {
@@ -51,7 +47,6 @@ pub enum VaultGovernanceUpdateKind {
 }
 
 impl VaultGovernanceUpdate {
-    /// Pending-update slot of this update.
     #[must_use]
     pub const fn kind(self) -> VaultGovernanceUpdateKind {
         match self {
@@ -64,7 +59,6 @@ impl VaultGovernanceUpdate {
         }
     }
 
-    /// Validated 32-byte on-chain payload.
     pub fn payload(self) -> Result<[u8; 32], VaultChainError> {
         let mut payload = [0u8; 32];
         match self {
@@ -103,8 +97,7 @@ impl VaultGovernanceUpdate {
                 }
                 payload[..2].copy_from_slice(&policy.max_open_positions.to_le_bytes());
                 payload[2..4].copy_from_slice(&policy.max_rebalance_drift_bps.to_le_bytes());
-                payload[4..8].copy_from_slice(&policy.min_rebalance_interval_secs.to_le_bytes());
-                payload[8..10].copy_from_slice(&policy.min_main_liquidity_bps.to_le_bytes());
+                payload[4..6].copy_from_slice(&policy.min_main_liquidity_bps.to_le_bytes());
             }
             Self::GovernanceAuthority(key) => {
                 if key == Pubkey::default() {
@@ -120,7 +113,6 @@ impl VaultGovernanceUpdate {
 }
 
 impl VaultManager {
-    /// `ProposeVaultUpdate`, signed by governance.
     pub fn propose_update(
         &self,
         update: VaultGovernanceUpdate,
@@ -142,7 +134,6 @@ impl VaultManager {
         ))
     }
 
-    /// `ApplyVaultUpdate` after the timelock; fee and HWM updates need both price updates.
     pub fn apply_update(
         &self,
         kind: VaultGovernanceUpdateKind,
@@ -175,7 +166,6 @@ impl VaultManager {
         Ok(ix)
     }
 
-    /// `CancelVaultUpdate`, refunding rent to `proposal_payer`.
     #[must_use]
     pub fn cancel_update(
         &self,
@@ -195,7 +185,6 @@ impl VaultManager {
         )
     }
 
-    /// `RotateVaultDelegate`: replaces the current delegate, signed by governance.
     pub fn rotate_delegate(
         &self,
         new_delegate: Pubkey,
@@ -230,7 +219,6 @@ impl VaultManager {
         ))
     }
 
-    /// `DisableVaultDelegate`, signed by governance.
     #[must_use]
     pub fn disable_delegate(&self) -> Instruction {
         self.instruction(

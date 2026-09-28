@@ -56,7 +56,6 @@ impl TryFrom<u8> for VaultSafety {
     }
 }
 
-/// Fields of the on-chain `Vault` account the capital crank needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VaultAccount {
     pub vault_id: [u8; 32],
@@ -82,10 +81,8 @@ const EQUITY_COMPUTED: u32 = 1 << 0;
 const ACCEPTING_DEPOSITS: u32 = 1 << 1;
 
 impl VaultAccount {
-    /// Allocated size of a `Vault` account.
-    pub const LEN: usize = 688;
+    pub const LEN: usize = 672;
 
-    /// Decodes raw `Vault` account data.
     pub fn parse(data: &[u8]) -> Result<Self, VaultChainError> {
         let data = header(data, Self::LEN, VAULT_DISCRIMINATOR, VAULT_VERSION)?;
         let flags = u32_at(data, 12);
@@ -103,8 +100,8 @@ impl VaultAccount {
             main_mint: pubkey(data, 176),
             second_mint: pubkey(data, 208),
             share_mint: pubkey(data, 240),
-            main_token_program: token_program(data[418])?,
-            second_token_program: token_program(data[419])?,
+            main_token_program: token_program(data[402])?,
+            second_token_program: token_program(data[403])?,
             total_shares: u64_at(data, 288),
             pending_deposit_count: u32_at(data, 320),
             pending_withdraw_count: u32_at(data, 324),
@@ -112,7 +109,6 @@ impl VaultAccount {
     }
 }
 
-/// Pending capital request account type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultRequestKind {
     Deposit,
@@ -120,7 +116,6 @@ pub enum VaultRequestKind {
 }
 
 impl VaultRequestKind {
-    /// Account discriminator, the first data byte.
     #[must_use]
     pub const fn discriminator(self) -> u8 {
         match self {
@@ -130,7 +125,6 @@ impl VaultRequestKind {
     }
 }
 
-/// A decoded `DepositRequest` or `WithdrawRequest` account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VaultRequest {
     pub user: Pubkey,
@@ -141,12 +135,9 @@ pub struct VaultRequest {
 }
 
 impl VaultRequest {
-    /// Allocated size of either request account.
     pub const LEN: usize = 344;
-    /// Offset of the vault key, for `getProgramAccounts` memcmp filters.
     pub const VAULT_OFFSET: usize = 40;
 
-    /// Decodes raw request account data of the given kind.
     pub fn parse(data: &[u8], kind: VaultRequestKind) -> Result<Self, VaultChainError> {
         let data = header(data, Self::LEN, kind.discriminator(), 1)?;
         Ok(Self {
@@ -162,7 +153,6 @@ const ORACLE_SOURCE_LEN: usize = 424;
 const ORACLE_SOURCE_FEEDS: usize = 40;
 const PYTH_ORACLE_TYPE: usize = 1;
 
-/// Pyth feed id configured in an `OracleSource` account.
 pub fn oracle_source_pyth_feed(data: &[u8]) -> Result<[u8; 32], VaultChainError> {
     let data = header(data, ORACLE_SOURCE_LEN, 7, 1)?;
     let feed = bytes32(data, ORACLE_SOURCE_FEEDS + PYTH_ORACLE_TYPE * 32);
