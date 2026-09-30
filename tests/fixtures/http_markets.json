@@ -1,0 +1,26 @@
+{
+  "markets": [
+    {
+      "pda": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+      "underlying_mint": "So11111111111111111111111111111111111111112",
+      "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "expiry_ts": 1767225600,
+      "is_put": false,
+      "is_finalized": false,
+      "settlement_price": null,
+      "underlying_symbol": "SOL",
+      "quote_symbol": "USDC"
+    },
+    {
+      "pda": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+      "underlying_mint": "So11111111111111111111111111111111111111112",
+      "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "expiry_ts": 1767225600,
+      "is_put": true,
+      "is_finalized": true,
+      "settlement_price": 150000000000,
+      "underlying_symbol": "SOL",
+      "quote_symbol": "USDC"
+    }
+  ]
+}

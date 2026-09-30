@@ -996,7 +996,6 @@ fn chain_event_identity_requires_instruction_index() {
 
 #[test]
 fn future_payload_of_known_error_stays_usable() {
-    // A future cap variant lands in CapError::Unknown with its payload intact.
     let parsed = parse_server_message(
         r#"{"type":"Error","data":{"type":"Cap","data":{"future_cap":{"limit":1}}}}"#,
     )
@@ -1006,8 +1005,6 @@ fn future_payload_of_known_error_stays_usable() {
         ServerMessage::Error(ServerError::Cap(CapError::Unknown(_)))
     ));
 
-    // A known error whose payload no longer matches at all still degrades to
-    // UnknownServerError instead of dropping the frame.
     let parsed = parse_server_message(
         r#"{"type":"Error","data":{"type":"RateLimit","data":{"object":"payload"}}}"#,
     )
@@ -1306,7 +1303,6 @@ fn future_cap_variant_parses_as_unknown_instead_of_dropping_the_message() {
         _ => panic!("Expected QuoteRejected"),
     }
 
-    // A reason string this build does not know still parses as `Unknown`.
     let reason = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":"quota_exhausted"}}"#;
     match serde_json::from_str::<ServerMessage>(reason).unwrap() {
         ServerMessage::QuoteRejected(data) => assert_eq!(data.reason, QuoteRejectReason::Unknown),

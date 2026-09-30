@@ -16,8 +16,8 @@ pub use crank::{
 pub use error::VaultChainError;
 pub use governance::{VaultGovernanceUpdate, VaultGovernanceUpdateKind, VaultPolicyUpdate};
 pub use manager::{
-    CAPITAL_TX_USERS, CapitalBatchShape, VAULT_CAPITAL_BATCH_USERS, VaultAddresses, VaultManager,
-    VaultManagerArgs, vault_capital_batch_compute_units,
+    CapitalBatchShape, VAULT_CAPITAL_BATCH_USERS, VaultAddresses, VaultManager, VaultManagerArgs,
+    vault_capital_batch_compute_units,
 };
 pub use pyth::{PYTH_PUSH_ORACLE_ID, pyth_price_feed_account};
 

@@ -42,8 +42,6 @@ pub(super) async fn establish(
         recover_subscriptions(client, config, inbound, recovery).await?;
     }
 
-    // The server enables Vaults on every fresh auth. Only an explicit removal
-    // needs restoring; no mint scopes apply to the vault endpoint.
     if config.endpoint == MakerWsEndpoint::Vault && !subscriptions.wants_vault_feed() {
         let request_id = Uuid::new_v4();
         write_message(

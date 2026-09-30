@@ -4,7 +4,6 @@
 use acta_maker_sdk::QuoteExpiry;
 use acta_maker_sdk::ws::types::*;
 
-// Independent backend-shaped fixture; do not generate with the SDK serializer.
 #[test]
 fn server_frames_parse_with_a_bare_integer_expiry() {
     let quote_received = r#"{"type":"QuoteReceived","data":{

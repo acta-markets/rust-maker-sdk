@@ -267,7 +267,6 @@ impl QuoteBuilder<'_> {
         OrderPreimageArgs {
             chain_id: self.binding.chain_id,
             program_id: self.binding.program_id,
-            // Maker-quoted RFQs are always sells from the maker's side.
             is_taker_buy: false,
             position_type: self.binding.position_type,
             market: self.binding.market,

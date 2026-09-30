@@ -85,7 +85,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(format!("message stream failed: {error}").into()),
         };
         match msg.message() {
-            // Maker side: the vault is the maker of record, the delegate signs.
             ServerMessage::RfqBroadcast(rfq) if client.can_maker() => {
                 let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
                     .ok_or("system clock is before the Unix epoch")?;
@@ -106,7 +105,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
                 client.quote(quote).await?;
             }
-            // Taker side: the server builds the sponsored fill, the operator signs it.
             ServerMessage::SponsoredTxToSign(to_sign) => {
                 let signed = client.sign_sponsored_tx_unverified(to_sign)?;
                 client.submit_signed_sponsored_tx(signed).await?;
@@ -128,8 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[allow(dead_code)]
 async fn rebalance(
     client: &VaultOperatorClient,
-    input_mint: &str,
-    output_mint: &str,
+    direction: VaultSwapDirection,
     amount: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let quote = client
@@ -137,8 +134,7 @@ async fn rebalance(
             request_id: Uuid::new_v4(),
             vault_pda: client.vault_pda().to_string(),
             mode: VaultSwapMode::Rebalance,
-            input_mint: input_mint.to_string(),
-            output_mint: output_mint.to_string(),
+            direction,
             amount: amount.to_string(),
             slippage_bps: 50,
         })

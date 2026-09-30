@@ -177,7 +177,6 @@ pub fn build_fund_position_ixs(
     Ok(ixs)
 }
 
-// Must match on-chain instruction discriminants.
 #[repr(u8)]
 enum InstructionKind {
     DepositPremium = 4,

@@ -65,7 +65,6 @@ fn covered_call_high_decimals_preserves_floor_and_output_limit() {
 
 #[test]
 fn wsol_quote_funding_does_not_overflow_before_decimal_cancellation() {
-    // 10 tokens at 18 decimals, strike 100 SOL: 1000 SOL in lamports.
     assert_eq!(
         required_settlement(0, 100_000_000_000, 10_000_000_000_000_000_000, 9, 18).unwrap(),
         1_000_000_000_000,

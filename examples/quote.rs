@@ -49,7 +49,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             }
             ServerMessage::RfqBroadcast(rfq) => {
-                // Quotes need 310 seconds of validity; 300 seconds are reserved for settlement.
                 let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
                     .ok_or("system clock is before the Unix epoch")?;
                 if valid_until

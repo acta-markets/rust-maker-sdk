@@ -11,18 +11,14 @@ use crate::chain::ix::{
     derive_associated_token_address as ata, derive_associated_token_address_with_bump,
 };
 
-/// On-chain ceiling of users per `ProcessDeposits` / `ProcessWithdrawals`.
-pub const VAULT_CAPITAL_BATCH_USERS: usize = 4;
-
-/// Users per capital transaction: a four-user batch overflows the 1232-byte packet.
-pub const CAPITAL_TX_USERS: usize = 3;
+/// Users per `ProcessDeposits` / `ProcessWithdrawals`: four overflow the 1232-byte packet.
+pub const VAULT_CAPITAL_BATCH_USERS: usize = 3;
 
 const BATCH_BASE_COMPUTE_UNITS: u32 = 40_000;
 const COMPUTE_UNITS_PER_USER: u32 = 13_000;
 const COMPUTE_UNITS_PER_CREATED_DESTINATION: u32 = 25_000;
 const COMPUTE_UNITS_PER_DERIVATION_STEP: u32 = 1_800;
 
-// Must match on-chain instruction discriminants.
 #[repr(u8)]
 #[derive(Clone, Copy)]
 pub(super) enum VaultIx {
@@ -215,7 +211,6 @@ impl VaultManager {
                 AccountMeta::new(self.args.share_mint, false),
                 AccountMeta::new(a.vault_main_ata, false),
                 AccountMeta::new(a.vault_second_ata, false),
-                AccountMeta::new_readonly(a.manager_stake_authority, false),
                 AccountMeta::new(a.manager_stake_ata, false),
                 AccountMeta::new_readonly(self.args.main_mint, false),
                 AccountMeta::new_readonly(a.main_oracle_source, false),
@@ -297,17 +292,6 @@ impl VaultManager {
         Ok(self.instruction(VaultIx::ProcessDeposits, accounts, &[]))
     }
 
-    pub fn process_deposit_batches(
-        &self,
-        users: &[Pubkey],
-    ) -> Result<Vec<Instruction>, VaultChainError> {
-        validate_users(users.iter(), users.len())?;
-        users
-            .chunks(CAPITAL_TX_USERS)
-            .map(|batch| self.process_deposits(batch))
-            .collect()
-    }
-
     pub fn process_withdrawals(&self, users: &[Pubkey]) -> Result<Instruction, VaultChainError> {
         let users: Vec<_> = users.iter().map(|user| (*user, None)).collect();
         self.process_withdrawals_with_share_destinations(&users)
@@ -357,17 +341,6 @@ impl VaultManager {
             ]);
         }
         Ok(self.instruction(VaultIx::ProcessWithdrawals, accounts, &[]))
-    }
-
-    pub fn process_withdrawal_batches(
-        &self,
-        users: &[Pubkey],
-    ) -> Result<Vec<Instruction>, VaultChainError> {
-        validate_users(users.iter(), users.len())?;
-        users
-            .chunks(CAPITAL_TX_USERS)
-            .map(|batch| self.process_withdrawals(batch))
-            .collect()
     }
 
     #[must_use]
@@ -448,11 +421,7 @@ impl VaultManager {
     }
 
     #[must_use]
-    pub fn deposit_batch_shape_conservative(&self, users: &[Pubkey]) -> CapitalBatchShape {
-        self.deposit_batch_shape_with_destinations(users, users.len(), users.len())
-    }
-
-    pub(super) fn deposit_batch_shape_with_destinations(
+    pub fn deposit_batch_shape_with_destinations(
         &self,
         users: &[Pubkey],
         missing_share_accounts: usize,
@@ -499,11 +468,7 @@ impl VaultManager {
     }
 
     #[must_use]
-    pub fn withdrawal_batch_shape_conservative(&self, users: &[Pubkey]) -> CapitalBatchShape {
-        self.withdrawal_batch_shape_with_destinations(users, users.len(), users.len())
-    }
-
-    pub(super) fn withdrawal_batch_shape_with_destinations(
+    pub fn withdrawal_batch_shape_with_destinations(
         &self,
         users: &[Pubkey],
         missing_main_accounts: usize,
@@ -572,19 +537,11 @@ fn validate_batch<'a>(
     users: impl Iterator<Item = &'a Pubkey>,
     len: usize,
 ) -> Result<(), VaultChainError> {
-    validate_users(users, len)?;
-    if len > VAULT_CAPITAL_BATCH_USERS {
-        return Err(VaultChainError::BatchTooLarge);
-    }
-    Ok(())
-}
-
-fn validate_users<'a>(
-    users: impl Iterator<Item = &'a Pubkey>,
-    len: usize,
-) -> Result<(), VaultChainError> {
     if len == 0 {
         return Err(VaultChainError::InvalidInput("vault batch cannot be empty"));
+    }
+    if len > VAULT_CAPITAL_BATCH_USERS {
+        return Err(VaultChainError::BatchTooLarge);
     }
     if users.collect::<HashSet<_>>().len() != len {
         return Err(VaultChainError::InvalidInput(
@@ -600,8 +557,8 @@ mod tests {
 
     #[test]
     fn unknown_missing_destinations_are_covered_by_the_largest_bumps() {
-        let steps = [1, 9, 3, 15];
-        for mask in 0u8..16 {
+        let steps = [9, 1, 15];
+        for mask in 0u8..8 {
             let actual = steps
                 .iter()
                 .enumerate()

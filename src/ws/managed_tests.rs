@@ -540,7 +540,6 @@ async fn close_interrupts_a_stalled_authentication() {
         let mut socket = tokio_tungstenite::accept_async(stream)
             .await
             .expect("websocket handshake");
-        // Consume Hello but never answer, so authentication cannot progress.
         let _ = socket.next().await;
         let _ = accepted_tx.send(());
         std::future::pending::<()>().await;
@@ -586,7 +585,6 @@ async fn close_interrupts_a_stalled_readiness_barrier() {
             .await
             .expect("websocket handshake");
         authenticate_test_peer(&mut socket).await;
-        // Authentication succeeded; never acknowledge the initial subscribe.
         let _ = socket.next().await;
         let _ = authenticated_tx.send(());
         std::future::pending::<()>().await;

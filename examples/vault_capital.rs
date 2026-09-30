@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 
 use acta_maker_sdk::ACTA_PROGRAM_ID;
 use acta_maker_sdk::chain::vault::{
-    CAPITAL_TX_USERS, CapitalStep, VaultAccount, VaultManager, VaultRequest, VaultRequestKind,
-    VaultSafety, VaultView, WindowPolicy, WindowTracker, next_step, oracle_source_pyth_feed,
-    plan_withdrawals, pyth_price_feed_account, vault_capital_batch_compute_units,
+    CapitalStep, VAULT_CAPITAL_BATCH_USERS, VaultAccount, VaultManager, VaultRequest,
+    VaultRequestKind, VaultSafety, VaultView, WindowPolicy, WindowTracker, next_step,
+    oracle_source_pyth_feed, plan_withdrawals, pyth_price_feed_account,
+    vault_capital_batch_compute_units,
 };
 use acta_maker_sdk::chain::{ChainClient, SendOptions};
 use solana_commitment_config::CommitmentConfig;
@@ -78,7 +79,6 @@ impl Crank {
         let manager = VaultManager::from_vault(self.program_id, self.operator.pubkey(), &vault)?;
         match step {
             CapitalStep::CloseDeposits => {
-                // Closing commits the crank to pricing next; stay open while an oracle source has no Pyth feed.
                 if vault.pending_deposit_count > 0 || vault.pending_withdraw_count > 0 {
                     self.price_update(manager.addresses.main_oracle_source)
                         .await?;
@@ -109,9 +109,13 @@ impl Crank {
                     .into_iter()
                     .map(|request| request.user)
                     .collect();
-                for batch in users.chunks(CAPITAL_TX_USERS) {
+                for batch in users.chunks(VAULT_CAPITAL_BATCH_USERS) {
                     let units = vault_capital_batch_compute_units(
-                        manager.deposit_batch_shape_conservative(batch),
+                        manager.deposit_batch_shape_with_destinations(
+                            batch,
+                            batch.len(),
+                            batch.len(),
+                        ),
                     );
                     self.send(manager.process_deposits(batch)?, Some(units))
                         .await?;
@@ -131,14 +135,17 @@ impl Crank {
                     .amount
                     .parse()?;
                 let plan = plan_withdrawals(&queued, supply);
-                for batch in plan.partial.chunks(CAPITAL_TX_USERS) {
+                for batch in plan.partial.chunks(VAULT_CAPITAL_BATCH_USERS) {
                     let units = vault_capital_batch_compute_units(
-                        manager.withdrawal_batch_shape_conservative(batch),
+                        manager.withdrawal_batch_shape_with_destinations(
+                            batch,
+                            batch.len(),
+                            batch.len(),
+                        ),
                     );
                     self.send(manager.process_withdrawals(batch)?, Some(units))
                         .await?;
                 }
-                // The sole holder waits for deposits unless the vault is winding down.
                 if let Some(user) = plan.final_user
                     && (vault.pending_deposit_count == 0
                         || vault.safety == VaultSafety::WithdrawOnly)

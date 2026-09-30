@@ -64,7 +64,6 @@ pub(super) async fn authenticate(
         .await
         .map_err(|_| WsClientError::Timeout)??;
 
-    // Wait for protocol negotiation before starting authentication.
     loop {
         let message = match client.next().await {
             Some(Ok(msg)) => msg,

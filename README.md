@@ -16,14 +16,14 @@ Requires Rust 1.89 or later. For maker applications:
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.4.3", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.4.3-vaults.1", features = ["ws-client"] }
 ```
 
 For the vault API:
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "=0.4.3-vaults.1", features = ["vault"] }
+acta-maker-sdk = { version = "0.4.3-vaults.1", features = ["vault"] }
 ```
 
 Build quotes with `RfqBinding::from_broadcast`: it verifies the market PDA from
@@ -44,6 +44,7 @@ the market descriptor and derive its PDA before using low-level signing APIs.
 | `chain` | Solana instruction builders (`DepositPremium`, `WithdrawPremium`, `FundPosition`) |
 | `chain-rpc` | Solana RPC queries (extends `chain`) |
 | `vault-chain` | Vault capital-cycle instructions (`VaultManager`) and derived vault addresses, account decoders, crank decision and Pyth price-account derivation (`vault` + `chain`) |
+| `http` | Read-only `HttpClient` for the public vault and market endpoints (reqwest, rustls with native roots) |
 | `test-helpers` | Test utilities (`ManagedWsHandle::test_handle`, message injection) |
 
 Managed clients validate the canonical Acta authentication challenge before invoking
@@ -406,19 +407,19 @@ subscriptions and projections share one connection.
   finish. It clears on disconnect/invalidation; the watch emits `None`.
   `vault_session_invalidated` starts fresh auth even if the old socket stays open.
   `can_maker()` / `can_taker()` require `Ready` and the granted
-  `SIGN_MAKER_QUOTES` / `OPEN_TAKER` bit; `can_maker()` also requires a delegate.
-  They do not prove current on-chain
-  permission; the server and contract check each action.
+  `SIGN_MAKER_QUOTES` / `OPEN_TAKER` bit. Governance can quote when the same key
+  has an active primary-delegate grant with `SIGN_MAKER_QUOTES`; revocation or
+  expiry removes quoting without removing governance authority. This requires
+  the matching backend update. The server and contract check each action.
 - **Signing:** the operator signs challenges and prepared transactions.
-  Maker quotes require the primary delegate; `sign_quote` puts the vault address
+  Maker quotes require an active primary-delegate grant; `sign_quote` puts the vault address
   in `maker_owner`. `sign_sponsored_tx` and `sign_swap` check
   `signature_deadline` and `valid_until` locally. Offline signing
-  needs no connection and grants no execution permission. The safe signing helpers require the exact message independently built or approved
-  by your application. Build it, for example with `VaultManagerPlanner` from `@acta-markets/ts-sdk`, from the local
-  order/route, payer, permissions, blockhash and lookup tables. Every message byte
-  must match before the key is used. Do not copy the expected bytes from the server
-  transaction. Explicit `_unverified` helpers trust the server bytes and are
-  for controlled tests only; they do not verify intent.
+  needs no connection and grants no execution permission. Safe signing helpers
+  require an independently built or approved transaction
+  message, including the order/route, payer, permissions, blockhash and lookup
+  tables. Every byte must match before signing. Never use the server transaction
+  as the expected message. `_unverified` helpers skip this check.
 - **Readiness:** each auth fetches `GetMyActiveRfqs` and `GetPositions`.
   A grant with maker permission also fetches `GetMmSummary`, `GetActiveRfqs`
   and `GetMyQuotes { scope: Live }`.
@@ -459,8 +460,7 @@ let quote = client.swap_quote(SwapQuoteData {
     request_id: uuid::Uuid::new_v4(),
     vault_pda: client.vault_pda().to_string(),
     mode: VaultSwapMode::Rebalance,
-    input_mint: "<mint>".to_string(),
-    output_mint: "<mint>".to_string(),
+    direction: VaultSwapDirection::MainToSecond,
     amount: "1000".to_string(),
     slippage_bps: 50,
 }).await?;
@@ -572,7 +572,7 @@ ACTA_VAULT_PDA=<vault> cargo run --locked --features vault --example vault_opera
 ACTA_VAULT_PDA=<vault> ACTA_RPC_URL=<rpc> cargo run --locked --features vault-chain,chain-rpc --example vault_capital
 ```
 
-`vault_operator` signs with the delegated operator key from `ACTA_KEYPAIR_PATH`
+`vault_operator` signs with the operator key from `ACTA_KEYPAIR_PATH`
 for the vault in `ACTA_VAULT_PDA`. `vault_capital` signs with the vault's governance
 or delegate key and sends one capital step per pass.
 

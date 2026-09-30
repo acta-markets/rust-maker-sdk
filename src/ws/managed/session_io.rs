@@ -177,7 +177,6 @@ mod tests {
         });
         let send = handle.send_in_epoch(quote, 1);
         tokio::pin!(send);
-        // Deterministically park at queue capacity, after the Ready check.
         assert!(futures_util::poll!(send.as_mut()).is_pending());
         handle.inject_state(ManagedWsState::Ready {
             connection_epoch: 2,

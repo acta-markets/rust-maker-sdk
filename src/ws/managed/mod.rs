@@ -492,8 +492,6 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
         shutdown_rx,
         vault_auth_tx.clone(),
     );
-    // The handle keeps the broadcast senders alive, so a panicked session task
-    // would leave subscribers waiting forever unless the panic is published.
     let panic_events_tx = events_tx.clone();
     let panic_state_tx = state_tx.clone();
     let task = tokio::spawn(async move {

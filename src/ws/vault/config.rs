@@ -5,7 +5,6 @@ use crate::orders::SignerLike;
 use crate::ws::managed::{ChallengeSigning, ManagedWsConfig};
 use crate::ws::types::HelloData;
 
-/// Vault operator session settings; maker quotes require the primary delegate key.
 #[derive(Clone)]
 pub struct VaultOperatorConfig {
     pub managed: ManagedWsConfig,

@@ -1035,7 +1035,6 @@ async fn pending_subscription_does_not_block_cancellation() {
             matches!(command, ClientMessage::AddMints(_)),
             "expected AddMints, got {command:?}"
         );
-        // Leave AddMints unacknowledged. CancelAll must still reach the socket.
         let command = receive_command(&mut socket).await;
         let ClientMessage::CancelAllQuotes(cancel) = command else {
             panic!("expected cancellation, got {command:?}");
@@ -1193,8 +1192,6 @@ async fn invalid_signature_terminates_only_after_three_consecutive_rejections() 
         }
         other => panic!("expected AuthenticationRejected, got {other:?}"),
     }
-    // All three accepts happened; a single-strike terminal would leave the
-    // server task waiting and this join hanging.
     server_task.await.expect("three connections were made");
 }
 

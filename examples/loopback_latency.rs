@@ -185,7 +185,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         authenticate_peer(&mut socket).await;
         eprintln!("peer: authenticated");
 
-        // Phase 1: the client fires OUTBOUND data-lane queries; record each arrival.
         outbound_started_rx.await.expect("client started");
         let mut arrivals = Vec::with_capacity(OUTBOUND);
         while arrivals.len() < OUTBOUND {
@@ -197,7 +196,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         eprintln!("peer: phase 1 done");
-        // Phase 2: push INBOUND acknowledgements, recording the send instant.
         let mut sends = Vec::with_capacity(INBOUND);
         let mut next_send = tokio::time::Instant::now();
         for i in 0..INBOUND {
@@ -207,7 +205,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 replaced_order_id: None,
             });
             next_send += INBOUND_PACING;
-            // Keep answering liveness pings while pacing.
             loop {
                 tokio::select! {
                     () = tokio::time::sleep_until(next_send) => break,
@@ -257,9 +254,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handle.wait_until_ready().await?;
     eprintln!("client: ready");
 
-    // Phase 1: enqueue -> wire.
-    // One frame in flight at a time: the number is the path of one frame from
-    // `try_send` to the peer's socket, not the depth of a burst queue.
     let mut enqueued = Vec::with_capacity(OUTBOUND);
     outbound_started_tx.send(()).expect("peer waiting");
     for _ in 0..OUTBOUND {
@@ -273,7 +267,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!("client: written");
 
-    // Phase 2: wire -> session parse -> subscriber.
     let mut parsed = Vec::with_capacity(INBOUND);
     let mut delivered = Vec::with_capacity(INBOUND);
     loop {

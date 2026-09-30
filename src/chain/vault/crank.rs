@@ -90,7 +90,6 @@ pub fn next_step(
 
     let pending = view.pending_deposits > 0 || view.pending_withdrawals > 0;
     match (view.safety, view.phase) {
-        // Terminal payouts must not wait behind an unpayable deposit refund.
         (WithdrawOnly, Idle) if view.pending_withdrawals > 0 => {
             Some(CapitalStep::ProcessWithdrawals)
         }

@@ -4,9 +4,9 @@ use sha2::{Digest, Sha256};
 use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
 
 use super::{
-    CAPITAL_TX_USERS, VaultAccount, VaultGovernanceUpdate, VaultGovernanceUpdateKind, VaultManager,
-    VaultManagerArgs, VaultPhase, VaultPolicyUpdate, VaultRequest, VaultRequestKind, VaultSafety,
-    oracle_source_pyth_feed, pda, vault_capital_batch_compute_units,
+    VAULT_CAPITAL_BATCH_USERS, VaultAccount, VaultGovernanceUpdate, VaultGovernanceUpdateKind,
+    VaultManager, VaultManagerArgs, VaultPhase, VaultPolicyUpdate, VaultRequest, VaultRequestKind,
+    VaultSafety, oracle_source_pyth_feed, pda, vault_capital_batch_compute_units,
 };
 use crate::VaultDelegatePermissions;
 use crate::chain::ix::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
@@ -56,10 +56,10 @@ fn manager(main_token_program: Pubkey) -> VaultManager {
 struct Golden {
     token_program: Pubkey,
     addresses: &'static str,
-    capital: [&'static str; 17],
+    capital: [&'static str; 15],
     shapes: &'static str,
-    /// Conservative compute units for 1..=4 users: (deposit, withdrawal).
-    conservative: [(u32, u32); 4],
+    /// Conservative compute units for 1..=3 users: (deposit, withdrawal).
+    all_missing: [(u32, u32); 3],
 }
 
 const GOLDEN: [Golden; 2] = [
@@ -69,8 +69,8 @@ const GOLDEN: [Golden; 2] = [
         capital: [
             "2e00/5/f779cd53a5637a79",
             "2e01/5/f779cd53a5637a79",
-            "25/18/968e40e9d621c8d9",
-            "25/19/6041e933fa765c21",
+            "25/17/0cce5b8f23f0b8b4",
+            "25/18/8bc58b79ee932ac8",
             "28/7/f0c7f42cc0a16cbd",
             "40/21/f93f7bc7d918f7ec",
             "40/21/8420fd118883d1c0",
@@ -80,18 +80,11 @@ const GOLDEN: [Golden; 2] = [
             "26/24/3c2076dbc29893a0",
             "27/32/82c41b8b12030e34",
             "26/31/3ac9526f9287dc5f",
-            "27/39/06fa266e073fb752",
-            "26/38/9f1ed94048d9641b",
             "27/25/cc1bf83688a67582",
             "26/24/5443b914191d8422",
         ],
-        shapes: "5e7e7a1c88c2b8c8",
-        conservative: [
-            (130_000, 130_000),
-            (216_400, 209_200),
-            (286_600, 281_200),
-            (369_400, 358_600),
-        ],
+        shapes: "494335a5087e54be",
+        all_missing: [(130_000, 130_000), (216_400, 209_200), (286_600, 281_200)],
     },
     Golden {
         token_program: TOKEN_2022_PROGRAM_ID,
@@ -99,8 +92,8 @@ const GOLDEN: [Golden; 2] = [
         capital: [
             "2e00/5/f779cd53a5637a79",
             "2e01/5/f779cd53a5637a79",
-            "25/18/7947152d2f99d84c",
-            "25/19/a472fa893d8f1b71",
+            "25/17/335b18a1c174d7d7",
+            "25/18/f53b718cd1792e02",
             "28/7/7a32261d5c71ada7",
             "40/21/9b04ca82a25313bf",
             "40/21/2c5400de9cff0c92",
@@ -110,18 +103,11 @@ const GOLDEN: [Golden; 2] = [
             "26/24/a95faa21b1accbe2",
             "27/32/70752bc4a123fe16",
             "26/31/8ba5ea72877a303a",
-            "27/39/c80933bf1082a36b",
-            "26/38/cc5d04449d3978e3",
             "27/25/9618893ffdb13bce",
             "26/24/276b0674cc3714f7",
         ],
-        shapes: "a12720ba09b4cdf7",
-        conservative: [
-            (130_000, 126_400),
-            (200_200, 191_200),
-            (268_600, 263_200),
-            (353_200, 340_600),
-        ],
+        shapes: "b58c0c14591fefc9",
+        all_missing: [(130_000, 126_400), (200_200, 191_200), (268_600, 263_200)],
     },
 ];
 
@@ -157,7 +143,7 @@ fn addresses_and_capital_instructions_match_golden() {
             m.process_final_withdrawal(key(12)),
             m.process_final_withdrawal_with_share_destination(key(12), Some(key(13))),
         ];
-        for count in 1..=4 {
+        for count in 1..=3 {
             capital.push(m.process_deposits(&users(count)).unwrap());
             capital.push(m.process_withdrawals(&users(count)).unwrap());
         }
@@ -176,28 +162,13 @@ fn addresses_and_capital_instructions_match_golden() {
             .unwrap(),
         );
         assert_eq!(capital.iter().map(ix).collect::<Vec<_>>(), golden.capital);
-
-        let many = users(9);
-        let chunks = |build: fn(&VaultManager, &[Pubkey]) -> Instruction| {
-            many.chunks(CAPITAL_TX_USERS)
-                .map(|batch| build(&m, batch))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            m.process_deposit_batches(&many).unwrap(),
-            chunks(|m, batch| m.process_deposits(batch).unwrap())
-        );
-        assert_eq!(
-            m.process_withdrawal_batches(&many).unwrap(),
-            chunks(|m, batch| m.process_withdrawals(batch).unwrap())
-        );
     }
 }
 
 #[test]
 fn batch_validation_rejects_empty_duplicate_and_oversized() {
     let m = manager(TOKEN_PROGRAM_ID);
-    for users in [vec![], vec![key(1), key(1)], users(5)] {
+    for users in [vec![], vec![key(1), key(1)], users(4)] {
         assert!(m.process_deposits(&users).is_err());
         assert!(m.process_withdrawals(&users).is_err());
     }
@@ -228,18 +199,24 @@ fn batch_shapes_and_compute_units_match_golden() {
             }
         }
         assert_eq!(digest(&shapes), golden.shapes);
-        let conservative: Vec<_> = (1..=4)
+        let all_missing: Vec<_> = (1..=3)
             .map(|count| {
                 let users = users(count);
                 (
-                    vault_capital_batch_compute_units(m.deposit_batch_shape_conservative(&users)),
-                    vault_capital_batch_compute_units(
-                        m.withdrawal_batch_shape_conservative(&users),
-                    ),
+                    vault_capital_batch_compute_units(m.deposit_batch_shape_with_destinations(
+                        &users,
+                        users.len(),
+                        users.len(),
+                    )),
+                    vault_capital_batch_compute_units(m.withdrawal_batch_shape_with_destinations(
+                        &users,
+                        users.len(),
+                        users.len(),
+                    )),
                 )
             })
             .collect();
-        assert_eq!(conservative, golden.conservative);
+        assert_eq!(all_missing, golden.all_missing);
     }
 }
 
@@ -322,17 +299,17 @@ fn governance_instructions_match_golden() {
             "39030500000007000000000000000000000000000000000000000000000000000000/5/8e0cd501f9328fa8",
             "390403009600c4090000000000000000000000000000000000000000000000000000/5/48194846a6c25808",
             "39051e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e/5/9104fa0231f4964e",
-            "3a00/5/fe62d7f8ecca4dde",
+            "3a00/4/d0371903118ce95d",
             "3b00/5/abdc1cc51536dfb6",
-            "3a01/23/0d2fa098617ec096",
+            "3a01/18/a48abe4390632431",
             "3b01/5/60182776ff64aff8",
-            "3a02/23/97e0429e34b1f890",
+            "3a02/18/6be772550a5b0b31",
             "3b02/5/5441df267873fd5b",
-            "3a03/5/984855597e1295c0",
+            "3a03/4/dc0663ae22446adb",
             "3b03/5/e77b863dc778acb2",
-            "3a04/5/eb01ac0ee1384b2f",
+            "3a04/4/142623051969a573",
             "3b04/5/00a1e87c02e4835b",
-            "3a05/5/6e17dfc4c382bbb9",
+            "3a05/4/da408c2b2eb99f79",
             "3b05/5/dd663461db40b769",
             "3120202020202020202020202020202020202020202020202020202020202020203f00000000b33f7100000000/5/db66018087f022ff",
             "48/3/4a35ed45ecc4ab38",
@@ -444,16 +421,18 @@ fn capital_tx_users_fit_the_legacy_packet() {
         );
         1 + tx.signatures.len() * 64 + tx.message.serialize().len()
     };
-    for count in [CAPITAL_TX_USERS, CAPITAL_TX_USERS + 1] {
-        let users = users(u8::try_from(count).unwrap());
-        let fits = count == CAPITAL_TX_USERS;
-        assert_eq!(
-            wire_len(m.process_deposits(&users).unwrap()) <= PACKET_DATA_SIZE,
-            fits
-        );
-        assert_eq!(
-            wire_len(m.process_withdrawals(&users).unwrap()) <= PACKET_DATA_SIZE,
-            fits
-        );
-    }
+    let users = users(u8::try_from(VAULT_CAPITAL_BATCH_USERS + 1).unwrap());
+    let (batch, extra) = users.split_at(VAULT_CAPITAL_BATCH_USERS);
+    let oversized = |mut capital: Instruction, one: Instruction, header: usize| {
+        capital.accounts.extend_from_slice(&one.accounts[header..]);
+        capital
+    };
+    let deposits = m.process_deposits(batch).unwrap();
+    let withdrawals = m.process_withdrawals(batch).unwrap();
+    assert!(wire_len(deposits.clone()) <= PACKET_DATA_SIZE);
+    assert!(wire_len(withdrawals.clone()) <= PACKET_DATA_SIZE);
+    let deposits = oversized(deposits, m.process_deposits(extra).unwrap(), 11);
+    let withdrawals = oversized(withdrawals, m.process_withdrawals(extra).unwrap(), 10);
+    assert!(wire_len(deposits) > PACKET_DATA_SIZE);
+    assert!(wire_len(withdrawals) > PACKET_DATA_SIZE);
 }

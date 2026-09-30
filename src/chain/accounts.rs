@@ -143,7 +143,6 @@ fn validate_account(
             actual: discriminator,
         });
     }
-    // A missing version byte is as uninitialized as a zero one.
     match account.data.get(ACCOUNT_OFFSET_VERSION) {
         None | Some(0) => return Err(ChainError::UninitializedAccount),
         Some(_) => {}

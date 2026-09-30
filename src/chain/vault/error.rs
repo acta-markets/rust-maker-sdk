@@ -21,7 +21,7 @@ pub enum VaultChainError {
     UnknownAccountingFlags(u32),
     #[error("oracle source has no Pyth feed")]
     MissingPythFeed,
-    #[error("vault batch exceeds {VAULT_CAPITAL_BATCH_USERS} users; use the chunked helper")]
+    #[error("vault batch exceeds {VAULT_CAPITAL_BATCH_USERS} users")]
     BatchTooLarge,
     #[error("invalid vault input: {0}")]
     InvalidInput(&'static str),

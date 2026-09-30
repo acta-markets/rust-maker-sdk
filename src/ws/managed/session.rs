@@ -213,7 +213,6 @@ pub(super) async fn run_managed_ws(
                     }
                     SessionEnd::AuthenticationFailed => {}
                     SessionEnd::Terminated(reason) => {
-                        // Retry isolated signature failures; terminate on consecutive rejections.
                         let strike = matches!(
                             &reason,
                             ManagedWsTerminationReason::AuthenticationRejected {
@@ -270,7 +269,6 @@ pub(super) async fn run_managed_ws(
                     config.max_reconnect_attempts
                 )),
             );
-            // Preserve the authentication failure when the reconnect limit is hit.
             let reason = match pending_auth_rejection.take() {
                 Some(rejection) => rejection,
                 None => ManagedWsTerminationReason::ReconnectLimitReached {
@@ -308,7 +306,6 @@ async fn run_session(
     state_tx: &watch::Sender<ManagedWsState>,
     connection_epoch: u64,
 ) -> SessionEnd {
-    // This connection's recovery covers gaps from the previous connection.
     while runtime.gap_rx.try_recv().is_ok() {}
 
     let auth_result = race_shutdown(
@@ -397,7 +394,6 @@ async fn run_session(
         }
     }
 
-    // Read and correlate here; the writer preserves trading FIFO and prioritizes control.
     let (sink, mut reader) = client.split();
     let (lanes, mut writer_task) = writer::spawn(
         sink,
@@ -419,7 +415,6 @@ async fn run_session(
     let mut pong_deadline = None;
     let mut subscription_deadline = None;
     let mut subscription_written = None;
-    // Start the pong deadline after the ping is written.
     let mut ping_written: Option<oneshot::Receiver<Result<(), ManagedWsError>>> = None;
 
     let end = loop {
@@ -471,7 +466,6 @@ async fn run_session(
                 let (written_tx, written_rx) = oneshot::channel();
                 match lanes.frame(ping.clone(), Some(written_tx)) {
                     Ok(()) => ping_written = Some(written_rx),
-                    // A stalled writer is ended by its own write timeout.
                     Err((LaneFull::Full, _)) => {}
                     Err((LaneFull::Closed, _)) => break AuthenticatedSessionEnd::Disconnected,
                 }
@@ -524,7 +518,6 @@ async fn run_session(
         }
     };
 
-    // Revoke the local view before waiting for graceful writer shutdown.
     runtime
         .vault_auth_tx
         .send_if_modified(|grant| grant.take().is_some());

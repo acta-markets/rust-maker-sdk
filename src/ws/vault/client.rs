@@ -118,17 +118,18 @@ impl VaultOperatorClient {
         self.auth().map(|auth| auth.permissions)
     }
 
-    /// Execution still checks current authority.
     #[must_use]
     pub fn can_maker(&self) -> bool {
         self.inner.is_ready()
             && self.auth().is_some_and(|auth| {
-                auth.operator_kind == crate::types::VaultOperatorKind::Delegate
-                    && auth.permissions.can_maker()
+                matches!(
+                    auth.operator_kind,
+                    crate::types::VaultOperatorKind::Delegate
+                        | crate::types::VaultOperatorKind::Governance
+                ) && auth.permissions.can_maker()
             })
     }
 
-    /// Execution still checks current authority.
     #[must_use]
     pub fn can_taker(&self) -> bool {
         self.inner.is_ready()

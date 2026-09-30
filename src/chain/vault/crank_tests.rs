@@ -236,7 +236,6 @@ fn mixed_cycle_resolves_deposits_before_supply_draining_withdrawal() {
         next_step(v, FRESH, POLICY),
         Some(CapitalStep::ProcessDeposits)
     );
-    // The decision is reconstructed from the listing after a restart.
     assert_eq!(
         next_step(v, FRESH, NO_REOPEN),
         Some(CapitalStep::ProcessDeposits)

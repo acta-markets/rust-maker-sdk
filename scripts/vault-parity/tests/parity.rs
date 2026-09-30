@@ -6,8 +6,8 @@ use acta_contract_sdk::token::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
 use acta_contract_sdk::{DepositRequest, OracleSource, Vault, WithdrawRequest, pda};
 use acta_maker_sdk::VaultDelegatePermissions;
 use acta_maker_sdk::chain::vault::{
-    self as m, CAPITAL_TX_USERS, VaultAccount, VaultManager, VaultManagerArgs, VaultPhase,
-    VaultRequest, VaultRequestKind, VaultSafety,
+    self as m, VaultAccount, VaultManager, VaultManagerArgs, VaultPhase, VaultRequest,
+    VaultRequestKind, VaultSafety,
 };
 use solana_pubkey::Pubkey;
 
@@ -56,7 +56,6 @@ const MAINS: [Pubkey; 2] = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
 #[test]
 fn constants_and_program_id() {
     assert_eq!(m::VAULT_CAPITAL_BATCH_USERS, c::VAULT_CAPITAL_BATCH_USERS);
-    assert!(CAPITAL_TX_USERS <= c::VAULT_CAPITAL_BATCH_USERS);
     assert_eq!(program(), acta_contract_sdk::ID);
 }
 
@@ -174,7 +173,7 @@ fn capital_instructions_match() {
                 ct.process_final_withdrawal_with_share_destination(key(12), Some(key(13))),
             ),
         ];
-        for count in 1..=4 {
+        for count in 1..=3 {
             let u = users(count);
             pairs.push((
                 mk.process_deposits(&u).unwrap(),
@@ -205,21 +204,6 @@ fn capital_instructions_match() {
         for (index, (maker, contract)) in pairs.iter().enumerate() {
             assert_eq!(maker, contract, "capital #{index}, main {main}");
         }
-
-        let many = users(9);
-        let chunks = |f: fn(&VaultManagerPlanner, &[Pubkey]) -> acta_contract_sdk::Instruction| {
-            many.chunks(CAPITAL_TX_USERS)
-                .map(|batch| f(&ct, batch))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            mk.process_deposit_batches(&many).unwrap(),
-            chunks(|ct, batch| ct.process_deposits(batch).unwrap())
-        );
-        assert_eq!(
-            mk.process_withdrawal_batches(&many).unwrap(),
-            chunks(|ct, batch| ct.process_withdrawals(batch).unwrap())
-        );
     }
 }
 
@@ -244,47 +228,53 @@ fn batch_validation_matches() {
 fn batch_shapes_and_compute_units_match() {
     for main in MAINS {
         let (mk, ct) = pair(main);
-        for count in 1..=4 {
+        for count in 1..=3 {
             let u = users(count);
-            for (maker, contract) in [
-                (
-                    mk.deposit_batch_shape_conservative(&u),
-                    ct.deposit_batch_shape_conservative(&u),
-                ),
-                (
-                    mk.withdrawal_batch_shape_conservative(&u),
-                    ct.withdrawal_batch_shape_conservative(&u),
-                ),
-            ] {
+            for missing in 0..=u.len() {
+                for (maker, contract) in [
+                    (
+                        mk.deposit_batch_shape_with_destinations(&u, missing, u.len() - missing),
+                        ct.deposit_batch_shape_with_destinations(&u, missing, u.len() - missing),
+                    ),
+                    (
+                        mk.withdrawal_batch_shape_with_destinations(&u, missing, u.len() - missing),
+                        ct.withdrawal_batch_shape_with_destinations(&u, missing, u.len() - missing),
+                    ),
+                ] {
+                    assert_eq!(
+                        (
+                            maker.users,
+                            maker.created_destinations,
+                            maker.derivation_steps
+                        ),
+                        (
+                            contract.users,
+                            contract.created_destinations,
+                            contract.derivation_steps
+                        ),
+                        "{count} users, {missing} missing, main {main}"
+                    );
+                    assert_eq!(
+                        m::vault_capital_batch_compute_units(maker),
+                        c::vault_capital_batch_compute_units(contract),
+                        "{count} users, {missing} missing, main {main}"
+                    );
+                }
                 assert_eq!(
-                    (
-                        maker.users,
-                        maker.created_destinations,
-                        maker.derivation_steps
+                    m::vault_capital_batch_compute_units(
+                        mk.deposit_batch_shape_with_destinations(&u, missing, missing)
                     ),
-                    (
-                        contract.users,
-                        contract.created_destinations,
-                        contract.derivation_steps
-                    ),
-                    "{count} users, main {main}"
+                    ct.deposit_batch_compute_units_with_destinations(&u, missing, missing)
                 );
                 assert_eq!(
-                    m::vault_capital_batch_compute_units(maker),
-                    c::vault_capital_batch_compute_units(contract),
-                    "{count} users, main {main}"
+                    m::vault_capital_batch_compute_units(
+                        mk.withdrawal_batch_shape_with_destinations(&u, missing, missing)
+                    ),
+                    ct.withdrawal_batch_compute_units_with_destinations(&u, missing, missing)
                 );
             }
-            assert_eq!(
-                m::vault_capital_batch_compute_units(mk.deposit_batch_shape_conservative(&u)),
-                ct.deposit_batch_compute_units_conservative(&u)
-            );
-            assert_eq!(
-                m::vault_capital_batch_compute_units(mk.withdrawal_batch_shape_conservative(&u)),
-                ct.withdrawal_batch_compute_units_conservative(&u)
-            );
         }
-        for shape in [(0, 0, 0), (1, 2, 3), (4, 8, 40), (4, 0, 0)] {
+        for shape in [(0, 0, 0), (1, 2, 3), (3, 6, 40), (3, 0, 0)] {
             assert_eq!(
                 m::vault_capital_batch_compute_units(m::CapitalBatchShape {
                     users: shape.0,

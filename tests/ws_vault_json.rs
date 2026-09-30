@@ -51,13 +51,12 @@ fn vault_swap_quote_and_submit_roundtrip() {
         request_id: request_id(),
         vault_pda: "vault".to_string(),
         mode: VaultSwapMode::Rebalance,
-        input_mint: "main".to_string(),
-        output_mint: "second".to_string(),
+        direction: VaultSwapDirection::MainToSecond,
         amount: u64::MAX.to_string(),
         slippage_bps: 25,
     });
     let expected = format!(
-        r#"{{"type":"SwapQuote","data":{{"request_id":"{REQUEST_ID}","vault_pda":"vault","mode":"rebalance","input_mint":"main","output_mint":"second","amount":"{}","slippage_bps":25}}}}"#,
+        r#"{{"type":"SwapQuote","data":{{"request_id":"{REQUEST_ID}","vault_pda":"vault","mode":"rebalance","direction":"main_to_second","amount":"{}","slippage_bps":25}}}}"#,
         u64::MAX
     );
     let ClientMessage::SwapQuote(data) = assert_client_wire(&quote, &expected) else {
@@ -85,13 +84,14 @@ fn vault_swap_quote_and_submit_roundtrip() {
 #[test]
 fn swap_quote_slippage_defaults_to_50_bps() {
     let raw = format!(
-        r#"{{"type":"SwapQuote","data":{{"request_id":"{REQUEST_ID}","vault_pda":"vault","mode":"recovery","input_mint":"main","output_mint":"second","amount":"1"}}}}"#
+        r#"{{"type":"SwapQuote","data":{{"request_id":"{REQUEST_ID}","vault_pda":"vault","mode":"recovery","direction":"second_to_main","amount":"1"}}}}"#
     );
     let ClientMessage::SwapQuote(data) = serde_json::from_str(&raw).unwrap() else {
         panic!("expected SwapQuote");
     };
     assert_eq!(data.slippage_bps, 50);
     assert_eq!(data.mode, VaultSwapMode::Recovery);
+    assert_eq!(data.direction, VaultSwapDirection::SecondToMain);
 }
 
 #[test]

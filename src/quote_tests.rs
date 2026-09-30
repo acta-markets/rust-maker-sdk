@@ -11,7 +11,6 @@ const PROGRAM: [u8; 32] =
 const TAKER: [u8; 32] = [11u8; 32];
 
 fn market() -> [u8; 32] {
-    // Golden derived with @solana/web3.js for the descriptor in broadcast().
     solana_pubkey::pubkey!("6E9r7Y4Q7mVpNDUJ47dYAdNQAZN1u3FxrutUWAfjL4zb").to_bytes()
 }
 
@@ -52,7 +51,6 @@ fn binding(strike: u64, alternatives: &[u64]) -> RfqBinding {
     RfqBinding::from_broadcast(&broadcast(strike, alternatives)).expect("valid identities")
 }
 
-// Regression: serialization rounded sub-seconds while the preimage truncated them.
 #[test]
 fn wire_valid_until_is_the_value_that_was_signed() {
     let fractional = SystemTime::UNIX_EPOCH + Duration::from_millis(1_800_000_000_700);

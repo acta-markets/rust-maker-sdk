@@ -308,8 +308,6 @@ mod tests {
         PreparedClientMessage::new(&ClientMessage::Ping).expect("serialize control frame")
     }
 
-    // Frames are queued before the writer task first runs, which holds on a
-    // current-thread runtime only.
     #[tokio::test(flavor = "current_thread")]
     async fn control_lane_is_written_before_queued_data() {
         let sink = RecordingSink::default();
@@ -366,8 +364,6 @@ mod tests {
         ));
     }
 
-    // Frames are queued before the writer task first runs, which holds on a
-    // current-thread runtime only.
     #[tokio::test(flavor = "current_thread")]
     async fn full_lane_is_reported_without_blocking() {
         let (events_tx, _) = broadcast::channel(4);

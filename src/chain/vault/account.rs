@@ -81,7 +81,7 @@ const EQUITY_COMPUTED: u32 = 1 << 0;
 const ACCEPTING_DEPOSITS: u32 = 1 << 1;
 
 impl VaultAccount {
-    pub const LEN: usize = 672;
+    pub const LEN: usize = 688;
 
     pub fn parse(data: &[u8]) -> Result<Self, VaultChainError> {
         let data = header(data, Self::LEN, VAULT_DISCRIMINATOR, VAULT_VERSION)?;

@@ -15,7 +15,9 @@ use super::tx::{ensure_deadline_ahead_at, sign_transaction_base64_unverified};
 use super::{VaultOperatorClient, VaultOperatorConfig, VaultRequestError, VaultTxError};
 use crate::orders::{BytesSigner, SignerLike};
 use crate::types::ids::OrderId;
-use crate::types::{VaultDelegatePermissions, VaultOperatorKind, VaultSwapMode};
+use crate::types::{
+    VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection, VaultSwapMode,
+};
 use crate::wire::{decode_base58_32, decode_base58_64, encode_base58};
 use crate::ws::managed::{ManagedWsEvent, ManagedWsState, SendAwaitError};
 use crate::ws::types::{
@@ -333,7 +335,37 @@ async fn reconcile_adds_maker_reads_when_delegate_can_sign_quotes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn governance_recovers_maker_state_without_quote_capability() {
+async fn governance_without_quote_permission_recovers_only_taker_state() {
+    let (listener, url) = bind().await;
+    let peer = tokio::spawn(async move {
+        let mut socket = accept(&listener).await;
+        vault_handshake_response(
+            &mut socket,
+            ServerMessage::VaultAuthSuccess(VaultAuthSuccessData {
+                vault_pda: vault_pda(),
+                operator: operator().pubkey_base58(),
+                operator_kind: VaultOperatorKind::Governance,
+                permissions: VaultDelegatePermissions::from_bits(61),
+            }),
+        )
+        .await;
+        answer_reconcile(&mut socket, TAKER_READS).await;
+        drain_until_closed(socket).await;
+    });
+
+    let client = VaultOperatorClient::spawn(config(url)).expect("spawn vault client");
+    client
+        .wait_until_ready()
+        .await
+        .expect("governance recovery");
+    assert!(!client.can_maker());
+    assert!(client.can_taker());
+    client.close().await.expect("close");
+    peer.await.expect("peer");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn governance_with_quote_permission_recovers_maker_state_and_can_quote() {
     let (listener, url) = bind().await;
     let peer = tokio::spawn(async move {
         let mut socket = accept(&listener).await;
@@ -350,14 +382,12 @@ async fn governance_recovers_maker_state_without_quote_capability() {
         answer_reconcile(&mut socket, ALL_READS).await;
         drain_until_closed(socket).await;
     });
-
     let client = VaultOperatorClient::spawn(config(url)).expect("spawn vault client");
     client
         .wait_until_ready()
         .await
-        .expect("governance recovery");
-    assert!(!client.can_maker());
-    assert!(client.can_taker());
+        .expect("governance maker recovery");
+    assert!(client.can_maker() && client.can_taker());
     client.close().await.expect("close");
     peer.await.expect("peer");
 }
@@ -373,8 +403,6 @@ async fn reconnect_reauthenticates_with_start_vault_auth() {
         allow_disconnect.await.expect("first ready state observed");
         drop(socket);
 
-        // `vault_handshake` asserts the second message is StartVaultAuth,
-        // so a ResumeAuth attempt fails the test here.
         let mut socket = accept(&listener).await;
         vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_TAKER).await;
         answer_reconcile(&mut socket, TAKER_READS).await;
@@ -417,8 +445,7 @@ fn swap_request() -> SwapQuoteData {
         request_id: Uuid::new_v4(),
         vault_pda: vault_pda(),
         mode: VaultSwapMode::Rebalance,
-        input_mint: "So11111111111111111111111111111111111111112".to_string(),
-        output_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+        direction: VaultSwapDirection::MainToSecond,
         amount: "1000".to_string(),
         slippage_bps: 50,
     }
@@ -433,7 +460,6 @@ async fn swap_quote_is_correlated_and_times_out_without_a_reply() {
         vault_handshake(&mut socket, VaultDelegatePermissions::ALL).await;
         answer_reconcile(&mut socket, ALL_READS).await;
 
-        // First request goes unanswered until the client has given up.
         let ClientMessage::SwapQuote(_) = receive_client(&mut socket).await else {
             panic!("expected SwapQuote");
         };
@@ -689,7 +715,6 @@ fn deadlines_are_checked_before_signing() {
 
 #[tokio::test]
 async fn expired_submit_before_is_rejected_locally() {
-    // Never accepted: the session stays in Connecting, signing needs no socket.
     let (_listener, url) = bind().await;
     let client = VaultOperatorClient::spawn(config(url)).expect("spawn vault client");
     let execution_id = OrderId::new([6u8; 32]);
@@ -855,7 +880,7 @@ async fn reconnect_clears_old_grant_then_uses_reduced_permissions() {
                     }),
                 )
                 .await;
-                Some(socket) // Keep TCP open: the control message must end this session.
+                Some(socket)
             } else {
                 drop(socket);
                 None
@@ -1006,8 +1031,6 @@ fn locally_approved_message_is_required_before_signing() {
         let signed =
             super::tx::sign_transaction_base64(&trusted, expected, signer.as_ref()).unwrap();
         assert_signed_by(&signed, 0, &signer);
-        // A different program key, blockhash or instruction/lookup byte cannot
-        // be authorized merely because the expected operator is a signer.
         for index in [
             trusted_bytes.len() - 1,
             65 + usize::from(v0) + 4 + 32,

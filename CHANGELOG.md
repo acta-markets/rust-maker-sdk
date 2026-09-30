@@ -2,8 +2,12 @@
 
 ## 0.4.3-vaults.1
 
+- The `http` feature adds `http::HttpClient`, a read-only client for the public `/api/v1/vaults`, `/api/v1/vaults/{pda}` and `/api/v1/markets` routes with wire-exact `Vault` and `Market` types.
+- `can_maker()` accepts governance with a current `SIGN_MAKER_QUOTES` grant. The backend requires an active primary-delegate grant even when governance and delegate share a key; revoked or expired grants cannot quote.
+
+- `SwapQuoteData` carries `direction: VaultSwapDirection` (`main_to_second` / `second_to_main`) instead of `input_mint` / `output_mint`.
 - `RfqRequest`, `AcceptQuote`, `SubmitSignedSponsoredTx` and `CancelRfq` now wait for a Ready session like other trading messages.
-- The `vault-chain` feature adds `chain::vault`: `VaultManager` builds `SetAcceptingDeposits`, `ProcessVaultEquity` (and the idle-withdrawal variant), `ProcessDeposits`, `ProcessWithdrawals`, `ProcessFinalWithdrawal` and `FinalizeVaultCycle`, plus batch helpers chunked by `CAPITAL_TX_USERS` (three users fit the 1232-byte packet) and `vault_capital_batch_compute_units`.
+- The `vault-chain` feature adds `chain::vault`: `VaultManager` builds `SetAcceptingDeposits`, `ProcessVaultEquity` (and the idle-withdrawal variant), `ProcessDeposits`, `ProcessWithdrawals`, `ProcessFinalWithdrawal` and `FinalizeVaultCycle`; batches are capped at `VAULT_CAPITAL_BATCH_USERS` (three users fit the 1232-byte packet) and sized with `vault_capital_batch_compute_units` over `deposit_batch_shape_with_destinations` / `withdrawal_batch_shape_with_destinations`.
 - Vault governance instructions: `propose_update`, `apply_update`, `cancel_update`, `rotate_delegate`, `disable_delegate`.
 - `VaultAccount` / `VaultRequest` decoders, `oracle_source_pyth_feed` and `pyth_price_feed_account`.
 - Crank decision `next_step`, `WindowTracker` and `plan_withdrawals`; `examples/vault_capital.rs` runs the cycle over RPC.

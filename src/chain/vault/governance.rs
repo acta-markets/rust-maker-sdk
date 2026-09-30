@@ -143,7 +143,6 @@ impl VaultManager {
         let mut ix = self.instruction(
             VaultIx::ApplyVaultUpdate,
             vec![
-                AccountMeta::new_readonly(self.args.actor, false),
                 AccountMeta::new(self.addresses.vault, false),
                 AccountMeta::new(self.addresses.policy, false),
                 AccountMeta::new(self.pending_update(kind), false),
@@ -160,8 +159,9 @@ impl VaultManager {
                     "fee and HWM updates require both price updates to settle the old terms",
                 ));
             };
-            ix.accounts
-                .extend(self.process_equity(main, second).accounts);
+            let mut equity = self.process_equity(main, second).accounts;
+            equity.drain(1..4);
+            ix.accounts.extend(equity);
         }
         Ok(ix)
     }

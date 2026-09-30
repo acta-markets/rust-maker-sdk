@@ -5,7 +5,6 @@ use strum::{AsRefStr, Display};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-// Names match server wire tags.
 #[allow(clippy::enum_variant_names)]
 #[non_exhaustive]
 pub enum RateLimitReason {

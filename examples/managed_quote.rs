@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let quote = RfqBinding::from_broadcast(rfq)?
                     .quote()
                     .maker_owner(maker_owner)
-                    .price(Price::new(1_000_000_000)) // your pricing logic
+                    .price(Price::new(1_000_000_000))
                     .valid_until(valid_until)
                     .nonce(Nonce::new(NONCE_GEN.next_u64()?))
                     .sign(signer_for_quotes.as_ref())?;

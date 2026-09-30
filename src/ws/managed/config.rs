@@ -20,7 +20,6 @@ pub enum GapPolicy {
     Reconnect,
 }
 
-// Bounds ring slots, not retained payload bytes; payload sizes depend on traffic.
 const MAX_INBOUND_RING_SLOTS: usize = 65_536;
 const MAX_OUTBOUND_QUEUE_WIRE_BYTES: usize = 256 * 1024 * 1024;
 const SERVER_MAX_BATCH_QUOTES: usize = 50;
@@ -199,7 +198,6 @@ impl ManagedWsConfig {
     #[cfg(feature = "vault")]
     pub(crate) fn with_vault_auth(mut self, vault_pda: String) -> Self {
         self.auth_flow = AuthFlow::Vault { vault_pda };
-        // Fresh vault authentication enables this feed on the server.
         self.initial_subscribe = Some(SubscribeData {
             request_id: uuid::Uuid::new_v4(),
             channels: vec![crate::ws::types::WsChannel::Vaults],

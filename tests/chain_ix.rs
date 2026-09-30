@@ -97,7 +97,7 @@ fn fund_position_covered_call_uses_quote_mint() {
         maker_owner: test_pubkey(2),
         position_pda: test_pubkey(3),
         market_pda: test_pubkey(4),
-        position_type: 0, // covered call → uses quote_mint
+        position_type: 0,
         underlying_mint,
         quote_mint,
         underlying_token_program_id: token_program(),

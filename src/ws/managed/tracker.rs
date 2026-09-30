@@ -33,8 +33,6 @@ impl CorrelationKey {
             ClientMessage::BatchQuotes(message) => Some(vec![Self::Batch(sorted_order_ids(
                 message.quotes.iter().map(|quote| quote.order_id),
             ))]),
-            // RfqClosed is lifecycle evidence, not a correlated command result.
-            // CancelRfq has no success receipt in this wire contract.
             ClientMessage::CancelRfq(_) => None,
             ClientMessage::RfqRequest(message) => message
                 .client_request_id

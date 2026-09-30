@@ -1,5 +1,5 @@
-use crate::types::VaultSwapMode;
 use crate::types::ids::OrderId;
+use crate::types::{VaultSwapDirection, VaultSwapMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -14,8 +14,7 @@ pub struct SwapQuoteData {
     pub request_id: Uuid,
     pub vault_pda: String,
     pub mode: VaultSwapMode,
-    pub input_mint: String,
-    pub output_mint: String,
+    pub direction: VaultSwapDirection,
     pub amount: String,
     #[serde(default = "default_swap_slippage_bps")]
     pub slippage_bps: u16,

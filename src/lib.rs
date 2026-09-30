@@ -44,6 +44,9 @@ pub use types::vault::{
 #[cfg(feature = "chain")]
 pub mod chain;
 
+#[cfg(feature = "http")]
+pub mod http;
+
 #[cfg(feature = "ws-client")]
 pub use ws::client::{PreparedClientMessage, WsClient, WsTransportConfig};
 

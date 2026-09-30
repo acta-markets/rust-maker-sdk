@@ -18,7 +18,6 @@ const BOOL_LEN: usize = 1;
 const U64_LEN: usize = 8;
 const HEADER_LEN: usize = TAG_LEN + CHAIN_ID_LEN + PUBKEY_LEN;
 
-// Body field offsets (relative to HEADER_LEN).
 const OFF_IS_TAKER_BUY: usize = 0;
 const OFF_POSITION_TYPE: usize = OFF_IS_TAKER_BUY + BOOL_LEN;
 const OFF_MARKET: usize = OFF_POSITION_TYPE + BOOL_LEN;
