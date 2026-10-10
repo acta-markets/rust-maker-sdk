@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `VaultAccount` decodes the 712-byte vault: `capital_fallback_delay_secs`, `closing_started_at`, `boundary_equity` and `boundary_shares`. Deposits and withdrawals are priced at the boundary pair; `last_share_price` is display-only.
+- `VaultAccount::parse` also accepts the 688-byte v1 vault (`VaultAccount::LEGACY_LEN`) with `needs_migration` set and the boundary fields zero; other lengths fail with `VaultChainError::AccountLength`. `VaultManager::migrate_vault` encodes the permissionless `MigrateVault` (payer = actor).
+- `HttpClient::tokens()` (`GET /api/v1/tokens`, `http::Tokens`) and `HttpClient::venue()` (`GET /api/v1/venue`, `http::Venue`: minimum quote validity, RFQ timeout bounds, settlement buffer, program id). `TokenInfo` gains optional `strike_tick` and `oracle_feed_ids`; older servers still decode.
+- Checked signing for server-built vault transactions (`vault-chain`): `VaultOperatorClient::verify_and_sign_sponsored_tx` and `verify_and_sign_swap`, plus `chain::vault::verify_vault_open` / `verify_vault_swap`. The expected instructions are rebuilt locally from `VaultOpenIntent` (`Sale` = `OpenPositionForVaultAsTaker`, `BetweenVaults` = `OpenPositionBetweenVaults`, `Fill` = `OpenPositionForVaultAsMaker`) with `VaultTradeTerms`, or from `VaultSwapIntent` (`VaultSpotRebalance`, `RecoveryConvertToMain`, `ClosingConvertToMain`). Fee payer, signers, compute budget (`ComputeBudgetBounds`), every account with its signer/writable flags, data, canonical idempotent ATA creates, the maker's Ed25519 quote signature and the bound order id must match; Jupiter route accounts are accepted only in the swap's route tail (at most 64, no signer, no payer, no read-only vault account made writable). v0 lookup tables resolve from the tables passed in; `ChainClient::address_lookup_tables` fetches active ones. `VaultIntentError` names the first mismatch. Prefer these over the `_unverified` helpers.
+- `VaultManager` encodes `open_position_as_taker`, `open_position_as_maker`, `open_position_with_vault_holder` and `swap` in the current contract layouts (legs picked by mint; mint/program slots in market order).
+
 ## 0.4.3-vaults.1
 
 - The `http` feature adds `http::HttpClient`, a read-only client for the public `/api/v1/vaults`, `/api/v1/vaults/{pda}` and `/api/v1/markets` routes with wire-exact `Vault` and `Market` types.

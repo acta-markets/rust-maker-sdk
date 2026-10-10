@@ -14,6 +14,10 @@ pub enum ChainError {
     AccountOwnerMismatch { expected: Pubkey, actual: Pubkey },
     #[error("account discriminator mismatch: expected {expected}, got {actual}")]
     AccountDiscriminatorMismatch { expected: u8, actual: u8 },
+    #[error("account {0} does not exist")]
+    MissingAccount(Pubkey),
+    #[error("lookup table {0} is deactivated")]
+    LookupTableDeactivated(Pubkey),
     #[error("account is not initialized")]
     UninitializedAccount,
     #[error("unknown position status: {0}")]

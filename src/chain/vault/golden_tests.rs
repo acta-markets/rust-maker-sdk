@@ -4,12 +4,12 @@ use sha2::{Digest, Sha256};
 use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
 
 use super::{
-    VAULT_CAPITAL_BATCH_USERS, VaultAccount, VaultGovernanceUpdate, VaultGovernanceUpdateKind,
-    VaultManager, VaultManagerArgs, VaultPhase, VaultPolicyUpdate, VaultRequest, VaultRequestKind,
-    VaultSafety, oracle_source_pyth_feed, pda, vault_capital_batch_compute_units,
+    VaultAccount, VaultChainError, VaultGovernanceUpdate, VaultGovernanceUpdateKind, VaultManager,
+    VaultManagerArgs, VaultPhase, VaultPolicyUpdate, VaultRequest, VaultRequestKind, VaultSafety,
+    oracle_source_pyth_feed, pda, vault_capital_batch_compute_units,
 };
 use crate::VaultDelegatePermissions;
-use crate::chain::ix::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
+use crate::chain::ix::{SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
 
 fn key(seed: u8) -> Pubkey {
     Pubkey::new_from_array([seed; 32])
@@ -329,7 +329,7 @@ fn patterned(len: usize) -> Vec<u8> {
 #[test]
 fn vault_account_decodes_golden_fields() {
     let mut data = patterned(VaultAccount::LEN);
-    data[..5].copy_from_slice(&[9, 1, 255, 3, 1]);
+    data[..5].copy_from_slice(&[9, 2, 255, 3, 1]);
     data[12..16].copy_from_slice(&3u32.to_le_bytes());
     data[402] = 1;
     data[403] = 0;
@@ -368,6 +368,20 @@ fn vault_account_decodes_golden_fields() {
         (v.main_token_program, v.second_token_program),
         (TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID)
     );
+    assert_eq!(
+        (
+            v.capital_fallback_delay_secs,
+            v.closing_started_at,
+            v.boundary_equity,
+            v.boundary_shares
+        ),
+        (
+            u64::from_le_bytes(data[408..416].try_into().unwrap()),
+            u64::from_le_bytes(data[432..440].try_into().unwrap()),
+            u64::from_le_bytes(data[440..448].try_into().unwrap()),
+            u64::from_le_bytes(data[448..456].try_into().unwrap())
+        )
+    );
 
     let mut short = data.clone();
     short.pop();
@@ -377,6 +391,119 @@ fn vault_account_decodes_golden_fields() {
     assert!(VaultAccount::parse(&unknown_flag).is_err());
     data[0] = 12;
     assert!(VaultAccount::parse(&data).is_err());
+}
+
+fn vault_bytes(len: usize, version: u8) -> Vec<u8> {
+    let mut data = patterned(len);
+    data[..5].copy_from_slice(&[9, version, 0, 1, 0]);
+    data[12..16].copy_from_slice(&1u32.to_le_bytes());
+    data[402] = 0;
+    data[403] = 1;
+    data
+}
+
+#[test]
+fn vault_account_decodes_legacy_layout_and_flags_migration() {
+    let legacy = vault_bytes(VaultAccount::LEGACY_LEN, 1);
+    let mut current = legacy[..432].to_vec();
+    current.extend([0; 24]);
+    current.extend(&legacy[432..]);
+    current[1] = 2;
+    assert_eq!(current.len(), VaultAccount::LEN);
+
+    let v1 = VaultAccount::parse(&legacy).unwrap();
+    let v2 = VaultAccount::parse(&current).unwrap();
+    assert!(v1.needs_migration);
+    assert!(!v2.needs_migration);
+    assert_eq!(
+        (
+            v1.closing_started_at,
+            v1.boundary_equity,
+            v1.boundary_shares
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        VaultAccount {
+            needs_migration: false,
+            ..v1
+        },
+        v2
+    );
+    assert_eq!(
+        (v1.capital_fallback_delay_secs, v1.total_shares),
+        (
+            u64::from_le_bytes(legacy[408..416].try_into().unwrap()),
+            u64::from_le_bytes(legacy[288..296].try_into().unwrap())
+        )
+    );
+    assert_eq!(
+        (
+            v1.phase,
+            v1.safety,
+            v1.main_token_program,
+            v1.second_token_program
+        ),
+        (
+            VaultPhase::Active,
+            VaultSafety::Normal,
+            TOKEN_PROGRAM_ID,
+            TOKEN_2022_PROGRAM_ID
+        )
+    );
+
+    current[440..448].copy_from_slice(&9u64.to_le_bytes());
+    let v2 = VaultAccount::parse(&current).unwrap();
+    assert_eq!(v2.boundary_equity, 9);
+}
+
+#[test]
+fn vault_account_rejects_unknown_lengths_and_mismatched_versions() {
+    for len in [0, 700, VaultAccount::LEGACY_LEN - 1, VaultAccount::LEN + 1] {
+        assert_eq!(
+            VaultAccount::parse(&vec![9; len]),
+            Err(VaultChainError::AccountLength {
+                expected: VaultAccount::LEN,
+                actual: len
+            })
+        );
+    }
+    assert_eq!(
+        VaultAccount::parse(&vault_bytes(VaultAccount::LEGACY_LEN, 2)),
+        Err(VaultChainError::Version(2))
+    );
+    assert_eq!(
+        VaultAccount::parse(&vault_bytes(VaultAccount::LEN, 1)),
+        Err(VaultChainError::Version(1))
+    );
+    assert_eq!(
+        VaultAccount::parse(&vault_bytes(VaultAccount::LEN, 3)),
+        Err(VaultChainError::Version(3))
+    );
+}
+
+#[test]
+fn migrate_vault_is_opcode_83_with_payer_vault_and_system_program() {
+    let m = manager(TOKEN_PROGRAM_ID);
+    let ix = m.migrate_vault();
+    assert_eq!(
+        ix.program_id,
+        Pubkey::new_from_array(crate::ACTA_PROGRAM_ID)
+    );
+    assert_eq!(ix.data, vec![83]);
+    let metas: Vec<_> = ix
+        .accounts
+        .iter()
+        .map(|meta| (meta.pubkey, meta.is_signer, meta.is_writable))
+        .collect();
+    assert_eq!(
+        metas,
+        vec![
+            (key(1), true, true),
+            (m.addresses.vault, false, true),
+            (SYSTEM_PROGRAM_ID, false, false),
+        ]
+    );
 }
 
 #[test]
@@ -391,6 +518,10 @@ fn request_and_oracle_source_decode_golden_fields() {
              GgfCrwtpeeaGfy2h9rWhjQXyf3H3RDXGSGqomi7NU6G9 \
              11710313704246995145 11131592321559158977"
         );
+        for version in [2, 3] {
+            data[1] = version;
+            assert!(VaultRequest::parse(&data, kind).is_err());
+        }
     }
     let mut data = patterned(424);
     data[..2].copy_from_slice(&[7, 1]);
@@ -405,6 +536,7 @@ fn request_and_oracle_source_decode_golden_fields() {
 #[cfg(feature = "chain-rpc")]
 #[test]
 fn capital_tx_users_fit_the_legacy_packet() {
+    use super::VAULT_CAPITAL_BATCH_USERS;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_sdk::transaction::Transaction;
 

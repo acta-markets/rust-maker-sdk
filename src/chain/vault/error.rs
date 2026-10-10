@@ -7,6 +7,8 @@ use super::manager::VAULT_CAPITAL_BATCH_USERS;
 pub enum VaultChainError {
     #[error("account data is {actual} bytes, expected at least {expected}")]
     AccountTooShort { expected: usize, actual: usize },
+    #[error("account data is {actual} bytes, expected {expected}")]
+    AccountLength { expected: usize, actual: usize },
     #[error("account discriminator mismatch: expected {expected}, got {actual}")]
     Discriminator { expected: u8, actual: u8 },
     #[error("unsupported account version {0}")]

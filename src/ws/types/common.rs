@@ -127,6 +127,10 @@ pub struct TokenInfo {
     pub decimals: Decimals,
     pub size_rule: PositionSizeRule,
     pub symbol: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike_tick: Option<Strike>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oracle_feed_ids: Vec<String>,
 }
 
 /// USD totals from prices captured at signed-transaction submission.

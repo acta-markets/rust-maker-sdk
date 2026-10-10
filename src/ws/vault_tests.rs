@@ -1049,3 +1049,145 @@ fn locally_approved_message_is_required_before_signing() {
         }
     }
 }
+
+#[cfg(feature = "chain")]
+#[tokio::test]
+async fn checked_signing_verifies_served_intent_before_signing() {
+    use std::str::FromStr;
+
+    use solana_sdk::message::AddressLookupTableAccount;
+    use solana_sdk::pubkey::Pubkey;
+
+    use crate::chain::vault::{
+        ComputeBudgetBounds, VaultIntentError, VaultManager, VaultManagerArgs, VaultOpenIntent,
+        VaultSwapIntent, VaultTradeTerms,
+    };
+
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../tests/fixtures/vault_served_tx.json")).unwrap();
+    let key = |value: &serde_json::Value| Pubkey::from_str(value.as_str().unwrap()).unwrap();
+    let manager = |case: &serde_json::Value, field: &str| {
+        let vault = &case[field];
+        VaultManager::new(VaultManagerArgs {
+            program_id: key(&case["program_id"]),
+            vault_id: hex::decode(vault["vault_id"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            actor: key(&vault["actor"]),
+            delegate_authority: key(&vault["delegate_authority"]),
+            main_mint: key(&vault["main_mint"]),
+            second_mint: key(&vault["second_mint"]),
+            share_mint: key(&vault["share_mint"]),
+            main_token_program: key(&vault["main_token_program"]),
+            second_token_program: key(&vault["second_token_program"]),
+        })
+        .unwrap()
+    };
+    let table = |case: &serde_json::Value| {
+        let table = &case["served"]["lookup_table"];
+        vec![AddressLookupTableAccount {
+            key: key(&table["key"]),
+            addresses: table["addresses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(key)
+                .collect(),
+        }]
+    };
+    let bounds = ComputeBudgetBounds {
+        max_unit_limit: 400_000,
+        max_unit_price_micro_lamports: 1_000,
+    };
+    let spawn = |url: String, secret: u8| {
+        let mut config = config(url);
+        config.operator = Arc::new(BytesSigner::from_secret([secret; 32]));
+        VaultOperatorClient::spawn(config).expect("spawn vault client")
+    };
+
+    let case = &cases[0];
+    let (_listener, url) = bind().await;
+    let client = spawn(url, 10);
+    let writer = manager(case, "writer");
+    let p = &case["position"];
+    let intent = VaultOpenIntent::Sale {
+        writer: &writer,
+        maker_owner: key(&case["maker_owner"]),
+        maker_quote_signer: key(&p["quote_signer"]),
+        terms: VaultTradeTerms {
+            underlying_mint: key(&p["underlying_mint"]),
+            quote_mint: key(&p["quote_mint"]),
+            expiry_ts: p["expiry_ts"].as_u64().unwrap(),
+            is_put: p["is_put"].as_bool().unwrap(),
+            strike: p["strike"].as_u64().unwrap(),
+            quantity: p["quantity"].as_u64().unwrap(),
+            price: p["price"].as_u64().unwrap(),
+            valid_until: p["valid_until"].as_u64().unwrap(),
+            nonce: p["nonce"].as_u64().unwrap(),
+        },
+    };
+    let mut to_sign = crate::ws::types::SponsoredTxToSignData {
+        order_id: OrderId::from_hex(p["order_id"].as_str().unwrap()).unwrap(),
+        tx_base64: case["served"]["tx_base64"].as_str().unwrap().to_owned(),
+        signature_deadline: std::time::SystemTime::now() + Duration::from_secs(60),
+    };
+    let signed = client
+        .verify_and_sign_sponsored_tx(&to_sign, &intent, &table(case), bounds)
+        .unwrap();
+    assert_signed_by(&signed.tx_base64, 0, &BytesSigner::from_secret([10; 32]));
+    assert!(matches!(
+        client.verify_and_sign_sponsored_tx(&to_sign, &intent, &[], bounds),
+        Err(VaultTxError::Intent(VaultIntentError::MissingLookupTable(
+            _
+        )))
+    ));
+    to_sign.order_id = OrderId::new([1; 32]);
+    assert!(matches!(
+        client.verify_and_sign_sponsored_tx(&to_sign, &intent, &table(case), bounds),
+        Err(VaultTxError::Intent(VaultIntentError::OrderId))
+    ));
+    client.close().await.expect("close");
+
+    let case = &cases[14];
+    let (_listener, url) = bind().await;
+    let client = spawn(url, 60);
+    let vault = manager(case, "swapper");
+    let swap = &case["swap"];
+    let request = SwapQuoteData {
+        request_id: Uuid::from_str(swap["request_id"].as_str().unwrap()).unwrap(),
+        vault_pda: vault.addresses.vault.to_string(),
+        mode: VaultSwapMode::Rebalance,
+        direction: VaultSwapDirection::MainToSecond,
+        amount: "1000000".into(),
+        slippage_bps: 50,
+    };
+    let quote = SwapQuoteResultData {
+        request_id: request.request_id,
+        execution_id: OrderId::new([4; 32]),
+        mode: VaultSwapMode::Rebalance,
+        tx_base64: case["served"]["tx_base64"].as_str().unwrap().to_owned(),
+        in_amount: "1000000".into(),
+        quoted_out_amount: "2000".into(),
+        minimum_out_amount: "1990".into(),
+        valid_until: "1000100".into(),
+    };
+    let intent = |quote| VaultSwapIntent {
+        vault: &vault,
+        request: &request,
+        quote,
+        main_price_update: Pubkey::new_from_array([71; 32]),
+        second_price_update: Pubkey::new_from_array([72; 32]),
+    };
+    assert!(matches!(
+        client.verify_and_sign_swap(&intent(&quote), &table(case), bounds),
+        Err(VaultTxError::Expired { .. })
+    ));
+    let mut loose = quote.clone();
+    loose.minimum_out_amount = "1".into();
+    assert!(matches!(
+        client.verify_and_sign_swap(&intent(&loose), &table(case), bounds),
+        Err(VaultTxError::Intent(VaultIntentError::Terms(_)))
+    ));
+    client.close().await.expect("close");
+}

@@ -1,8 +1,8 @@
 use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
-    account::Account, instruction::Instruction, pubkey::Pubkey, signature::Signature,
-    signer::Signer, transaction::Transaction,
+    account::Account, instruction::Instruction, message::AddressLookupTableAccount, pubkey::Pubkey,
+    signature::Signature, signer::Signer, transaction::Transaction,
 };
 
 use crate::chain::ChainError;
@@ -17,6 +17,47 @@ use crate::chain::wsol::{
     NativeSolBudget, NativeSolFunding, WrapPlan, WsolWrapRequest, is_native_mint, plan_wsol_wrap,
     token_account_rent_lamports,
 };
+
+const ADDRESS_LOOKUP_TABLE_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("AddressLookupTab1e1111111111111111111111111");
+const LOOKUP_TABLE_META_LEN: usize = 56;
+
+fn parse_lookup_table(
+    key: Pubkey,
+    account: &Account,
+) -> Result<AddressLookupTableAccount, ChainError> {
+    if account.owner != ADDRESS_LOOKUP_TABLE_PROGRAM_ID {
+        return Err(ChainError::AccountOwnerMismatch {
+            expected: ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
+            actual: account.owner,
+        });
+    }
+    let data = &account.data;
+    let (Some(kind), Some(deactivation), Some(addresses)) = (
+        data.get(..4),
+        data.get(4..12),
+        data.get(LOOKUP_TABLE_META_LEN..),
+    ) else {
+        return Err(ChainError::InvalidAccountData);
+    };
+    if kind != 1u32.to_le_bytes() || addresses.len() % 32 != 0 {
+        return Err(ChainError::InvalidAccountData);
+    }
+    if deactivation != u64::MAX.to_le_bytes() {
+        return Err(ChainError::LookupTableDeactivated(key));
+    }
+    Ok(AddressLookupTableAccount {
+        key,
+        addresses: addresses
+            .chunks_exact(32)
+            .map(|chunk| {
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(chunk);
+                Pubkey::new_from_array(bytes)
+            })
+            .collect(),
+    })
+}
 
 pub struct ChainClient {
     rpc: RpcClient,
@@ -331,6 +372,25 @@ impl ChainClient {
             .amount
             .parse::<u64>()
             .map_err(|_| ChainError::InvalidAccountData)
+    }
+
+    /// Active lookup tables by key, for verifying served v0 transactions.
+    pub async fn address_lookup_tables(
+        &self,
+        keys: &[Pubkey],
+    ) -> Result<Vec<AddressLookupTableAccount>, ChainError> {
+        let accounts = self
+            .rpc
+            .get_multiple_accounts_with_commitment(keys, self.commitment)
+            .await?
+            .value;
+        keys.iter()
+            .zip(accounts)
+            .map(|(key, account)| match account {
+                Some(account) => parse_lookup_table(*key, &account),
+                None => Err(ChainError::MissingAccount(*key)),
+            })
+            .collect()
     }
 
     async fn resolve_token_program(

@@ -83,7 +83,7 @@ pub(crate) const TEST_MAKER_AUTH_CHALLENGE: &str = concat!(
     "Issued At: 2026-09-15T00:00:00Z\n"
 );
 
-#[cfg(test)]
+#[cfg(all(test, feature = "vault"))]
 pub(crate) fn test_vault_auth_challenge(operator: &str, vault: &str) -> String {
     let challenge =
         TEST_MAKER_AUTH_CHALLENGE.replace("Nonce: ", &format!("Wallet: {operator}\nNonce: "));

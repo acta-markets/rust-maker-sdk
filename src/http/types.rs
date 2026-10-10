@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+
+use crate::ws::types::TokenInfo;
 
 /// Public `/api/v1/vaults` row. Integers wider than JSON-safe stay decimal strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -186,4 +190,26 @@ pub(super) struct VaultsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct MarketsResponse {
     pub(super) markets: Vec<Market>,
+}
+
+/// Public `/api/v1/venue`: limits rfq-server validates against. `None` limits are unbounded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Venue {
+    pub program_id: String,
+    pub min_quote_validity_seconds: u32,
+    pub settlement_buffer_seconds: u32,
+    pub quote_refresh_lead_seconds: u32,
+    pub min_rfq_timeout_seconds: u32,
+    pub max_rfq_timeout_seconds: u32,
+    pub signature_timeout_seconds: u64,
+    pub max_quotes_per_rfq: Option<u64>,
+    pub max_active_rfqs_per_taker: Option<u64>,
+    pub pre_expiry_cutoff_seconds: u64,
+}
+
+/// Public `/api/v1/tokens`: tokens of the tradable markets, same shape as WS `Tokens`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tokens {
+    pub underlyings: Vec<TokenInfo>,
+    pub quotes_by_underlying: HashMap<String, Vec<TokenInfo>>,
 }

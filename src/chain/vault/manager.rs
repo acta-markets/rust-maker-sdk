@@ -23,6 +23,10 @@ const COMPUTE_UNITS_PER_DERIVATION_STEP: u32 = 1_800;
 #[derive(Clone, Copy)]
 pub(super) enum VaultIx {
     ProcessVaultEquity = 37,
+    OpenPositionForVaultAsTaker = 41,
+    OpenPositionForVaultAsMaker = 42,
+    VaultSpotRebalance = 47,
+    RecoveryConvertToMain = 48,
     ProcessWithdrawals = 38,
     ProcessDeposits = 39,
     FinalizeVaultCycle = 40,
@@ -32,7 +36,10 @@ pub(super) enum VaultIx {
     ApplyVaultUpdate = 58,
     CancelVaultUpdate = 59,
     ProcessFinalWithdrawal = 64,
+    OpenPositionBetweenVaults = 65,
     DisableVaultDelegate = 72,
+    ClosingConvertToMain = 78,
+    MigrateVault = 83,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +184,19 @@ impl VaultManager {
             ),
         };
         Ok(Self { args, addresses })
+    }
+
+    #[must_use]
+    pub fn migrate_vault(&self) -> Instruction {
+        self.instruction(
+            VaultIx::MigrateVault,
+            vec![
+                AccountMeta::new(self.args.actor, true),
+                AccountMeta::new(self.addresses.vault, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            ],
+            &[],
+        )
     }
 
     #[must_use]

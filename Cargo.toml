@@ -83,7 +83,7 @@ required-features = ["ws-client"]
 
 [[example]]
 name = "vault_operator"
-required-features = ["vault"]
+required-features = ["vault-chain"]
 
 [[example]]
 name = "vault_capital"

@@ -7,8 +7,8 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 
 pub use types::{
-    Market, ProjectionCursor, TokenProgramKind, TrackRecord, Vault, VaultPerformance, VaultPolicy,
-    VaultPosition, VaultPositionRole, VaultPositionStatus, VaultPositionType,
+    Market, ProjectionCursor, TokenProgramKind, Tokens, TrackRecord, Vault, VaultPerformance,
+    VaultPolicy, VaultPosition, VaultPositionRole, VaultPositionStatus, VaultPositionType, Venue,
 };
 use types::{MarketsResponse, VaultPositionsResponse, VaultsResponse};
 
@@ -84,6 +84,14 @@ impl HttpClient {
     pub async fn markets(&self) -> Result<Vec<Market>, HttpError> {
         let response: MarketsResponse = self.get("/api/v1/markets").await?;
         Ok(response.markets)
+    }
+
+    pub async fn tokens(&self) -> Result<Tokens, HttpError> {
+        self.get("/api/v1/tokens").await
+    }
+
+    pub async fn venue(&self) -> Result<Venue, HttpError> {
+        self.get("/api/v1/venue").await
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, HttpError> {

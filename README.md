@@ -44,7 +44,7 @@ the market descriptor and derive its PDA before using low-level signing APIs.
 | `chain` | Solana instruction builders (`DepositPremium`, `WithdrawPremium`, `FundPosition`) |
 | `chain-rpc` | Solana RPC queries (extends `chain`) |
 | `vault-chain` | Vault capital-cycle instructions (`VaultManager`) and derived vault addresses, account decoders, crank decision and Pyth price-account derivation (`vault` + `chain`) |
-| `http` | Read-only `HttpClient` for the public vault and market endpoints (reqwest, rustls with native roots) |
+| `http` | Read-only `HttpClient` for the public vault, market, token and venue endpoints (reqwest, rustls with native roots). `venue()` returns server limits (minimum quote validity, RFQ timeout bounds, settlement buffer); `tokens()` returns per-underlying size rules, strike tick and Pyth feed ids. Read these instead of hardcoding them. |
 | `test-helpers` | Test utilities (`ManagedWsHandle::test_handle`, message injection) |
 
 Managed clients validate the canonical Acta authentication challenge before invoking
@@ -413,13 +413,22 @@ subscriptions and projections share one connection.
   the matching backend update. The server and contract check each action.
 - **Signing:** the operator signs challenges and prepared transactions.
   Maker quotes require an active primary-delegate grant; `sign_quote` puts the vault address
-  in `maker_owner`. `sign_sponsored_tx` and `sign_swap` check
-  `signature_deadline` and `valid_until` locally. Offline signing
-  needs no connection and grants no execution permission. Safe signing helpers
-  require an independently built or approved transaction
-  message, including the order/route, payer, permissions, blockhash and lookup
-  tables. Every byte must match before signing. Never use the server transaction
-  as the expected message. `_unverified` helpers skip this check.
+  in `maker_owner`. With `vault-chain`, `verify_and_sign_sponsored_tx` and
+  `verify_and_sign_swap` rebuild the expected instructions from what the operator
+  agreed to (`VaultOpenIntent::Sale` / `BetweenVaults` / `Fill` with
+  `VaultTradeTerms`; `VaultSwapIntent` with the request, quote and price-update
+  accounts) and sign only if the served transaction matches: fee payer and
+  signers, compute budget within `ComputeBudgetBounds`, every instruction's
+  program, accounts (signer/writable) and data, canonical idempotent ATA
+  creates, the maker's Ed25519 quote signature, and a Jupiter route confined to
+  the swap instruction's tail (at most 64 accounts, no signer, no payer, no
+  read-only vault account made writable). The blockhash is not checked. v0
+  lookup tables are resolved from the tables passed in; `ChainClient::address_lookup_tables`
+  fetches active tables for `served_lookup_table_keys`. Errors name the first mismatch.
+  `verify_vault_open` / `verify_vault_swap` run the same checks without signing,
+  e.g. for an external taker filling a vault quote. Deadlines (`signature_deadline`,
+  `valid_until`) are checked locally. `_unverified` helpers skip all of this and
+  trust the server.
 - **Readiness:** each auth fetches `GetMyActiveRfqs` and `GetPositions`.
   A grant with maker permission also fetches `GetMmSummary`, `GetActiveRfqs`
   and `GetMyQuotes { scope: Live }`.
@@ -432,11 +441,14 @@ subscriptions and projections share one connection.
   swaps are governance-only.
 
 ```rust,no_run
-# #[cfg(feature = "vault")]
+# #[cfg(feature = "vault-chain")]
 # {
 use acta_maker_sdk::*;
+use acta_maker_sdk::chain::vault::{ComputeBudgetBounds, VaultManager, VaultSwapIntent};
 use acta_maker_sdk::ws::types::*;
 use std::sync::Arc;
+# fn load_vault_manager() -> Result<VaultManager, Box<dyn std::error::Error>> { unimplemented!() }
+# fn vault_price_updates() -> Result<(solana_sdk::pubkey::Pubkey, solana_sdk::pubkey::Pubkey), Box<dyn std::error::Error>> { unimplemented!() }
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 let operator = Arc::new(BytesSigner::from_secret([1u8; 32]));
 let config = VaultOperatorConfig::new(
@@ -456,18 +468,30 @@ let client = VaultOperatorClient::spawn(config)?;
 let mut projections = client.subscribe_projections();
 client.wait_until_ready().await?;
 
-let quote = client.swap_quote(SwapQuoteData {
+// `VaultManager::from_vault` over the on-chain vault account; price updates from its oracle sources.
+let vault: VaultManager = load_vault_manager()?;
+let (main_price_update, second_price_update) = vault_price_updates()?;
+let request = SwapQuoteData {
     request_id: uuid::Uuid::new_v4(),
     vault_pda: client.vault_pda().to_string(),
     mode: VaultSwapMode::Rebalance,
     direction: VaultSwapDirection::MainToSecond,
     amount: "1000".to_string(),
     slippage_bps: 50,
-}).await?;
-// Supply the independently built/approved local transaction message.
-// Never extract this value from quote.tx_base64 to satisfy the check.
-let expected_message = std::fs::read("approved-swap-message.bin")?;
-let submitted = client.swap_submit(client.sign_swap(&quote, &expected_message)?).await?;
+};
+let quote = client.swap_quote(request.clone()).await?;
+let lookup_tables: Vec<solana_sdk::message::AddressLookupTableAccount> = Vec::new();
+let submitted = client.swap_submit(client.verify_and_sign_swap(
+    &VaultSwapIntent {
+        vault: &vault,
+        request: &request,
+        quote: &quote,
+        main_price_update,
+        second_price_update,
+    },
+    &lookup_tables,
+    ComputeBudgetBounds { max_unit_limit: 600_000, max_unit_price_micro_lamports: 50_000 },
+)?).await?;
 tracing::info!(execution = ?submitted.execution_id, "swap queued");
 
 let step = projections.recv().await?;

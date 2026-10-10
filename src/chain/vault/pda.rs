@@ -70,3 +70,30 @@ pub(crate) fn withdraw_escrow_authority(
 pub(crate) fn pending_vault_update(program_id: &Pubkey, vault: &Pubkey, kind: u8) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"pending_update", vault.as_ref(), &[kind]], program_id)
 }
+
+pub(crate) fn market(
+    program_id: &Pubkey,
+    underlying_mint: &Pubkey,
+    quote_mint: &Pubkey,
+    expiry_ts: u64,
+    is_put: bool,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            b"market",
+            underlying_mint.as_ref(),
+            quote_mint.as_ref(),
+            &expiry_ts.to_le_bytes(),
+            &[u8::from(is_put)],
+        ],
+        program_id,
+    )
+}
+
+pub(crate) fn position(program_id: &Pubkey, order_id: &[u8; 32]) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"position", order_id], program_id)
+}
+
+pub(crate) fn premium_config(program_id: &Pubkey, premium_mint: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"config", premium_mint.as_ref()], program_id)
+}

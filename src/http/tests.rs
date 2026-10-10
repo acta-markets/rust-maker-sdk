@@ -5,13 +5,15 @@ use serde_json::Value;
 
 use super::types::{MarketsResponse, VaultPositionsResponse, VaultsResponse};
 use super::{
-    HttpClient, HttpError, TokenProgramKind, VaultPerformance, VaultPositionRole,
-    VaultPositionStatus, VaultPositionType,
+    HttpClient, HttpError, TokenProgramKind, Tokens, VaultPerformance, VaultPositionRole,
+    VaultPositionStatus, VaultPositionType, Venue,
 };
 
 const VAULTS: &str = include_str!("../../tests/fixtures/http_vaults.json");
 const MARKETS: &str = include_str!("../../tests/fixtures/http_markets.json");
 const POSITIONS: &str = include_str!("../../tests/fixtures/http_vault_positions.json");
+const VENUE: &str = include_str!("../../tests/fixtures/http_venue.json");
+const TOKENS: &str = include_str!("../../tests/fixtures/http_tokens.json");
 
 fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(json: &str) -> T {
     let decoded: T = serde_json::from_str(json).unwrap();
@@ -47,6 +49,29 @@ fn markets_round_trip_the_backend_shape() {
     let response: MarketsResponse = round_trip(MARKETS);
     assert_eq!(response.markets.len(), 2);
     assert_eq!(response.markets[1].settlement_price, Some(150_000_000_000));
+}
+
+#[test]
+fn venue_round_trips_the_backend_shape() {
+    let venue: Venue = round_trip(VENUE);
+    assert_eq!(venue.min_quote_validity_seconds, 100);
+    assert_eq!(venue.max_rfq_timeout_seconds, 120);
+    assert_eq!(venue.max_quotes_per_rfq, Some(50));
+}
+
+#[test]
+fn tokens_round_trip_the_backend_shape() {
+    let tokens: Tokens = round_trip(TOKENS);
+    let [sol] = tokens.underlyings.as_slice() else {
+        panic!("one underlying");
+    };
+    assert_eq!(sol.strike_tick.map(|tick| tick.value()), Some(500_000_000));
+    assert_eq!(sol.oracle_feed_ids.len(), 1);
+    let [usdc] = tokens.quotes_by_underlying[&sol.mint].as_slice() else {
+        panic!("one quote");
+    };
+    assert!(usdc.strike_tick.is_none());
+    assert_eq!(usdc.symbol, "USDC");
 }
 
 #[test]
@@ -106,6 +131,8 @@ async fn client_reads_public_routes() {
         ("200 OK", VAULTS.to_string()),
         ("200 OK", detail),
         ("200 OK", MARKETS.to_string()),
+        ("200 OK", TOKENS.to_string()),
+        ("200 OK", VENUE.to_string()),
         (
             "404 Not Found",
             r#"{"error":"Vault not found"}"#.to_string(),
@@ -119,6 +146,8 @@ async fn client_reads_public_routes() {
         .unwrap();
     assert_eq!(vault.open_positions, "2");
     assert_eq!(client.markets().await.unwrap().len(), 2);
+    assert_eq!(client.tokens().await.unwrap().underlyings.len(), 1);
+    assert_eq!(client.venue().await.unwrap().settlement_buffer_seconds, 90);
     let missing = client.vault("11111111111111111111111111111111").await;
     assert!(matches!(
         missing,
@@ -134,6 +163,8 @@ async fn client_reads_public_routes() {
             "/api/v1/vaults",
             "/api/v1/vaults/11111111111111111111111111111111",
             "/api/v1/markets",
+            "/api/v1/tokens",
+            "/api/v1/venue",
             "/api/v1/vaults/11111111111111111111111111111111",
         ]
     );

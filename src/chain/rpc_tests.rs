@@ -241,3 +241,39 @@ async fn native_funding_batches_only_the_required_accounts() {
         }
     }
 }
+
+#[test]
+fn lookup_table_parses_active_tables_only() {
+    let key = Pubkey::new_unique();
+    let address = Pubkey::new_unique();
+    let mut data = vec![0u8; LOOKUP_TABLE_META_LEN];
+    data[..4].copy_from_slice(&1u32.to_le_bytes());
+    data[4..12].copy_from_slice(&u64::MAX.to_le_bytes());
+    data.extend_from_slice(address.as_ref());
+    let mut account = Account {
+        lamports: 1,
+        data,
+        owner: ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
+        executable: false,
+        rent_epoch: 0,
+    };
+    let table = parse_lookup_table(key, &account).unwrap();
+    assert_eq!((table.key, table.addresses), (key, vec![address]));
+
+    account.data[4..12].copy_from_slice(&7u64.to_le_bytes());
+    assert!(matches!(
+        parse_lookup_table(key, &account),
+        Err(ChainError::LookupTableDeactivated(found)) if found == key
+    ));
+    account.data[4..12].copy_from_slice(&u64::MAX.to_le_bytes());
+    account.data.push(0);
+    assert!(matches!(
+        parse_lookup_table(key, &account),
+        Err(ChainError::InvalidAccountData)
+    ));
+    account.owner = Pubkey::new_unique();
+    assert!(matches!(
+        parse_lookup_table(key, &account),
+        Err(ChainError::AccountOwnerMismatch { .. })
+    ));
+}

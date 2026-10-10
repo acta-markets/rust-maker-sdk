@@ -5,6 +5,8 @@ mod governance;
 mod manager;
 mod pda;
 mod pyth;
+mod served;
+mod trading;
 
 pub use account::{
     VaultAccount, VaultPhase, VaultRequest, VaultRequestKind, VaultSafety, oracle_source_pyth_feed,
@@ -20,6 +22,14 @@ pub use manager::{
     vault_capital_batch_compute_units,
 };
 pub use pyth::{PYTH_PUSH_ORACLE_ID, pyth_price_feed_account};
+pub use served::{
+    ComputeBudgetBounds, VaultIntentError, VaultOpenIntent, VaultSwapIntent,
+    served_lookup_table_keys, verify_vault_open, verify_vault_swap,
+};
+pub use trading::{
+    JUPITER_V6_PROGRAM_ID, MAX_VAULT_SWAP_ROUTE_ACCOUNTS, MAX_VAULT_SWAP_ROUTE_DATA,
+    VaultOpenPosition, VaultPositionAddresses, VaultSwapKind, VaultSwapRoute, VaultTradeTerms,
+};
 
 #[cfg(test)]
 mod crank_tests;

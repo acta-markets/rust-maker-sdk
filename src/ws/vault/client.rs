@@ -20,6 +20,15 @@ use crate::ws::types::{
     VaultAuthSuccessData,
 };
 
+#[cfg(feature = "chain")]
+use solana_sdk::message::AddressLookupTableAccount;
+
+#[cfg(feature = "chain")]
+use crate::chain::vault::{
+    ComputeBudgetBounds, VaultIntentError, VaultOpenIntent, VaultSwapIntent, verify_vault_open,
+    verify_vault_swap,
+};
+
 use super::config::VaultOperatorConfig;
 use super::projection::VaultProjectionReceiver;
 use super::tx::{
@@ -207,6 +216,22 @@ impl VaultOperatorClient {
         })
     }
 
+    /// Signs only if the served transaction opens exactly `intent` within `bounds`.
+    #[cfg(feature = "chain")]
+    pub fn verify_and_sign_sponsored_tx(
+        &self,
+        to_sign: &SponsoredTxToSignData,
+        intent: &VaultOpenIntent<'_>,
+        tables: &[AddressLookupTableAccount],
+        bounds: ComputeBudgetBounds,
+    ) -> Result<SubmitSignedSponsoredTxData, VaultTxError> {
+        let order_id = verify_vault_open(&to_sign.tx_base64, intent, tables, bounds)?;
+        if order_id != *to_sign.order_id.as_bytes() {
+            return Err(VaultIntentError::OrderId.into());
+        }
+        self.sign_sponsored_tx_unverified(to_sign)
+    }
+
     /// UNVERIFIED: signs server bytes; caller must establish their full intent.
     pub fn sign_sponsored_tx_unverified(
         &self,
@@ -258,6 +283,18 @@ impl VaultOperatorClient {
             execution_id: quote.execution_id,
             signed_tx_base64: transaction.sign(self.operator.as_ref()),
         })
+    }
+
+    /// Signs only if the served swap carries exactly the requested and quoted terms within `bounds`.
+    #[cfg(feature = "chain")]
+    pub fn verify_and_sign_swap(
+        &self,
+        intent: &VaultSwapIntent<'_>,
+        tables: &[AddressLookupTableAccount],
+        bounds: ComputeBudgetBounds,
+    ) -> Result<SwapSubmitData, VaultTxError> {
+        verify_vault_swap(intent, tables, bounds)?;
+        self.sign_swap_unverified(intent.quote)
     }
 
     /// UNVERIFIED: signs server bytes; caller must establish their full intent.

@@ -73,18 +73,43 @@ pub struct VaultAccount {
     pub total_shares: u64,
     pub pending_deposit_count: u32,
     pub pending_withdraw_count: u32,
+    pub capital_fallback_delay_secs: u64,
+    pub closing_started_at: u64,
+    pub boundary_equity: u64,
+    pub boundary_shares: u64,
+    pub needs_migration: bool,
 }
 
 const VAULT_DISCRIMINATOR: u8 = 9;
-const VAULT_VERSION: u8 = 1;
+const VAULT_VERSION: u8 = 2;
+const VAULT_LEGACY_VERSION: u8 = 1;
+const REQUEST_VERSION: u8 = 1;
 const EQUITY_COMPUTED: u32 = 1 << 0;
 const ACCEPTING_DEPOSITS: u32 = 1 << 1;
 
 impl VaultAccount {
-    pub const LEN: usize = 688;
+    pub const LEN: usize = 712;
+    pub const LEGACY_LEN: usize = 688;
 
     pub fn parse(data: &[u8]) -> Result<Self, VaultChainError> {
-        let data = header(data, Self::LEN, VAULT_DISCRIMINATOR, VAULT_VERSION)?;
+        let (version, needs_migration) = match data.len() {
+            Self::LEN => (VAULT_VERSION, false),
+            Self::LEGACY_LEN => (VAULT_LEGACY_VERSION, true),
+            actual => {
+                return Err(VaultChainError::AccountLength {
+                    expected: Self::LEN,
+                    actual,
+                });
+            }
+        };
+        let data = header(data, data.len(), VAULT_DISCRIMINATOR, version)?;
+        let boundary = |offset| {
+            if needs_migration {
+                0
+            } else {
+                u64_at(data, offset)
+            }
+        };
         let flags = u32_at(data, 12);
         if flags & !(EQUITY_COMPUTED | ACCEPTING_DEPOSITS) != 0 {
             return Err(VaultChainError::UnknownAccountingFlags(flags));
@@ -105,6 +130,11 @@ impl VaultAccount {
             total_shares: u64_at(data, 288),
             pending_deposit_count: u32_at(data, 320),
             pending_withdraw_count: u32_at(data, 324),
+            capital_fallback_delay_secs: u64_at(data, 408),
+            closing_started_at: boundary(432),
+            boundary_equity: boundary(440),
+            boundary_shares: boundary(448),
+            needs_migration,
         })
     }
 }
@@ -139,7 +169,7 @@ impl VaultRequest {
     pub const VAULT_OFFSET: usize = 40;
 
     pub fn parse(data: &[u8], kind: VaultRequestKind) -> Result<Self, VaultChainError> {
-        let data = header(data, Self::LEN, kind.discriminator(), 1)?;
+        let data = header(data, Self::LEN, kind.discriminator(), REQUEST_VERSION)?;
         Ok(Self {
             user: pubkey(data, 8),
             vault: pubkey(data, Self::VAULT_OFFSET),

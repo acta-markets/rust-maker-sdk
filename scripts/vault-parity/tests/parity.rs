@@ -419,7 +419,7 @@ fn patterned(len: usize) -> Vec<u8> {
 fn vault_account_decodes_like_contract() {
     for (main_kind, second_kind) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
         let mut data = patterned(VaultAccount::LEN);
-        data[..5].copy_from_slice(&[9, 1, 255, 3, 1]);
+        data[..5].copy_from_slice(&[9, 2, 255, 3, 1]);
         data[12..16].copy_from_slice(&3u32.to_le_bytes());
         data[402] = main_kind;
         data[403] = second_kind;

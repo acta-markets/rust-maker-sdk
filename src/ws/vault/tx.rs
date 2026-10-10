@@ -35,6 +35,9 @@ pub enum VaultTxError {
     },
     #[error("system clock is before the unix epoch")]
     ClockBeforeEpoch,
+    #[cfg(feature = "chain")]
+    #[error(transparent)]
+    Intent(#[from] crate::chain::vault::VaultIntentError),
 }
 
 /// UNVERIFIED: fills the signer's slot without checking intent; other slots stay untouched.

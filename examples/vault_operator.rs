@@ -1,15 +1,19 @@
 //! Operate a vault over `/vault`: quote, sign sponsored fills, follow the projection.
-//! `_unverified` signing trusts the server; production should use the checked methods.
+//! `_unverified` signing trusts the server; production should use `verify_and_sign_sponsored_tx`
+//! with the agreed terms and `verify_and_sign_swap`, as `rebalance` does.
 
 #[allow(dead_code)]
 mod common;
 
+use acta_maker_sdk::chain::vault::{ComputeBudgetBounds, VaultManager, VaultSwapIntent};
 use acta_maker_sdk::ws::managed::*;
 use acta_maker_sdk::ws::types::*;
 use acta_maker_sdk::{
     AtomicNonceGenerator, Nonce, Price, QuoteExpiry, RfqBinding, VaultOperatorClient,
     VaultOperatorConfig, WS_PROTOCOL_VERSION,
 };
+use solana_sdk::message::AddressLookupTableAccount;
+use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -126,20 +130,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[allow(dead_code)]
 async fn rebalance(
     client: &VaultOperatorClient,
+    vault: &VaultManager,
+    price_updates: (Pubkey, Pubkey),
+    lookup_tables: &[AddressLookupTableAccount],
     direction: VaultSwapDirection,
     amount: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let quote = client
-        .swap_quote(SwapQuoteData {
-            request_id: Uuid::new_v4(),
-            vault_pda: client.vault_pda().to_string(),
-            mode: VaultSwapMode::Rebalance,
-            direction,
-            amount: amount.to_string(),
-            slippage_bps: 50,
-        })
-        .await?;
-    let submit = client.sign_swap_unverified(&quote)?;
+    let request = SwapQuoteData {
+        request_id: Uuid::new_v4(),
+        vault_pda: client.vault_pda().to_string(),
+        mode: VaultSwapMode::Rebalance,
+        direction,
+        amount: amount.to_string(),
+        slippage_bps: 50,
+    };
+    let quote = client.swap_quote(request.clone()).await?;
+    let submit = client.verify_and_sign_swap(
+        &VaultSwapIntent {
+            vault,
+            request: &request,
+            quote: &quote,
+            main_price_update: price_updates.0,
+            second_price_update: price_updates.1,
+        },
+        lookup_tables,
+        ComputeBudgetBounds {
+            max_unit_limit: 600_000,
+            max_unit_price_micro_lamports: 50_000,
+        },
+    )?;
     let ack = client.swap_submit(submit).await?;
     tracing::info!(execution = ?ack.execution_id, "swap queued");
     Ok(())
