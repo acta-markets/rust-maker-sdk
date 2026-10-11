@@ -7,8 +7,9 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 
 pub use types::{
-    Market, ProjectionCursor, TokenProgramKind, Tokens, TrackRecord, Vault, VaultPerformance,
-    VaultPolicy, VaultPosition, VaultPositionRole, VaultPositionStatus, VaultPositionType, Venue,
+    Market, ProjectionCursor, TokenDetails, TokenProgramKind, Tokens, TrackRecord, Vault,
+    VaultPerformance, VaultPolicy, VaultPosition, VaultPositionRole, VaultPositionStatus,
+    VaultPositionType, Venue,
 };
 use types::{MarketsResponse, VaultPositionsResponse, VaultsResponse};
 

@@ -140,6 +140,7 @@ pub struct VaultSwapIntent<'a> {
     pub quote: &'a SwapQuoteResultData,
     pub main_price_update: Pubkey,
     pub second_price_update: Pubkey,
+    pub min_output_floor: u64,
 }
 
 /// Verifies a served position-open transaction against `intent`; returns the bound order id.
@@ -217,6 +218,7 @@ pub fn verify_vault_swap(
         vault,
         request,
         quote,
+        min_output_floor,
         ..
     } = *intent;
     if request.vault_pda != vault.addresses.vault.to_string() {
@@ -256,6 +258,11 @@ pub fn verify_vault_swap(
     {
         return Err(VaultIntentError::Terms(
             "minimum output exceeds the requested slippage",
+        ));
+    }
+    if minimum_out < min_output_floor {
+        return Err(VaultIntentError::Terms(
+            "minimum output is below the operator's floor",
         ));
     }
     let valid_until = parse_amount(&quote.valid_until, "valid_until")?;

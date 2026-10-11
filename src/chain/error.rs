@@ -14,10 +14,6 @@ pub enum ChainError {
     AccountOwnerMismatch { expected: Pubkey, actual: Pubkey },
     #[error("account discriminator mismatch: expected {expected}, got {actual}")]
     AccountDiscriminatorMismatch { expected: u8, actual: u8 },
-    #[error("account {0} does not exist")]
-    MissingAccount(Pubkey),
-    #[error("lookup table {0} is deactivated")]
-    LookupTableDeactivated(Pubkey),
     #[error("account is not initialized")]
     UninitializedAccount,
     #[error("unknown position status: {0}")]
@@ -44,4 +40,15 @@ pub enum ChainError {
     #[cfg(feature = "chain-rpc")]
     #[error("transaction signing failed: {0}")]
     Signing(#[from] solana_sdk::signer::SignerError),
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum LookupTableError {
+    #[error(transparent)]
+    Chain(#[from] ChainError),
+    #[error("lookup table {0} does not exist")]
+    Missing(Pubkey),
+    #[error("lookup table {0} is deactivated")]
+    Deactivated(Pubkey),
 }

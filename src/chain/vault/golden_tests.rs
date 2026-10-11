@@ -405,8 +405,11 @@ fn vault_bytes(len: usize, version: u8) -> Vec<u8> {
 #[test]
 fn vault_account_decodes_legacy_layout_and_flags_migration() {
     let legacy = vault_bytes(VaultAccount::LEGACY_LEN, 1);
+    assert!(legacy[432..456].iter().all(|byte| *byte != 0));
     let mut current = legacy[..432].to_vec();
-    current.extend([0; 24]);
+    current.extend([0; 8]);
+    current.extend(&legacy[312..320]);
+    current.extend(&legacy[288..296]);
     current.extend(&legacy[432..]);
     current[1] = 2;
     assert_eq!(current.len(), VaultAccount::LEN);
@@ -421,7 +424,11 @@ fn vault_account_decodes_legacy_layout_and_flags_migration() {
             v1.boundary_equity,
             v1.boundary_shares
         ),
-        (0, 0, 0)
+        (
+            0,
+            u64::from_le_bytes(legacy[312..320].try_into().unwrap()),
+            v1.total_shares
+        )
     );
     assert_eq!(
         VaultAccount {

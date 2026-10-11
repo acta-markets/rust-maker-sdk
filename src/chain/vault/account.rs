@@ -57,6 +57,7 @@ impl TryFrom<u8> for VaultSafety {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct VaultAccount {
     pub vault_id: [u8; 32],
     pub phase: VaultPhase,
@@ -103,12 +104,11 @@ impl VaultAccount {
             }
         };
         let data = header(data, data.len(), VAULT_DISCRIMINATOR, version)?;
-        let boundary = |offset| {
-            if needs_migration {
-                0
-            } else {
-                u64_at(data, offset)
-            }
+        let total_shares = u64_at(data, 288);
+        let (closing_started_at, boundary_equity, boundary_shares) = if needs_migration {
+            (0, u64_at(data, 312), total_shares)
+        } else {
+            (u64_at(data, 432), u64_at(data, 440), u64_at(data, 448))
         };
         let flags = u32_at(data, 12);
         if flags & !(EQUITY_COMPUTED | ACCEPTING_DEPOSITS) != 0 {
@@ -127,13 +127,13 @@ impl VaultAccount {
             share_mint: pubkey(data, 240),
             main_token_program: token_program(data[402])?,
             second_token_program: token_program(data[403])?,
-            total_shares: u64_at(data, 288),
+            total_shares,
             pending_deposit_count: u32_at(data, 320),
             pending_withdraw_count: u32_at(data, 324),
             capital_fallback_delay_secs: u64_at(data, 408),
-            closing_started_at: boundary(432),
-            boundary_equity: boundary(440),
-            boundary_shares: boundary(448),
+            closing_started_at,
+            boundary_equity,
+            boundary_shares,
             needs_migration,
         })
     }

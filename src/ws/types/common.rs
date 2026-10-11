@@ -24,9 +24,9 @@ pub enum WsChannel {
     Positions,
     ChainEvents,
     Markets,
-    Vaults,
+    Vaults = 7,
     #[serde(other)]
-    Unknown,
+    Unknown = 6,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
@@ -37,9 +37,9 @@ pub enum WsEndpointKind {
     Maker,
     MakerData,
     Taker,
-    Vault,
+    Vault = 4,
     #[serde(other)]
-    Unknown,
+    Unknown = 3,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]
@@ -127,10 +127,6 @@ pub struct TokenInfo {
     pub decimals: Decimals,
     pub size_rule: PositionSizeRule,
     pub symbol: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strike_tick: Option<Strike>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub oracle_feed_ids: Vec<String>,
 }
 
 /// USD totals from prices captured at signed-transaction submission.

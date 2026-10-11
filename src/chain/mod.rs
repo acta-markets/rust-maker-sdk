@@ -17,7 +17,7 @@ pub mod wsol;
 
 #[cfg(feature = "chain-rpc")]
 pub use accounts::{MarketInfo, PositionInfo, PositionStatus};
-pub use error::ChainError;
+pub use error::{ChainError, LookupTableError};
 pub use ix::{
     ChainIxError, DepositPremiumIxArgs, FundPositionIxArgs, WithdrawPremiumIxArgs,
     build_deposit_premium_ixs, build_fund_position_ixs, build_withdraw_premium_ixs,

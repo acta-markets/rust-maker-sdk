@@ -67,11 +67,26 @@ fn tokens_round_trip_the_backend_shape() {
     };
     assert_eq!(sol.strike_tick.map(|tick| tick.value()), Some(500_000_000));
     assert_eq!(sol.oracle_feed_ids.len(), 1);
-    let [usdc] = tokens.quotes_by_underlying[&sol.mint].as_slice() else {
+    let [usdc] = tokens.quotes_by_underlying[&sol.token.mint].as_slice() else {
         panic!("one quote");
     };
     assert!(usdc.strike_tick.is_none());
-    assert_eq!(usdc.symbol, "USDC");
+    assert_eq!(usdc.token.symbol, "USDC");
+}
+
+#[test]
+fn ws_token_info_keeps_the_published_shape_and_ignores_new_fields() {
+    let tokens: Value = serde_json::from_str(TOKENS).unwrap();
+    let crate::ws::types::TokenInfo {
+        mint,
+        decimals,
+        size_rule: _,
+        symbol,
+    } = serde_json::from_value(tokens["underlyings"][0].clone()).unwrap();
+    assert_eq!(
+        (mint.as_str(), u8::from(decimals), symbol.as_str()),
+        ("So11111111111111111111111111111111111111112", 9, "SOL")
+    );
 }
 
 #[test]

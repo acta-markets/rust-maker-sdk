@@ -416,8 +416,9 @@ subscriptions and projections share one connection.
   in `maker_owner`. With `vault-chain`, `verify_and_sign_sponsored_tx` and
   `verify_and_sign_swap` rebuild the expected instructions from what the operator
   agreed to (`VaultOpenIntent::Sale` / `BetweenVaults` / `Fill` with
-  `VaultTradeTerms`; `VaultSwapIntent` with the request, quote and price-update
-  accounts) and sign only if the served transaction matches: fee payer and
+  `VaultTradeTerms`; `VaultSwapIntent` with the request, quote, price-update
+  accounts and `min_output_floor`, the operator's own oracle-based minimum output;
+  a served `minimum_out` below it is rejected even when it fits the quote's slippage) and sign only if the served transaction matches: fee payer and
   signers, compute budget within `ComputeBudgetBounds`, every instruction's
   program, accounts (signer/writable) and data, canonical idempotent ATA
   creates, the maker's Ed25519 quote signature, and a Jupiter route confined to
@@ -449,6 +450,7 @@ use acta_maker_sdk::ws::types::*;
 use std::sync::Arc;
 # fn load_vault_manager() -> Result<VaultManager, Box<dyn std::error::Error>> { unimplemented!() }
 # fn vault_price_updates() -> Result<(solana_sdk::pubkey::Pubkey, solana_sdk::pubkey::Pubkey), Box<dyn std::error::Error>> { unimplemented!() }
+# fn oracle_min_output() -> Result<u64, Box<dyn std::error::Error>> { unimplemented!() }
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 let operator = Arc::new(BytesSigner::from_secret([1u8; 32]));
 let config = VaultOperatorConfig::new(
@@ -471,6 +473,8 @@ client.wait_until_ready().await?;
 // `VaultManager::from_vault` over the on-chain vault account; price updates from its oracle sources.
 let vault: VaultManager = load_vault_manager()?;
 let (main_price_update, second_price_update) = vault_price_updates()?;
+// Lowest output the operator accepts, priced from its own oracle, not from the server's quote.
+let min_output_floor: u64 = oracle_min_output()?;
 let request = SwapQuoteData {
     request_id: uuid::Uuid::new_v4(),
     vault_pda: client.vault_pda().to_string(),
@@ -488,6 +492,7 @@ let submitted = client.swap_submit(client.verify_and_sign_swap(
         quote: &quote,
         main_price_update,
         second_price_update,
+        min_output_floor,
     },
     &lookup_tables,
     ComputeBudgetBounds { max_unit_limit: 600_000, max_unit_price_micro_lamports: 50_000 },

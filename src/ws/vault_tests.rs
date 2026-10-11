@@ -1178,6 +1178,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         quote,
         main_price_update: Pubkey::new_from_array([71; 32]),
         second_price_update: Pubkey::new_from_array([72; 32]),
+        min_output_floor: 1990,
     };
     assert!(matches!(
         client.verify_and_sign_swap(&intent(&quote), &table(case), bounds),

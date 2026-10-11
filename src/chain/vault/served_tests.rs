@@ -117,6 +117,17 @@ fn verify_swap(
     quote: &SwapQuoteResultData,
     tables: &[AddressLookupTableAccount],
 ) -> Result<(), VaultIntentError> {
+    let floor = num(&case["swap"]["minimum_out_amount"]);
+    verify_swap_with_floor(case, request, quote, tables, floor)
+}
+
+fn verify_swap_with_floor(
+    case: &Value,
+    request: &SwapQuoteData,
+    quote: &SwapQuoteResultData,
+    tables: &[AddressLookupTableAccount],
+    min_output_floor: u64,
+) -> Result<(), VaultIntentError> {
     let vault = manager(case, "swapper");
     verify_vault_swap(
         &VaultSwapIntent {
@@ -125,6 +136,7 @@ fn verify_swap(
             quote,
             main_price_update: Pubkey::new_from_array([71; 32]),
             second_price_update: Pubkey::new_from_array([72; 32]),
+            min_output_floor,
         },
         tables,
         BOUNDS,
@@ -508,6 +520,42 @@ fn swap_terms_follow_the_request() {
 }
 
 #[test]
+fn served_minimum_below_the_operator_floor_is_rejected() {
+    for case in cases().iter().filter(|case| case["kind"] == "swap") {
+        let (payer, mut ixs) = decoded(case);
+        let tables = [table(case)];
+        let request = swap_request(case);
+        let kind = VaultSwapKind::Rebalance {
+            second_to_main: request.direction == VaultSwapDirection::SecondToMain,
+        };
+        ixs[2] = manager(case, "swapper")
+            .swap(
+                kind,
+                &VaultSwapRoute {
+                    main_price_update: Pubkey::new_from_array([71; 32]),
+                    second_price_update: Pubkey::new_from_array([72; 32]),
+                    amount_in: num(&case["swap"]["amount"]),
+                    minimum_out: 1,
+                    valid_until: num(&case["swap"]["valid_until"]),
+                    route_accounts: ixs[2].accounts[18..].to_vec(),
+                    route_data: ixs[2].data[28..].to_vec(),
+                },
+            )
+            .unwrap();
+        let mut quote = swap_quote(case, compile(payer, &ixs, &tables));
+        quote.quoted_out_amount = "1".into();
+        quote.minimum_out_amount = "1".into();
+        verify_swap_with_floor(case, &request, &quote, &tables, 0).unwrap();
+        assert_eq!(
+            verify_swap(case, &request, &quote, &tables),
+            Err(VaultIntentError::Terms(
+                "minimum output is below the operator's floor"
+            ))
+        );
+    }
+}
+
+#[test]
 fn swap_route_is_confined_and_bounded() {
     for case in cases().iter().filter(|case| case["kind"] == "swap") {
         let (payer, ixs) = decoded(case);
@@ -569,6 +617,33 @@ fn swap_route_is_confined_and_bounded() {
             })
         ));
     }
+}
+
+#[test]
+fn key_repeated_in_static_keys_and_lookup_table_is_rejected() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case["kind"] == "swap")
+        .unwrap();
+    let (payer, ixs) = decoded(&case);
+    let mut table = table(&case);
+    table.addresses.push(payer);
+    let index = u8::try_from(table.addresses.len() - 1).unwrap();
+    let mut message = v0::Message::try_compile(
+        &payer,
+        &ixs,
+        std::slice::from_ref(&table),
+        Hash::new_from_array([9; 32]),
+    )
+    .unwrap();
+    assert_eq!(message.account_keys[0], payer);
+    message.address_table_lookups[0]
+        .writable_indexes
+        .push(index);
+    assert_eq!(
+        verify(&case, &encode(VersionedMessage::V0(message)), &[table]),
+        Err(VaultIntentError::Malformed("duplicate account key"))
+    );
 }
 
 #[test]

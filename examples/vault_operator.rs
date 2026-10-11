@@ -135,6 +135,7 @@ async fn rebalance(
     lookup_tables: &[AddressLookupTableAccount],
     direction: VaultSwapDirection,
     amount: &str,
+    min_output_floor: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let request = SwapQuoteData {
         request_id: Uuid::new_v4(),
@@ -152,6 +153,7 @@ async fn rebalance(
             quote: &quote,
             main_price_update: price_updates.0,
             second_price_update: price_updates.1,
+            min_output_floor,
         },
         lookup_tables,
         ComputeBudgetBounds {

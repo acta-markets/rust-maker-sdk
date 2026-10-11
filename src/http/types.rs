@@ -2,10 +2,12 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::ids::Strike;
 use crate::ws::types::TokenInfo;
 
 /// Public `/api/v1/vaults` row. Integers wider than JSON-safe stay decimal strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Vault {
     pub vault_pda: String,
     pub vault_id: String,
@@ -69,6 +71,7 @@ pub enum TokenProgramKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct VaultPolicy {
     pub max_open_positions: u16,
     pub max_rebalance_drift_bps: u16,
@@ -76,6 +79,7 @@ pub struct VaultPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ProjectionCursor {
     pub version: String,
     pub slot: String,
@@ -101,6 +105,7 @@ pub enum VaultPerformance {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TrackRecord {
     pub cycles_completed: u32,
     pub last_cycle_return_pct: f64,
@@ -110,6 +115,7 @@ pub struct TrackRecord {
 
 /// Public `/api/v1/markets` row; the endpoint lists only tradable markets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Market {
     pub pda: String,
     pub underlying_mint: String,
@@ -124,6 +130,7 @@ pub struct Market {
 
 /// Public `/api/v1/vaults/{pda}/positions` row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct VaultPosition {
     pub vault: String,
     pub position: String,
@@ -194,6 +201,7 @@ pub(super) struct MarketsResponse {
 
 /// Public `/api/v1/venue`: limits rfq-server validates against. `None` limits are unbounded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Venue {
     pub program_id: String,
     pub min_quote_validity_seconds: u32,
@@ -209,7 +217,20 @@ pub struct Venue {
 
 /// Public `/api/v1/tokens`: tokens of the tradable markets, same shape as WS `Tokens`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Tokens {
-    pub underlyings: Vec<TokenInfo>,
-    pub quotes_by_underlying: HashMap<String, Vec<TokenInfo>>,
+    pub underlyings: Vec<TokenDetails>,
+    pub quotes_by_underlying: HashMap<String, Vec<TokenDetails>>,
+}
+
+/// A `/api/v1/tokens` entry: the WS `TokenInfo` plus strike tick and Pyth feed ids.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TokenDetails {
+    #[serde(flatten)]
+    pub token: TokenInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike_tick: Option<Strike>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oracle_feed_ids: Vec<String>,
 }
