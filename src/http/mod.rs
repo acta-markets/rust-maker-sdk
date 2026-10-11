@@ -2,16 +2,21 @@
 
 mod types;
 
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use reqwest::StatusCode;
+use reqwest::header::{ETAG, IF_NONE_MATCH};
 use serde::de::DeserializeOwned;
 
+use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 pub use types::{
-    Market, ProjectionCursor, TokenDetails, TokenProgramKind, Tokens, TrackRecord, Vault,
-    VaultPerformance, VaultPolicy, VaultPosition, VaultPositionRole, VaultPositionStatus,
-    VaultPositionType, Venue,
+    ProjectionCursor, TokenProgramKind, TrackRecord, Vault, VaultPerformance, VaultPolicy,
+    VaultPosition, VaultPositionRole, VaultPositionStatus, VaultPositionType, Venue,
 };
-use types::{MarketsResponse, VaultPositionsResponse, VaultsResponse};
+
+use crate::ws::types::{MarketInfo, TokenInfo};
 
 use crate::wire::{WireError, decode_base58_32};
 
@@ -27,12 +32,56 @@ pub enum HttpError {
     Status { status: u16, body: String },
     #[error("invalid address: {0}")]
     Address(#[from] WireError),
+    #[error("invalid response body: {0}")]
+    Decode(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MarketFilter {
+    pub underlying: Option<String>,
+    pub quote: Option<String>,
+    pub expiry: Option<u64>,
+    pub is_put: Option<bool>,
+    pub active: Option<bool>,
+}
+
+impl MarketFilter {
+    fn query(&self) -> String {
+        let mut params = Vec::new();
+        if let Some(underlying) = &self.underlying {
+            params.push(format!("underlying={underlying}"));
+        }
+        if let Some(quote) = &self.quote {
+            params.push(format!("quote={quote}"));
+        }
+        if let Some(expiry) = self.expiry {
+            params.push(format!("expiry={expiry}"));
+        }
+        if let Some(is_put) = self.is_put {
+            params.push(format!("is_put={is_put}"));
+        }
+        if let Some(active) = self.active {
+            params.push(format!("active={active}"));
+        }
+        if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct HttpClient {
     client: reqwest::Client,
     base_url: String,
+    cache: Arc<Mutex<HashMap<String, Cached>>>,
+}
+
+#[derive(Debug)]
+struct Cached {
+    etag: String,
+    body: Arc<[u8]>,
 }
 
 impl HttpClient {
@@ -48,7 +97,11 @@ impl HttpClient {
         while base_url.ends_with('/') {
             let _ = base_url.pop();
         }
-        Self { client, base_url }
+        Self {
+            client,
+            base_url,
+            cache: Arc::default(),
+        }
     }
 
     #[must_use]
@@ -82,13 +135,20 @@ impl HttpClient {
         }
     }
 
-    pub async fn markets(&self) -> Result<Vec<Market>, HttpError> {
-        let response: MarketsResponse = self.get("/api/v1/markets").await?;
+    pub async fn markets(&self, filter: &MarketFilter) -> Result<Vec<MarketInfo>, HttpError> {
+        let response: MarketsResponse = self
+            .get(&format!("/api/v1/markets{}", filter.query()))
+            .await?;
         Ok(response.markets)
     }
 
-    pub async fn tokens(&self) -> Result<Tokens, HttpError> {
-        self.get("/api/v1/tokens").await
+    pub async fn tokens(&self) -> Result<BTreeMap<String, TokenInfo>, HttpError> {
+        let response: TokensResponse = self.get("/api/v1/tokens").await?;
+        Ok(response
+            .tokens
+            .into_iter()
+            .map(|token| (token.mint.clone(), token))
+            .collect())
     }
 
     pub async fn venue(&self) -> Result<Venue, HttpError> {
@@ -96,12 +156,17 @@ impl HttpClient {
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, HttpError> {
-        let response = self
-            .client
-            .get(format!("{}{path}", self.base_url))
-            .send()
-            .await?;
+        let mut request = self.client.get(format!("{}{path}", self.base_url));
+        if let Some(etag) = self.cached(path, |cached| cached.etag.clone()) {
+            request = request.header(IF_NONE_MATCH, etag);
+        }
+        let response = request.send().await?;
         let status = response.status();
+        if status == StatusCode::NOT_MODIFIED
+            && let Some(body) = self.cached(path, |cached| Arc::clone(&cached.body))
+        {
+            return Ok(serde_json::from_slice(&body)?);
+        }
         if !status.is_success() {
             let body = response.text().await?;
             return Err(HttpError::Status {
@@ -109,7 +174,34 @@ impl HttpClient {
                 body,
             });
         }
-        Ok(response.json().await?)
+        let etag = response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = response.bytes().await?;
+        let value = serde_json::from_slice(&body)?;
+        if let Some(etag) = etag {
+            let _ = self.cache().insert(
+                path.to_owned(),
+                Cached {
+                    etag,
+                    body: Arc::from(body.as_ref()),
+                },
+            );
+        }
+        Ok(value)
+    }
+
+    fn cached<R>(&self, path: &str, read: impl FnOnce(&Cached) -> R) -> Option<R> {
+        self.cache().get(path).map(read)
+    }
+
+    fn cache(&self) -> MutexGuard<'_, HashMap<String, Cached>> {
+        match self.cache.lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 }
 

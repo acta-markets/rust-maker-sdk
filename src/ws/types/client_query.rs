@@ -7,8 +7,6 @@ use uuid::Uuid;
 
 use crate::types::{MarketId, OrderId, PositionType, Price, Quantity};
 
-use super::common::default_true;
-
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetPositionsMessage {
@@ -92,15 +90,11 @@ default_request!(GetSubscriptionsMessage);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMarketDescriptorsMessage {
     pub request_id: Uuid,
-    #[serde(default = "default_true")]
-    pub active_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTokensMessage {
     pub request_id: Uuid,
-    #[serde(default = "default_true")]
-    pub active_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

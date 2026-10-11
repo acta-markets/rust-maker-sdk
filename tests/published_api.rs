@@ -1,20 +1,4 @@
-use acta_maker_sdk::types::{Decimals, Quantity};
-use acta_maker_sdk::ws::types::{PositionSizeRule, TokenInfo, WsChannel, WsEndpointKind};
-
-#[test]
-fn token_info_is_constructible_as_in_0_4_3() {
-    let token = TokenInfo {
-        mint: "So11111111111111111111111111111111111111112".into(),
-        decimals: Decimals::new(9),
-        size_rule: PositionSizeRule {
-            min_size: Quantity::new(1),
-            max_size: Quantity::new(2),
-            step: Quantity::new(1),
-        },
-        symbol: "SOL".into(),
-    };
-    assert_eq!(token.symbol, "SOL");
-}
+use acta_maker_sdk::ws::types::{WsChannel, WsEndpointKind};
 
 #[test]
 fn unknown_channel_and_endpoint_keep_their_0_4_3_discriminants() {

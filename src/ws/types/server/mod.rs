@@ -102,6 +102,7 @@ pub enum ServerMessage {
     ReferralCodeClaimed(ReferralCodeClaimedData),
     MyReferralInfo(MyReferralInfoData),
     VaultProjectionAdvanced(VaultProjectionAdvancedData),
+    ReferenceChanged(ReferenceChangedData),
     SwapQuoteResult(SwapQuoteResultData),
     SwapSubmitResult(SwapSubmitResultData),
     /// Forward-compat: any message type this SDK version doesn't know yet.
@@ -376,6 +377,7 @@ impl ServerMessage {
             | Self::AuthSuccess(_)
             | Self::VaultAuthSuccess(_)
             | Self::VaultProjectionAdvanced(_)
+            | Self::ReferenceChanged(_)
             | Self::AuthError(_)
             | Self::LogoutSuccess(_)
             | Self::RfqCreated(_)

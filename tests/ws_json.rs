@@ -1521,3 +1521,30 @@ fn required_wire_fields_preserve_values_and_reject_missing_or_null() {
         }
     }
 }
+
+#[test]
+fn reference_frames_decode() {
+    let tokens: ServerMessage = serde_json::from_value(json!({
+        "type": "Tokens",
+        "data": {
+            "request_id": "00000000-0000-0000-0000-000000000000",
+            "tokens": [{ "mint": "M", "symbol": "SOL", "decimals": 9, "quote_mints": ["Q"] }]
+        }
+    }))
+    .unwrap();
+    let ServerMessage::Tokens(tokens) = tokens else {
+        panic!("expected Tokens");
+    };
+    assert_eq!(tokens.tokens[0].quote_mints, ["Q"]);
+    assert!(tokens.tokens[0].size_rule.is_none());
+
+    let changed: ServerMessage = serde_json::from_value(json!({
+        "type": "ReferenceChanged",
+        "data": { "tokens_etag": "\"t\"", "markets_etag": "\"m\"" }
+    }))
+    .unwrap();
+    assert!(matches!(
+        changed,
+        ServerMessage::ReferenceChanged(data) if data.markets_etag == "\"m\""
+    ));
+}

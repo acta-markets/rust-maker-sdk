@@ -28,7 +28,9 @@ pub use endpoint::{
     MakerWsEndpoint, normalize_maker_data_ws_url, normalize_maker_ws_url,
     normalize_maker_ws_url_for_endpoint,
 };
-pub use inbound::{ManagedInbound, ManagedMessageReceiver, ManagedReceiveError};
+pub use inbound::{
+    ManagedInbound, ManagedMessageReceiver, ManagedReceiveError, ReferenceChangeReceiver,
+};
 pub use outbound::{OutboundMessageError, SendTicket};
 #[cfg(feature = "vault")]
 pub(crate) use signer::ChallengeSigning;
@@ -181,6 +183,10 @@ impl ManagedWsHandle {
             inner: initial.unwrap_or_else(|| self.messages_tx.subscribe()),
             gap_tx: self.gap_tx.clone(),
         }
+    }
+
+    pub fn subscribe_reference_changes(&self) -> ReferenceChangeReceiver {
+        ReferenceChangeReceiver::new(self.subscribe_messages())
     }
 
     /// Lifecycle events, including the since-spawn backlog for the first subscriber.

@@ -10,7 +10,8 @@ use crate::types::VaultDelegatePermissions;
 use crate::wire::{WireError, decode_base58_32};
 use crate::ws::managed::{
     ManagedMessageReceiver, ManagedWsConfigError, ManagedWsError, ManagedWsEvent, ManagedWsHandle,
-    ManagedWsState, SendAwaitError, SendTicket, WaitUntilReadyError, spawn_managed_ws,
+    ManagedWsState, ReferenceChangeReceiver, SendAwaitError, SendTicket, WaitUntilReadyError,
+    spawn_managed_ws,
 };
 use crate::ws::types::{
     AcceptQuoteMessage, BatchQuotesMessage, CancelAllQuotesMessage, CancelQuoteData, CancelRfqData,
@@ -338,6 +339,10 @@ impl VaultOperatorClient {
 
     pub fn subscribe_messages(&self) -> ManagedMessageReceiver {
         self.inner.subscribe_messages()
+    }
+
+    pub fn subscribe_reference_changes(&self) -> ReferenceChangeReceiver {
+        self.inner.subscribe_reference_changes()
     }
 
     pub fn subscribe_projections(&self) -> VaultProjectionReceiver {

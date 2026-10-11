@@ -87,7 +87,7 @@ pub struct RfqOrderOption {
 }
 
 /// Position size constraints expressed in **underlying** token units.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PositionSizeRule {
     pub min_size: Quantity,
     pub max_size: Quantity,
@@ -121,12 +121,19 @@ pub struct MarketDescriptorInfo {
     pub quote_symbol: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenInfo {
     pub mint: String,
-    pub decimals: Decimals,
-    pub size_rule: PositionSizeRule,
     pub symbol: String,
+    pub decimals: Decimals,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oracle_feed_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_rule: Option<PositionSizeRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike_tick: Option<Strike>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quote_mints: Vec<String>,
 }
 
 /// USD totals from prices captured at signed-transaction submission.
@@ -204,11 +211,6 @@ pub struct StatsDelta {
 pub struct MarketStats {
     pub volume_24h: Volume,
     pub trades_24h: TradeCount,
-}
-
-#[must_use]
-pub const fn default_true() -> bool {
-    true
 }
 
 #[cfg(test)]

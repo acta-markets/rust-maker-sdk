@@ -1,9 +1,6 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
-use crate::types::ids::Strike;
-use crate::ws::types::TokenInfo;
+use crate::ws::types::{MarketInfo, TokenInfo};
 
 /// Public `/api/v1/vaults` row. Integers wider than JSON-safe stay decimal strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -113,21 +110,6 @@ pub struct TrackRecord {
     pub track_record_secs: String,
 }
 
-/// Public `/api/v1/markets` row; the endpoint lists only tradable markets.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Market {
-    pub pda: String,
-    pub underlying_mint: String,
-    pub quote_mint: String,
-    pub expiry_ts: i64,
-    pub is_put: bool,
-    pub is_finalized: bool,
-    pub settlement_price: Option<u64>,
-    pub underlying_symbol: String,
-    pub quote_symbol: String,
-}
-
 /// Public `/api/v1/vaults/{pda}/positions` row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -196,7 +178,12 @@ pub(super) struct VaultsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct MarketsResponse {
-    pub(super) markets: Vec<Market>,
+    pub(super) markets: Vec<MarketInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct TokensResponse {
+    pub(super) tokens: Vec<TokenInfo>,
 }
 
 /// Public `/api/v1/venue`: limits rfq-server validates against. `None` limits are unbounded.
@@ -213,24 +200,4 @@ pub struct Venue {
     pub max_quotes_per_rfq: Option<u64>,
     pub max_active_rfqs_per_taker: Option<u64>,
     pub pre_expiry_cutoff_seconds: u64,
-}
-
-/// Public `/api/v1/tokens`: tokens of the tradable markets, same shape as WS `Tokens`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Tokens {
-    pub underlyings: Vec<TokenDetails>,
-    pub quotes_by_underlying: HashMap<String, Vec<TokenDetails>>,
-}
-
-/// A `/api/v1/tokens` entry: the WS `TokenInfo` plus strike tick and Pyth feed ids.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TokenDetails {
-    #[serde(flatten)]
-    pub token: TokenInfo,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strike_tick: Option<Strike>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub oracle_feed_ids: Vec<String>,
 }

@@ -44,7 +44,7 @@ the market descriptor and derive its PDA before using low-level signing APIs.
 | `chain` | Solana instruction builders (`DepositPremium`, `WithdrawPremium`, `FundPosition`) |
 | `chain-rpc` | Solana RPC queries (extends `chain`) |
 | `vault-chain` | Vault capital-cycle instructions (`VaultManager`) and derived vault addresses, account decoders, crank decision and Pyth price-account derivation (`vault` + `chain`) |
-| `http` | Read-only `HttpClient` for the public vault, market, token and venue endpoints (reqwest, rustls with native roots). `venue()` returns server limits (minimum quote validity, RFQ timeout bounds, settlement buffer); `tokens()` returns per-underlying size rules, strike tick and Pyth feed ids. Read these instead of hardcoding them. |
+| `http` | Read-only `HttpClient` for the public vault, market, token and venue endpoints (reqwest, rustls with native roots). `venue()` returns server limits (minimum quote validity, RFQ timeout bounds, settlement buffer); `tokens()` returns every token by mint, underlyings with size rule, strike tick and quote mints; `markets(&MarketFilter)` filters by underlying, quote, expiry, side and `active` (default active only; `Some(false)` adds closed and finalized markets, finalized ones only since the server started). Responses carry ETags and the client revalidates with `If-None-Match`, so polling costs a 304. Refetch when `subscribe_reference_changes()` yields new ETags. Read these instead of hardcoding them. |
 | `test-helpers` | Test utilities (`ManagedWsHandle::test_handle`, message injection) |
 
 Managed clients validate the canonical Acta authentication challenge before invoking

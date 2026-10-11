@@ -3,11 +3,12 @@ use std::net::TcpListener;
 
 use serde_json::Value;
 
-use super::types::{MarketsResponse, VaultPositionsResponse, VaultsResponse};
+use super::types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 use super::{
-    HttpClient, HttpError, TokenProgramKind, Tokens, VaultPerformance, VaultPositionRole,
+    HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultPerformance, VaultPositionRole,
     VaultPositionStatus, VaultPositionType, Venue,
 };
+use crate::ws::types::MarketStatus;
 
 const VAULTS: &str = include_str!("../../tests/fixtures/http_vaults.json");
 const MARKETS: &str = include_str!("../../tests/fixtures/http_markets.json");
@@ -47,8 +48,16 @@ fn vaults_round_trip_the_backend_shape() {
 #[test]
 fn markets_round_trip_the_backend_shape() {
     let response: MarketsResponse = round_trip(MARKETS);
-    assert_eq!(response.markets.len(), 2);
-    assert_eq!(response.markets[1].settlement_price, Some(150_000_000_000));
+    let [finalized, active] = response.markets.as_slice() else {
+        panic!("two markets");
+    };
+    assert_eq!(finalized.status, MarketStatus::Finalized);
+    assert_eq!(
+        finalized.settlement_price.map(|price| price.value()),
+        Some(150_000_000_000)
+    );
+    assert_eq!(active.status, MarketStatus::Active);
+    assert!(active.settlement_price.is_none());
 }
 
 #[test]
@@ -61,32 +70,16 @@ fn venue_round_trips_the_backend_shape() {
 
 #[test]
 fn tokens_round_trip_the_backend_shape() {
-    let tokens: Tokens = round_trip(TOKENS);
-    let [sol] = tokens.underlyings.as_slice() else {
-        panic!("one underlying");
+    let response: TokensResponse = round_trip(TOKENS);
+    let [usdc, sol] = response.tokens.as_slice() else {
+        panic!("two tokens");
     };
     assert_eq!(sol.strike_tick.map(|tick| tick.value()), Some(500_000_000));
     assert_eq!(sol.oracle_feed_ids.len(), 1);
-    let [usdc] = tokens.quotes_by_underlying[&sol.token.mint].as_slice() else {
-        panic!("one quote");
-    };
-    assert!(usdc.strike_tick.is_none());
-    assert_eq!(usdc.token.symbol, "USDC");
-}
-
-#[test]
-fn ws_token_info_keeps_the_published_shape_and_ignores_new_fields() {
-    let tokens: Value = serde_json::from_str(TOKENS).unwrap();
-    let crate::ws::types::TokenInfo {
-        mint,
-        decimals,
-        size_rule: _,
-        symbol,
-    } = serde_json::from_value(tokens["underlyings"][0].clone()).unwrap();
-    assert_eq!(
-        (mint.as_str(), u8::from(decimals), symbol.as_str()),
-        ("So11111111111111111111111111111111111111112", 9, "SOL")
-    );
+    assert!(sol.size_rule.is_some());
+    assert_eq!(sol.quote_mints, std::slice::from_ref(&usdc.mint));
+    assert_eq!(usdc.symbol, "USDC");
+    assert!(usdc.size_rule.is_none() && usdc.strike_tick.is_none() && usdc.quote_mints.is_empty());
 }
 
 #[test]
@@ -160,8 +153,20 @@ async fn client_reads_public_routes() {
         .await
         .unwrap();
     assert_eq!(vault.open_positions, "2");
-    assert_eq!(client.markets().await.unwrap().len(), 2);
-    assert_eq!(client.tokens().await.unwrap().underlyings.len(), 1);
+    assert_eq!(
+        client
+            .markets(&MarketFilter::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    let tokens = client.tokens().await.unwrap();
+    assert_eq!(
+        tokens["So11111111111111111111111111111111111111112"].symbol,
+        "SOL"
+    );
+    assert_eq!(tokens.len(), 2);
     assert_eq!(client.venue().await.unwrap().settlement_buffer_seconds, 90);
     let missing = client.vault("11111111111111111111111111111111").await;
     assert!(matches!(
@@ -212,4 +217,39 @@ async fn vault_positions_follow_the_cursor() {
             format!("{path}&cursor=412:3:1:7cVfgArCheMR6Cs4t6vz5rfnqd56vZq4ndaBrY5xkxXy"),
         ]
     );
+}
+
+#[tokio::test]
+async fn reference_reads_revalidate_with_etag() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for status in ["200 OK", "304 Not Modified"] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let read = stream.read(&mut request).unwrap();
+            requests.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
+            let body = if status == "200 OK" { MARKETS } else { "" };
+            let reply = format!(
+                "HTTP/1.1 {status}\r\netag: \"m1\"\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(reply.as_bytes()).unwrap();
+        }
+        requests
+    });
+    let client = HttpClient::new(base).unwrap();
+    let filter = MarketFilter {
+        active: Some(true),
+        is_put: Some(false),
+        ..MarketFilter::default()
+    };
+    let first = client.markets(&filter).await.unwrap();
+    let second = client.markets(&filter).await.unwrap();
+    assert_eq!(first, second);
+    let requests = server.join().unwrap();
+    assert!(requests[0].starts_with("get /api/v1/markets?is_put=false&active=true "));
+    assert!(!requests[0].contains("if-none-match"));
+    assert!(requests[1].contains("if-none-match: \"m1\""));
 }

@@ -1,35 +1,29 @@
 {
-  "underlyings": [
+  "tokens": [
+    {
+      "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "symbol": "USDC",
+      "decimals": 6,
+      "oracle_feed_ids": [
+        "eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
+      ]
+    },
     {
       "mint": "So11111111111111111111111111111111111111112",
+      "symbol": "SOL",
       "decimals": 9,
+      "oracle_feed_ids": [
+        "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+      ],
       "size_rule": {
         "min_size": 100000000,
         "max_size": 1000000000000,
         "step": 10000000
       },
-      "symbol": "SOL",
       "strike_tick": 500000000,
-      "oracle_feed_ids": [
-        "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+      "quote_mints": [
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
       ]
     }
-  ],
-  "quotes_by_underlying": {
-    "So11111111111111111111111111111111111111112": [
-      {
-        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-        "decimals": 6,
-        "size_rule": {
-          "min_size": 100000000,
-          "max_size": 1000000000000,
-          "step": 10000000
-        },
-        "symbol": "USDC",
-        "oracle_feed_ids": [
-          "eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
-        ]
-      }
-    ]
-  }
+  ]
 }

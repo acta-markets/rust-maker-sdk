@@ -1,6 +1,7 @@
 use crate::ws::managed::{
     MakerWsEndpoint, ManagedMessageReceiver, ManagedWsConfig, ManagedWsError, ManagedWsEvent,
-    ManagedWsHandle, ManagedWsState, SendTicket, WaitUntilReadyError, spawn_managed_ws,
+    ManagedWsHandle, ManagedWsState, ReferenceChangeReceiver, SendTicket, WaitUntilReadyError,
+    spawn_managed_ws,
 };
 use crate::ws::types::{
     AddChannelsData, AddMintsData, BatchQuotesMessage, CancelAllQuotesMessage, CancelQuoteData,
@@ -151,6 +152,10 @@ impl MakerQuoteClient {
 
     pub fn subscribe_messages(&self) -> ManagedMessageReceiver {
         self.inner.subscribe_messages()
+    }
+
+    pub fn subscribe_reference_changes(&self) -> ReferenceChangeReceiver {
+        self.inner.subscribe_reference_changes()
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<ManagedWsEvent> {
