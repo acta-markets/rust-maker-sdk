@@ -5,8 +5,8 @@ use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
 
 use super::{
     VaultAccount, VaultChainError, VaultGovernanceUpdate, VaultGovernanceUpdateKind, VaultManager,
-    VaultManagerArgs, VaultPhase, VaultPolicyUpdate, VaultRequest, VaultRequestKind, VaultSafety,
-    oracle_source_pyth_feed, pda, vault_capital_batch_compute_units,
+    VaultManagerArgs, VaultPhase, VaultPolicyUpdate, VaultPositionRef, VaultRequest,
+    VaultRequestKind, VaultSafety, oracle_source_pyth_feed, pda, vault_capital_batch_compute_units,
 };
 use crate::VaultDelegatePermissions;
 use crate::chain::ix::{SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
@@ -244,6 +244,71 @@ fn pdas_match_golden() {
     .flat_map(|(address, bump)| address.to_bytes().into_iter().chain([*bump]))
     .collect();
     assert_eq!(digest(&pdas), "2a461baad1349d70");
+}
+
+#[test]
+fn fund_maker_position_matches_golden() {
+    let golden = [
+        (
+            TOKEN_PROGRAM_ID,
+            [
+                "2b/9/968f0e546b17c484",
+                "2b/9/35f9407a4dc98214",
+                "2b/9/6524aed42e403599",
+                "2b/9/41bd28931f9f9789",
+            ],
+        ),
+        (
+            TOKEN_2022_PROGRAM_ID,
+            [
+                "2b/9/968f0e546b17c484",
+                "2b/9/42dcbbc2459ceb28",
+                "2b/9/0edf33941806db11",
+                "2b/9/41bd28931f9f9789",
+            ],
+        ),
+    ];
+    for (token_program, expected) in golden {
+        let m = manager(token_program);
+        let mut built = Vec::new();
+        for (underlying_mint, quote_mint) in [(key(3), key(4)), (key(4), key(3))] {
+            for is_put in [false, true] {
+                built.push(ix(&m
+                    .fund_maker_position(&VaultPositionRef {
+                        underlying_mint,
+                        quote_mint,
+                        expiry_ts: 1_900_000_000,
+                        is_put,
+                        order_id: [9; 32],
+                    })
+                    .unwrap()));
+            }
+        }
+        assert_eq!(built, expected);
+    }
+    let held = VaultPositionRef {
+        underlying_mint: key(3),
+        quote_mint: key(6),
+        expiry_ts: 1_900_000_000,
+        is_put: false,
+        order_id: [9; 32],
+    };
+    let m = manager(TOKEN_PROGRAM_ID);
+    assert!(m.fund_maker_position(&held).is_err());
+    for held in [
+        VaultPositionRef {
+            quote_mint: key(4),
+            expiry_ts: 0,
+            ..held
+        },
+        VaultPositionRef {
+            quote_mint: key(4),
+            order_id: [0; 32],
+            ..held
+        },
+    ] {
+        assert!(m.fund_maker_position(&held).is_err());
+    }
 }
 
 #[test]

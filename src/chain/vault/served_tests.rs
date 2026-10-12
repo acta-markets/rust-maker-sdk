@@ -520,6 +520,32 @@ fn swap_terms_follow_the_request() {
 }
 
 #[test]
+fn slippage_minimum_is_floored_like_the_router() {
+    for case in cases().iter().filter(|case| case["kind"] == "swap") {
+        let tables = [table(case)];
+        let request = swap_request(case);
+        let mut quote = swap_quote(case, served_tx(case));
+        quote.quoted_out_amount = "2001".into();
+        verify_swap(case, &request, &quote, &tables).unwrap();
+
+        let mut below = quote.clone();
+        below.minimum_out_amount = "1989".into();
+        assert_eq!(
+            verify_swap(case, &request, &below, &tables),
+            Err(VaultIntentError::Terms(
+                "minimum output exceeds the requested slippage"
+            ))
+        );
+        assert_eq!(
+            verify_swap_with_floor(case, &request, &quote, &tables, 1991),
+            Err(VaultIntentError::Terms(
+                "minimum output is below the operator's floor"
+            ))
+        );
+    }
+}
+
+#[test]
 fn served_minimum_below_the_operator_floor_is_rejected() {
     for case in cases().iter().filter(|case| case["kind"] == "swap") {
         let (payer, mut ixs) = decoded(case);

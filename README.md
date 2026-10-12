@@ -440,6 +440,10 @@ subscriptions and projections share one connection.
   signing helper locates the transaction signature slot by signer public key.
 - **Operations:** rebalance requires `REBALANCE`; the manager constructs and submits the transaction without a hot co-signature; recovery
   swaps are governance-only.
+- **Funding:** with `FUND_MAKER`, `VaultManager::fund_maker_position(&VaultPositionRef)`
+  builds `VaultFundMakerPosition` for a position the vault holds: it moves the
+  settlement leg (call: quote, put: underlying) from the vault's ATA for that
+  mint into the position. The operator signs and pays.
 
 ```rust,no_run
 # #[cfg(feature = "vault-chain")]

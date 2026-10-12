@@ -254,7 +254,7 @@ pub fn verify_vault_swap(
     if slippage > BPS
         || quoted_out == 0
         || minimum_out == 0
-        || u128::from(minimum_out) * BPS < u128::from(quoted_out) * (BPS - slippage)
+        || u128::from(minimum_out) < u128::from(quoted_out) * (BPS - slippage) / BPS
     {
         return Err(VaultIntentError::Terms(
             "minimum output exceeds the requested slippage",

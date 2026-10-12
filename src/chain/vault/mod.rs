@@ -28,7 +28,8 @@ pub use served::{
 };
 pub use trading::{
     JUPITER_V6_PROGRAM_ID, MAX_VAULT_SWAP_ROUTE_ACCOUNTS, MAX_VAULT_SWAP_ROUTE_DATA,
-    VaultOpenPosition, VaultPositionAddresses, VaultSwapKind, VaultSwapRoute, VaultTradeTerms,
+    VaultOpenPosition, VaultPositionAddresses, VaultPositionRef, VaultSwapKind, VaultSwapRoute,
+    VaultTradeTerms,
 };
 
 #[cfg(test)]

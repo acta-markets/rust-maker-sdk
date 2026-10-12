@@ -44,6 +44,16 @@ pub struct VaultPositionAddresses {
     pub protocol_fee_ata: Pubkey,
 }
 
+/// A position this vault holds, as its market and order id name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultPositionRef {
+    pub underlying_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    pub expiry_ts: u64,
+    pub is_put: bool,
+    pub order_id: [u8; 32],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultOpenPosition {
     pub order_id: [u8; 32],
@@ -65,7 +75,11 @@ struct MarketLegs {
 }
 
 impl MarketLegs {
-    fn bind(manager: &VaultManager, terms: &VaultTradeTerms) -> Result<Self, VaultChainError> {
+    fn bind(
+        manager: &VaultManager,
+        underlying_mint: Pubkey,
+        quote_mint: Pubkey,
+    ) -> Result<Self, VaultChainError> {
         let main = Asset {
             mint: manager.args.main_mint,
             program: manager.args.main_token_program,
@@ -76,12 +90,12 @@ impl MarketLegs {
             program: manager.args.second_token_program,
             vault_ata: manager.addresses.vault_second_ata,
         };
-        if main.mint == terms.underlying_mint && second.mint == terms.quote_mint {
+        if main.mint == underlying_mint && second.mint == quote_mint {
             Ok(Self {
                 underlying: main,
                 quote: second,
             })
-        } else if main.mint == terms.quote_mint && second.mint == terms.underlying_mint {
+        } else if main.mint == quote_mint && second.mint == underlying_mint {
             Ok(Self {
                 underlying: second,
                 quote: main,
@@ -95,6 +109,10 @@ impl MarketLegs {
 
     const fn collateral(self, is_put: bool) -> Asset {
         if is_put { self.quote } else { self.underlying }
+    }
+
+    const fn settlement(self, is_put: bool) -> Asset {
+        if is_put { self.underlying } else { self.quote }
     }
 }
 
@@ -232,6 +250,42 @@ impl VaultManager {
         ]
     }
 
+    /// `VaultFundMakerPosition`: funds a held position's settlement leg (call: quote, put: underlying).
+    pub fn fund_maker_position(
+        &self,
+        position: &VaultPositionRef,
+    ) -> Result<Instruction, VaultChainError> {
+        if position.expiry_ts == 0 || position.order_id == [0; 32] {
+            return Err(VaultChainError::InvalidInput(
+                "vault position requires a non-zero expiry and order id",
+            ));
+        }
+        let legs = MarketLegs::bind(self, position.underlying_mint, position.quote_mint)?;
+        let funding = legs.settlement(position.is_put);
+        let program_id = &self.args.program_id;
+        let position_pda = pda::position(program_id, &position.order_id).0;
+        let market = pda::market(
+            program_id,
+            &position.underlying_mint,
+            &position.quote_mint,
+            position.expiry_ts,
+            position.is_put,
+        )
+        .0;
+        let accounts = vec![
+            AccountMeta::new_readonly(self.args.actor, true),
+            AccountMeta::new_readonly(self.addresses.vault, false),
+            AccountMeta::new_readonly(self.addresses.delegate, false),
+            AccountMeta::new(position_pda, false),
+            AccountMeta::new_readonly(market, false),
+            AccountMeta::new(funding.vault_ata, false),
+            AccountMeta::new(ata(&position_pda, &funding.mint, &funding.program), false),
+            AccountMeta::new_readonly(funding.mint, false),
+            AccountMeta::new_readonly(funding.program, false),
+        ];
+        Ok(self.instruction(VaultIx::VaultFundMakerPosition, accounts, &[]))
+    }
+
     /// `OpenPositionForVaultAsTaker`: this vault writes and sells to `maker_owner`.
     pub fn open_position_as_taker(
         &self,
@@ -239,7 +293,7 @@ impl VaultManager {
         terms: &VaultTradeTerms,
     ) -> Result<VaultOpenPosition, VaultChainError> {
         terms.validate()?;
-        let legs = MarketLegs::bind(self, terms)?;
+        let legs = MarketLegs::bind(self, terms.underlying_mint, terms.quote_mint)?;
         let order_id = terms.order_id(&self.args.program_id, &maker_owner, &self.addresses.vault);
         let addresses = self.position_addresses(legs, terms, &order_id);
         let maker = maker_pda_with_program_id(&self.args.program_id, &maker_owner).0;
@@ -282,7 +336,7 @@ impl VaultManager {
         terms: &VaultTradeTerms,
     ) -> Result<VaultOpenPosition, VaultChainError> {
         terms.validate()?;
-        let legs = MarketLegs::bind(self, terms)?;
+        let legs = MarketLegs::bind(self, terms.underlying_mint, terms.quote_mint)?;
         let order_id = terms.order_id(&self.args.program_id, &self.addresses.vault, &taker);
         let addresses = self.position_addresses(legs, terms, &order_id);
         let a = &self.addresses;
@@ -326,8 +380,8 @@ impl VaultManager {
         terms: &VaultTradeTerms,
     ) -> Result<VaultOpenPosition, VaultChainError> {
         terms.validate()?;
-        let legs = MarketLegs::bind(self, terms)?;
-        let holder_legs = MarketLegs::bind(holder, terms)?;
+        let legs = MarketLegs::bind(self, terms.underlying_mint, terms.quote_mint)?;
+        let holder_legs = MarketLegs::bind(holder, terms.underlying_mint, terms.quote_mint)?;
         if self.addresses.vault == holder.addresses.vault
             || self.args.program_id != holder.args.program_id
             || holder_legs.underlying.program != legs.underlying.program

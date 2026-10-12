@@ -25,6 +25,7 @@ pub(super) enum VaultIx {
     ProcessVaultEquity = 37,
     OpenPositionForVaultAsTaker = 41,
     OpenPositionForVaultAsMaker = 42,
+    VaultFundMakerPosition = 43,
     VaultSpotRebalance = 47,
     RecoveryConvertToMain = 48,
     ProcessWithdrawals = 38,
