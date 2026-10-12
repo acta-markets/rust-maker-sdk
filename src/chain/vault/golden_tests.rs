@@ -9,7 +9,7 @@ use super::{
     VaultRequestKind, VaultSafety, oracle_source_pyth_feed, pda, vault_capital_batch_compute_units,
 };
 use crate::VaultDelegatePermissions;
-use crate::chain::ix::{SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
+use crate::chain::ix::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
 
 fn key(seed: u8) -> Pubkey {
     Pubkey::new_from_array([seed; 32])
@@ -394,7 +394,7 @@ fn patterned(len: usize) -> Vec<u8> {
 #[test]
 fn vault_account_decodes_golden_fields() {
     let mut data = patterned(VaultAccount::LEN);
-    data[..5].copy_from_slice(&[9, 2, 255, 3, 1]);
+    data[..5].copy_from_slice(&[9, 1, 255, 3, 1]);
     data[12..16].copy_from_slice(&3u32.to_le_bytes());
     data[402] = 1;
     data[403] = 0;
@@ -468,70 +468,8 @@ fn vault_bytes(len: usize, version: u8) -> Vec<u8> {
 }
 
 #[test]
-fn vault_account_decodes_legacy_layout_and_flags_migration() {
-    let legacy = vault_bytes(VaultAccount::LEGACY_LEN, 1);
-    assert!(legacy[432..456].iter().all(|byte| *byte != 0));
-    let mut current = legacy[..432].to_vec();
-    current.extend([0; 8]);
-    current.extend(&legacy[312..320]);
-    current.extend(&legacy[288..296]);
-    current.extend(&legacy[432..]);
-    current[1] = 2;
-    assert_eq!(current.len(), VaultAccount::LEN);
-
-    let v1 = VaultAccount::parse(&legacy).unwrap();
-    let v2 = VaultAccount::parse(&current).unwrap();
-    assert!(v1.needs_migration);
-    assert!(!v2.needs_migration);
-    assert_eq!(
-        (
-            v1.closing_started_at,
-            v1.boundary_equity,
-            v1.boundary_shares
-        ),
-        (
-            0,
-            u64::from_le_bytes(legacy[312..320].try_into().unwrap()),
-            v1.total_shares
-        )
-    );
-    assert_eq!(
-        VaultAccount {
-            needs_migration: false,
-            ..v1
-        },
-        v2
-    );
-    assert_eq!(
-        (v1.capital_fallback_delay_secs, v1.total_shares),
-        (
-            u64::from_le_bytes(legacy[408..416].try_into().unwrap()),
-            u64::from_le_bytes(legacy[288..296].try_into().unwrap())
-        )
-    );
-    assert_eq!(
-        (
-            v1.phase,
-            v1.safety,
-            v1.main_token_program,
-            v1.second_token_program
-        ),
-        (
-            VaultPhase::Active,
-            VaultSafety::Normal,
-            TOKEN_PROGRAM_ID,
-            TOKEN_2022_PROGRAM_ID
-        )
-    );
-
-    current[440..448].copy_from_slice(&9u64.to_le_bytes());
-    let v2 = VaultAccount::parse(&current).unwrap();
-    assert_eq!(v2.boundary_equity, 9);
-}
-
-#[test]
 fn vault_account_rejects_unknown_lengths_and_mismatched_versions() {
-    for len in [0, 700, VaultAccount::LEGACY_LEN - 1, VaultAccount::LEN + 1] {
+    for len in [0, 688, 700, VaultAccount::LEN + 1] {
         assert_eq!(
             VaultAccount::parse(&vec![9; len]),
             Err(VaultChainError::AccountLength {
@@ -540,41 +478,14 @@ fn vault_account_rejects_unknown_lengths_and_mismatched_versions() {
             })
         );
     }
+    assert!(VaultAccount::parse(&vault_bytes(VaultAccount::LEN, 1)).is_ok());
     assert_eq!(
-        VaultAccount::parse(&vault_bytes(VaultAccount::LEGACY_LEN, 2)),
+        VaultAccount::parse(&vault_bytes(VaultAccount::LEN, 2)),
         Err(VaultChainError::Version(2))
-    );
-    assert_eq!(
-        VaultAccount::parse(&vault_bytes(VaultAccount::LEN, 1)),
-        Err(VaultChainError::Version(1))
     );
     assert_eq!(
         VaultAccount::parse(&vault_bytes(VaultAccount::LEN, 3)),
         Err(VaultChainError::Version(3))
-    );
-}
-
-#[test]
-fn migrate_vault_is_opcode_83_with_payer_vault_and_system_program() {
-    let m = manager(TOKEN_PROGRAM_ID);
-    let ix = m.migrate_vault();
-    assert_eq!(
-        ix.program_id,
-        Pubkey::new_from_array(crate::ACTA_PROGRAM_ID)
-    );
-    assert_eq!(ix.data, vec![83]);
-    let metas: Vec<_> = ix
-        .accounts
-        .iter()
-        .map(|meta| (meta.pubkey, meta.is_signer, meta.is_writable))
-        .collect();
-    assert_eq!(
-        metas,
-        vec![
-            (key(1), true, true),
-            (m.addresses.vault, false, true),
-            (SYSTEM_PROGRAM_ID, false, false),
-        ]
     );
 }
 

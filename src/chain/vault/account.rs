@@ -78,38 +78,25 @@ pub struct VaultAccount {
     pub closing_started_at: u64,
     pub boundary_equity: u64,
     pub boundary_shares: u64,
-    pub needs_migration: bool,
 }
 
 const VAULT_DISCRIMINATOR: u8 = 9;
-const VAULT_VERSION: u8 = 2;
-const VAULT_LEGACY_VERSION: u8 = 1;
+const VAULT_VERSION: u8 = 1;
 const REQUEST_VERSION: u8 = 1;
 const EQUITY_COMPUTED: u32 = 1 << 0;
 const ACCEPTING_DEPOSITS: u32 = 1 << 1;
 
 impl VaultAccount {
     pub const LEN: usize = 712;
-    pub const LEGACY_LEN: usize = 688;
 
     pub fn parse(data: &[u8]) -> Result<Self, VaultChainError> {
-        let (version, needs_migration) = match data.len() {
-            Self::LEN => (VAULT_VERSION, false),
-            Self::LEGACY_LEN => (VAULT_LEGACY_VERSION, true),
-            actual => {
-                return Err(VaultChainError::AccountLength {
-                    expected: Self::LEN,
-                    actual,
-                });
-            }
-        };
-        let data = header(data, data.len(), VAULT_DISCRIMINATOR, version)?;
-        let total_shares = u64_at(data, 288);
-        let (closing_started_at, boundary_equity, boundary_shares) = if needs_migration {
-            (0, u64_at(data, 312), total_shares)
-        } else {
-            (u64_at(data, 432), u64_at(data, 440), u64_at(data, 448))
-        };
+        if data.len() != Self::LEN {
+            return Err(VaultChainError::AccountLength {
+                expected: Self::LEN,
+                actual: data.len(),
+            });
+        }
+        let data = header(data, Self::LEN, VAULT_DISCRIMINATOR, VAULT_VERSION)?;
         let flags = u32_at(data, 12);
         if flags & !(EQUITY_COMPUTED | ACCEPTING_DEPOSITS) != 0 {
             return Err(VaultChainError::UnknownAccountingFlags(flags));
@@ -127,14 +114,13 @@ impl VaultAccount {
             share_mint: pubkey(data, 240),
             main_token_program: token_program(data[402])?,
             second_token_program: token_program(data[403])?,
-            total_shares,
+            total_shares: u64_at(data, 288),
             pending_deposit_count: u32_at(data, 320),
             pending_withdraw_count: u32_at(data, 324),
             capital_fallback_delay_secs: u64_at(data, 408),
-            closing_started_at,
-            boundary_equity,
-            boundary_shares,
-            needs_migration,
+            closing_started_at: u64_at(data, 432),
+            boundary_equity: u64_at(data, 440),
+            boundary_shares: u64_at(data, 448),
         })
     }
 }

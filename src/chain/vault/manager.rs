@@ -40,7 +40,6 @@ pub(super) enum VaultIx {
     OpenPositionBetweenVaults = 65,
     DisableVaultDelegate = 72,
     ClosingConvertToMain = 78,
-    MigrateVault = 83,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,19 +184,6 @@ impl VaultManager {
             ),
         };
         Ok(Self { args, addresses })
-    }
-
-    #[must_use]
-    pub fn migrate_vault(&self) -> Instruction {
-        self.instruction(
-            VaultIx::MigrateVault,
-            vec![
-                AccountMeta::new(self.args.actor, true),
-                AccountMeta::new(self.addresses.vault, false),
-                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-            ],
-            &[],
-        )
     }
 
     #[must_use]
