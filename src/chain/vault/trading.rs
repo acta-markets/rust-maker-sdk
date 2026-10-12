@@ -9,10 +9,14 @@ use crate::chain::ix::{
     SYSTEM_PROGRAM_ID, derive_associated_token_address as ata, maker_pda_with_program_id,
 };
 use crate::orders::{OrderPreimageArgs, compute_order_id};
+use crate::quote::market_pda;
 use crate::types::PositionType;
 
 pub const JUPITER_V6_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
+/// Pool-backed mock router pinned by the devnet program build (devnet has no Jupiter).
+pub const DEVNET_SWAP_ROUTER_ID: Pubkey =
+    solana_sdk::pubkey!("BtHXpaAvhaKYk9pR4vNpuMZLTR8XeXnZ4iTy2Q1NzuCz");
 pub const MAX_VAULT_SWAP_ROUTE_ACCOUNTS: usize = 64;
 pub const MAX_VAULT_SWAP_ROUTE_DATA: usize = 1_024;
 
@@ -138,14 +142,13 @@ impl VaultTradeTerms {
 
     #[must_use]
     pub fn market(&self, program_id: &Pubkey) -> Pubkey {
-        pda::market(
+        market_pda(
             program_id,
             &self.underlying_mint,
             &self.quote_mint,
             self.expiry_ts,
             self.is_put,
         )
-        .0
     }
 
     /// Order id binding `maker` and `taker` to these terms.
@@ -188,9 +191,11 @@ impl VaultTradeTerms {
     }
 }
 
-/// A Jupiter route as the vault's swap instruction carries it.
+/// A router route as the vault's swap instruction carries it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultSwapRoute {
+    /// Must equal the router pinned by the target program build.
+    pub router: Pubkey,
     pub main_price_update: Pubkey,
     pub second_price_update: Pubkey,
     pub amount_in: u64,
@@ -264,14 +269,13 @@ impl VaultManager {
         let funding = legs.settlement(position.is_put);
         let program_id = &self.args.program_id;
         let position_pda = pda::position(program_id, &position.order_id).0;
-        let market = pda::market(
+        let market = market_pda(
             program_id,
             &position.underlying_mint,
             &position.quote_mint,
             position.expiry_ts,
             position.is_put,
-        )
-        .0;
+        );
         let accounts = vec![
             AccountMeta::new_readonly(self.args.actor, true),
             AccountMeta::new_readonly(self.addresses.vault, false),
@@ -453,7 +457,7 @@ impl VaultManager {
             AccountMeta::new_readonly(route.second_price_update, false),
             AccountMeta::new_readonly(args.main_token_program, false),
             AccountMeta::new_readonly(args.second_token_program, false),
-            AccountMeta::new_readonly(JUPITER_V6_PROGRAM_ID, false),
+            AccountMeta::new_readonly(route.router, false),
         ];
         let custody = [
             AccountMeta::new(a.vault_main_ata, false),
@@ -540,7 +544,7 @@ impl VaultManager {
             .any(|meta| meta.is_signer && meta.pubkey != a.vault)
         {
             return Err(VaultChainError::InvalidInput(
-                "only the vault PDA may sign the Jupiter CPI",
+                "only the vault PDA may sign the router CPI",
             ));
         }
         let contains = |key: &Pubkey| route.route_accounts.iter().any(|meta| meta.pubkey == *key);

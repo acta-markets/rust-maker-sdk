@@ -18,18 +18,18 @@ pub use crank::{
 pub use error::VaultChainError;
 pub use governance::{VaultGovernanceUpdate, VaultGovernanceUpdateKind, VaultPolicyUpdate};
 pub use manager::{
-    CapitalBatchShape, VAULT_CAPITAL_BATCH_USERS, VaultAddresses, VaultManager, VaultManagerArgs,
-    vault_capital_batch_compute_units,
+    CapitalBatchShape, DepositPayout, VAULT_CAPITAL_BATCH_USERS, VaultAddresses, VaultManager,
+    VaultManagerArgs, WithdrawalPayout, vault_capital_batch_compute_units,
 };
 pub use pyth::{PYTH_PUSH_ORACLE_ID, pyth_price_feed_account};
 pub use served::{
-    ComputeBudgetBounds, VaultIntentError, VaultOpenIntent, VaultSwapIntent,
+    ComputeBudgetBounds, VaultIntentError, VaultOpenIntent, VaultSwapIntent, VerifiedTransaction,
     served_lookup_table_keys, verify_vault_open, verify_vault_swap,
 };
 pub use trading::{
-    JUPITER_V6_PROGRAM_ID, MAX_VAULT_SWAP_ROUTE_ACCOUNTS, MAX_VAULT_SWAP_ROUTE_DATA,
-    VaultOpenPosition, VaultPositionAddresses, VaultPositionRef, VaultSwapKind, VaultSwapRoute,
-    VaultTradeTerms,
+    DEVNET_SWAP_ROUTER_ID, JUPITER_V6_PROGRAM_ID, MAX_VAULT_SWAP_ROUTE_ACCOUNTS,
+    MAX_VAULT_SWAP_ROUTE_DATA, VaultOpenPosition, VaultPositionAddresses, VaultPositionRef,
+    VaultSwapKind, VaultSwapRoute, VaultTradeTerms,
 };
 
 #[cfg(test)]

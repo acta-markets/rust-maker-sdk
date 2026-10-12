@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::*;
 use crate::chain::vault::{MAX_VAULT_SWAP_ROUTE_ACCOUNTS, VaultManager, VaultManagerArgs};
 use crate::types::OrderId;
-use crate::ws::types::{SwapQuoteData, SwapQuoteResultData};
+use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
 
 const FIXTURE: &str = include_str!("../../../tests/fixtures/vault_served_tx.json");
 const BOUNDS: ComputeBudgetBounds = ComputeBudgetBounds {
@@ -137,23 +137,34 @@ fn verify_swap_with_floor(
             main_price_update: Pubkey::new_from_array([71; 32]),
             second_price_update: Pubkey::new_from_array([72; 32]),
             min_output_floor,
+            router: crate::chain::vault::JUPITER_V6_PROGRAM_ID,
         },
         tables,
         BOUNDS,
     )
+    .map(|_| ())
 }
 
 fn verify(
     case: &Value,
     tx_base64: &str,
     tables: &[AddressLookupTableAccount],
-) -> Result<[u8; 32], VaultIntentError> {
+) -> Result<(), VaultIntentError> {
     let terms = terms_or_default(case);
+    let order_id = match case["position"]["order_id"].as_str() {
+        Some(hex) => OrderId::from_hex(hex).unwrap(),
+        None => OrderId::new([0; 32]),
+    };
+    let to_sign = &SponsoredTxToSignData {
+        order_id,
+        tx_base64: tx_base64.to_owned(),
+        signature_deadline: std::time::UNIX_EPOCH,
+    };
     match case["kind"].as_str().unwrap() {
         "vault_taker" => {
             let writer = manager(case, "writer");
             verify_vault_open(
-                tx_base64,
+                to_sign,
                 &VaultOpenIntent::Sale {
                     writer: &writer,
                     maker_owner: key(&case["maker_owner"]),
@@ -163,11 +174,12 @@ fn verify(
                 tables,
                 BOUNDS,
             )
+            .map(|_| ())
         }
         "vault_to_vault" => {
             let (writer, holder) = (manager(case, "writer"), manager(case, "holder"));
             verify_vault_open(
-                tx_base64,
+                to_sign,
                 &VaultOpenIntent::BetweenVaults {
                     writer: &writer,
                     holder: &holder,
@@ -176,11 +188,12 @@ fn verify(
                 tables,
                 BOUNDS,
             )
+            .map(|_| ())
         }
         "vault_maker" => {
             let holder = manager(case, "maker");
             verify_vault_open(
-                tx_base64,
+                to_sign,
                 &VaultOpenIntent::Fill {
                     holder: &holder,
                     taker: key(&case["taker"]),
@@ -189,14 +202,14 @@ fn verify(
                 tables,
                 BOUNDS,
             )
+            .map(|_| ())
         }
         "swap" => verify_swap(
             case,
             &swap_request(case),
             &swap_quote(case, tx_base64.to_owned()),
             tables,
-        )
-        .map(|()| [0; 32]),
+        ),
         other => panic!("unknown case {other}"),
     }
 }
@@ -251,14 +264,8 @@ fn every_served_fixture_verifies() {
     let cases = cases();
     assert_eq!(cases.len(), 16);
     for case in &cases {
-        let order_id = verify(case, &served_tx(case), &[table(case)])
+        verify(case, &served_tx(case), &[table(case)])
             .unwrap_or_else(|error| panic!("{} rejected: {error}", case["kind"]));
-        if case["position"].is_object() {
-            assert_eq!(
-                hex::encode(order_id),
-                case["position"]["order_id"].as_str().unwrap()
-            );
-        }
     }
 }
 
@@ -471,6 +478,24 @@ fn swap_terms_follow_the_request() {
         let request = swap_request(case);
         let quote = swap_quote(case, served_tx(case));
         verify_swap(case, &request, &quote, &tables).unwrap();
+        let vault = manager(case, "swapper");
+        assert!(
+            verify_vault_swap(
+                &VaultSwapIntent {
+                    vault: &vault,
+                    request: &request,
+                    quote: &quote,
+                    main_price_update: Pubkey::new_from_array([71; 32]),
+                    second_price_update: Pubkey::new_from_array([72; 32]),
+                    min_output_floor: 1,
+                    router: crate::chain::vault::DEVNET_SWAP_ROUTER_ID,
+                },
+                &tables,
+                BOUNDS,
+            )
+            .is_err(),
+            "a route served for another router must not verify"
+        );
 
         let mut loose = quote.clone();
         loose.minimum_out_amount = "1".into();
@@ -558,6 +583,7 @@ fn served_minimum_below_the_operator_floor_is_rejected() {
             .swap(
                 kind,
                 &VaultSwapRoute {
+                    router: crate::chain::vault::JUPITER_V6_PROGRAM_ID,
                     main_price_update: Pubkey::new_from_array([71; 32]),
                     second_price_update: Pubkey::new_from_array([72; 32]),
                     amount_in: num(&case["swap"]["amount"]),
@@ -704,5 +730,77 @@ fn malformed_transactions_are_rejected() {
     assert_eq!(
         served_lookup_table_keys(&served_tx(case)).unwrap(),
         vec![tables[0].key]
+    );
+}
+
+fn unsigned_tx(signers: &[Pubkey], extra_keys: &[Pubkey], v0: bool) -> String {
+    let mut bytes = vec![signers.len() as u8];
+    bytes.extend(std::iter::repeat_n(0u8, 64 * signers.len()));
+    if v0 {
+        bytes.push(0x80);
+    }
+    bytes.extend([signers.len() as u8, 0, extra_keys.len() as u8]);
+    bytes.push((signers.len() + extra_keys.len()) as u8);
+    for key in signers.iter().chain(extra_keys) {
+        bytes.extend_from_slice(key.as_ref());
+    }
+    bytes.extend([3u8; 32]);
+    bytes.push(0);
+    if v0 {
+        bytes.push(0);
+    }
+    STANDARD.encode(bytes)
+}
+
+fn decoded_transaction(tx_base64: &str) -> VerifiedTransaction {
+    ServedMessage::decode(tx_base64, &[]).unwrap().transaction
+}
+
+#[test]
+fn signing_fills_only_the_signer_slot_for_v0_and_legacy() {
+    use crate::orders::BytesSigner;
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let signer = BytesSigner::from_secret([4u8; 32]);
+    let peer = BytesSigner::from_secret([5u8; 32]);
+    let verify = |bytes: &[u8], slot: usize, signer: &BytesSigner| {
+        let signature = Signature::from_bytes(
+            bytes[1 + 64 * slot..1 + 64 * (slot + 1)]
+                .try_into()
+                .unwrap(),
+        );
+        VerifyingKey::from_bytes(&signer.pubkey_bytes())
+            .unwrap()
+            .verify(&bytes[129..], &signature)
+            .unwrap();
+    };
+    for v0 in [true, false] {
+        let tx = unsigned_tx(
+            &[
+                Pubkey::new_from_array(peer.pubkey_bytes()),
+                Pubkey::new_from_array(signer.pubkey_bytes()),
+            ],
+            &[Pubkey::new_from_array([7u8; 32])],
+            v0,
+        );
+        let peer_signed = decoded_transaction(&tx).sign(&peer).unwrap();
+        let peer_bytes = STANDARD.decode(&peer_signed).unwrap();
+        let signed = decoded_transaction(&peer_signed).sign(&signer).unwrap();
+        let bytes = STANDARD.decode(&signed).unwrap();
+        verify(&bytes, 0, &peer);
+        verify(&bytes, 1, &signer);
+        assert_eq!(&bytes[1..65], &peer_bytes[1..65], "peer slot untouched");
+        assert_eq!(&bytes[129..], &peer_bytes[129..], "message untouched");
+    }
+}
+
+#[test]
+fn signing_rejects_a_transaction_that_does_not_require_the_signer() {
+    let signer = crate::orders::BytesSigner::from_secret([4u8; 32]);
+    let key = Pubkey::new_from_array(signer.pubkey_bytes());
+    let tx = unsigned_tx(&[Pubkey::new_from_array([5u8; 32])], &[key], true);
+    assert_eq!(
+        decoded_transaction(&tx).sign(&signer),
+        Err(VaultIntentError::SignerNotRequired(key))
     );
 }

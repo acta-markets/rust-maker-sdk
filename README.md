@@ -40,10 +40,9 @@ the market descriptor and derive its PDA before using low-level signing APIs.
 | Feature | What it enables |
 |---|---|
 | `ws-client` | Typed maker clients, `ManagedWsHandle`, and raw `WsClient`; requires Tokio |
-| `vault` | Vault operator client, transaction signing and projection feed (includes `ws-client`) |
-| `chain` | Solana instruction builders (`DepositPremium`, `WithdrawPremium`, `FundPosition`) |
+| `vault` | Vault operator client, verified transaction signing and projection feed (includes `ws-client` and `chain`) |
+| `chain` | Solana instruction builders (`DepositPremium`, `WithdrawPremium`, `FundPosition`), vault capital-cycle instructions (`VaultManager`), derived vault addresses, account decoders, crank decision, Pyth price-account derivation and served-transaction verification; no WebSocket stack |
 | `chain-rpc` | Solana RPC queries (extends `chain`) |
-| `vault-chain` | Vault capital-cycle instructions (`VaultManager`) and derived vault addresses, account decoders, crank decision and Pyth price-account derivation (`vault` + `chain`) |
 | `http` | Read-only `HttpClient` for the public vault, market, token and venue endpoints (reqwest, rustls with native roots). `venue()` returns server limits (minimum quote validity, RFQ timeout bounds, settlement buffer); `tokens()` returns every token by mint, underlyings with size rule, strike tick and quote mints; `markets(&MarketFilter)` filters by underlying, quote, expiry, side and `active` (default active only; `Some(false)` adds closed and finalized markets, finalized ones only since the server started). Responses carry ETags and the client revalidates with `If-None-Match`, so polling costs a 304. Refetch when `subscribe_reference_changes()` yields new ETags. Read these instead of hardcoding them. |
 | `test-helpers` | Test utilities (`ManagedWsHandle::test_handle`, message injection) |
 
@@ -52,8 +51,7 @@ any signer, including during reconnect. Maker authentication supports a register
 signing key different from the owner (`with_auth_pubkey`); vault authentication
 binds the challenge to both the configured operator and vault. Raw `WsClient`
 callers must use `ws::auth::validate_maker_auth_challenge` or
-`ws::auth::validate_vault_auth_challenge` before signing. Server challenge bytes
-and order signatures are unchanged; existing backend versions remain compatible.
+`ws::auth::validate_vault_auth_challenge` before signing.
 
 ## Onboarding
 
@@ -174,7 +172,7 @@ empty mint scopes. `initial_subscribe` seeds the desired target; recovery uses
 fresh request IDs, never its initial ID. Without an initial target, desired
 channels/scopes are empty. Recovery sends both mint lists explicitly, clearing
 persisted filters when the desired lists are empty. Supply the intended filters
-even when resuming. `auto_reconcile` and its setter are no longer available.
+even when resuming.
 
 Only one subscription mutation may await an ACK; another returns
 `SubscriptionPending`. Trading/cancellation remain available. Its acknowledgement
@@ -413,7 +411,7 @@ subscriptions and projections share one connection.
   the matching backend update. The server and contract check each action.
 - **Signing:** the operator signs challenges and prepared transactions.
   Maker quotes require an active primary-delegate grant; `sign_quote` puts the vault address
-  in `maker_owner`. With `vault-chain`, `verify_and_sign_sponsored_tx` and
+  in `maker_owner`. `verify_and_sign_sponsored_tx` and
   `verify_and_sign_swap` rebuild the expected instructions from what the operator
   agreed to (`VaultOpenIntent::Sale` / `BetweenVaults` / `Fill` with
   `VaultTradeTerms`; `VaultSwapIntent` with the request, quote, price-update
@@ -426,10 +424,9 @@ subscriptions and projections share one connection.
   read-only vault account made writable). The blockhash is not checked. v0
   lookup tables are resolved from the tables passed in; `ChainClient::address_lookup_tables`
   fetches active tables for `served_lookup_table_keys`. Errors name the first mismatch.
-  `verify_vault_open` / `verify_vault_swap` run the same checks without signing,
-  e.g. for an external taker filling a vault quote. Deadlines (`signature_deadline`,
-  `valid_until`) are checked locally. `_unverified` helpers skip all of this and
-  trust the server.
+  `verify_vault_open` / `verify_vault_swap` run the same checks and return a
+  `VerifiedTransaction`, e.g. for an external taker filling a vault quote; only it can be
+  signed. Deadlines (`signature_deadline`, `valid_until`) are checked locally.
 - **Readiness:** each auth fetches `GetMyActiveRfqs` and `GetPositions`.
   A grant with maker permission also fetches `GetMmSummary`, `GetActiveRfqs`
   and `GetMyQuotes { scope: Live }`.
@@ -446,10 +443,12 @@ subscriptions and projections share one connection.
   mint into the position. The operator signs and pays.
 
 ```rust,no_run
-# #[cfg(feature = "vault-chain")]
+# #[cfg(feature = "vault")]
 # {
 use acta_maker_sdk::*;
-use acta_maker_sdk::chain::vault::{ComputeBudgetBounds, VaultManager, VaultSwapIntent};
+use acta_maker_sdk::chain::vault::{
+    ComputeBudgetBounds, VaultManager, VaultSwapIntent, JUPITER_V6_PROGRAM_ID,
+};
 use acta_maker_sdk::ws::types::*;
 use std::sync::Arc;
 # fn load_vault_manager() -> Result<VaultManager, Box<dyn std::error::Error>> { unimplemented!() }
@@ -497,6 +496,7 @@ let submitted = client.swap_submit(client.verify_and_sign_swap(
         main_price_update,
         second_price_update,
         min_output_floor,
+        router: JUPITER_V6_PROGRAM_ID,
     },
     &lookup_tables,
     ComputeBudgetBounds { max_unit_limit: 600_000, max_unit_price_micro_lamports: 50_000 },
@@ -517,9 +517,8 @@ the prepared template remains valid.
 `VaultProjectionAdvanced` is a versioned cursor, not an execution result.
 Ignore duplicate/older versions; reload HTTP vault detail on every newer version
 or stream gap. `VaultProjection::follows(previous)` checks adjacency only.
-`examples/vault_operator.rs` shows cursor handling and sponsored signing
-(with the `_unverified` helpers, so it is not production signing);
-the application supplies the HTTP reload and risk accounting.
+`examples/vault_operator.rs` shows cursor handling and verified fill and swap signing;
+the application supplies the terms, HTTP reload and risk accounting.
 
 ## Funding positions with native SOL
 
@@ -602,7 +601,7 @@ public key; it is used for authentication and order preimages.
 ```sh
 cargo run --locked --release --features ws-client --example loopback_latency
 ACTA_VAULT_PDA=<vault> cargo run --locked --features vault --example vault_operator
-ACTA_VAULT_PDA=<vault> ACTA_RPC_URL=<rpc> cargo run --locked --features vault-chain,chain-rpc --example vault_capital
+ACTA_VAULT_PDA=<vault> ACTA_RPC_URL=<rpc> cargo run --locked --features chain-rpc --example vault_capital
 ```
 
 `vault_operator` signs with the operator key from `ACTA_KEYPAIR_PATH`

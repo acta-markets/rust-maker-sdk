@@ -263,19 +263,17 @@ fn lookup_table_parses_active_tables_only() {
     account.data[4..12].copy_from_slice(&7u64.to_le_bytes());
     assert!(matches!(
         parse_lookup_table(key, &account),
-        Err(LookupTableError::Deactivated(found)) if found == key
+        Err(ChainError::LookupTableDeactivated(found)) if found == key
     ));
     account.data[4..12].copy_from_slice(&u64::MAX.to_le_bytes());
     account.data.push(0);
     assert!(matches!(
         parse_lookup_table(key, &account),
-        Err(LookupTableError::Chain(ChainError::InvalidAccountData))
+        Err(ChainError::InvalidAccountData)
     ));
     account.owner = Pubkey::new_unique();
     assert!(matches!(
         parse_lookup_table(key, &account),
-        Err(LookupTableError::Chain(
-            ChainError::AccountOwnerMismatch { .. }
-        ))
+        Err(ChainError::AccountOwnerMismatch { .. })
     ));
 }

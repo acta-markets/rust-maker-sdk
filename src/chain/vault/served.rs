@@ -12,9 +12,9 @@ use super::VaultChainError;
 use super::manager::VaultManager;
 use super::trading::{VaultSwapKind, VaultSwapRoute, VaultTradeTerms};
 use crate::chain::ix::{ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID};
-use crate::orders::verify_order_id_signature_bytes;
+use crate::orders::{SignerLike, verify_order_id_signature_bytes};
 use crate::types::{VaultSwapDirection, VaultSwapMode};
-use crate::ws::types::{SwapQuoteData, SwapQuoteResultData};
+use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
 
 const COMPUTE_BUDGET_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("ComputeBudget111111111111111111111111111111");
@@ -24,6 +24,7 @@ const ED25519_HEADER: [u8; 16] = [
     1, 0, 48, 0, 255, 255, 16, 0, 255, 255, 112, 0, 32, 0, 255, 255,
 ];
 const ED25519_DATA_LEN: usize = 144;
+const SIGNATURE_LEN: usize = 64;
 const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
 const SET_COMPUTE_UNIT_PRICE: u8 = 3;
 const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
@@ -79,6 +80,8 @@ pub enum VaultIntentError {
         expected_writable: bool,
         found_writable: bool,
     },
+    #[error("signer {0} is not one of the transaction's required signers")]
+    SignerNotRequired(Pubkey),
     #[error("transaction requires signer {0} outside the intent")]
     UnexpectedSigner(Pubkey),
     #[error("transaction loads account {0} that no expected instruction uses")]
@@ -141,16 +144,18 @@ pub struct VaultSwapIntent<'a> {
     pub main_price_update: Pubkey,
     pub second_price_update: Pubkey,
     pub min_output_floor: u64,
+    /// Router pinned by the target program build: `JUPITER_V6_PROGRAM_ID` or `DEVNET_SWAP_ROUTER_ID`.
+    pub router: Pubkey,
 }
 
-/// Verifies a served position-open transaction against `intent`; returns the bound order id.
+/// Verifies a served position-open transaction against `intent` and the order id it is served for.
 pub fn verify_vault_open(
-    tx_base64: &str,
+    to_sign: &SponsoredTxToSignData,
     intent: &VaultOpenIntent<'_>,
     tables: &[AddressLookupTableAccount],
     bounds: ComputeBudgetBounds,
-) -> Result<[u8; 32], VaultIntentError> {
-    let served = ServedMessage::decode(tx_base64, tables)?;
+) -> Result<VerifiedTransaction, VaultIntentError> {
+    let served = ServedMessage::decode(&to_sign.tx_base64, tables)?;
     let (payer, quote_signer, open) = match *intent {
         VaultOpenIntent::Sale {
             writer,
@@ -181,6 +186,9 @@ pub fn verify_vault_open(
             holder.open_position_as_maker(taker, &terms)?,
         ),
     };
+    if open.order_id != *to_sign.order_id.as_bytes() {
+        return Err(VaultIntentError::OrderId);
+    }
     let collateral_ata = create_ata_idempotent(
         payer,
         open.addresses.position,
@@ -204,8 +212,7 @@ pub fn verify_vault_open(
     expected.push(collateral_ata);
     expected.push(served.quote_signature(expected.len(), quote_signer, &open.order_id)?);
     expected.push(open.instruction);
-    served.matches(payer, &expected)?;
-    Ok(open.order_id)
+    served.matches(payer, &expected)
 }
 
 /// Verifies a served vault swap against the operator's request and the quoted terms.
@@ -213,7 +220,7 @@ pub fn verify_vault_swap(
     intent: &VaultSwapIntent<'_>,
     tables: &[AddressLookupTableAccount],
     bounds: ComputeBudgetBounds,
-) -> Result<(), VaultIntentError> {
+) -> Result<VerifiedTransaction, VaultIntentError> {
     let VaultSwapIntent {
         vault,
         request,
@@ -291,6 +298,7 @@ pub fn verify_vault_swap(
         ));
     };
     let route = VaultSwapRoute {
+        router: intent.router,
         main_price_update: intent.main_price_update,
         second_price_update: intent.second_price_update,
         amount_in,
@@ -377,6 +385,8 @@ struct CompiledInstruction {
 }
 
 struct CompiledMessage {
+    signatures_start: usize,
+    message_start: usize,
     required_signers: usize,
     readonly_signed: usize,
     readonly_unsigned: usize,
@@ -419,10 +429,8 @@ impl<'a> Reader<'a> {
     }
 
     fn key(&mut self) -> Result<Pubkey, VaultIntentError> {
-        let bytes: [u8; 32] = self
-            .take(32)?
-            .try_into()
-            .map_err(|_| VaultIntentError::Malformed("truncated account key"))?;
+        let mut bytes = [0; 32];
+        bytes.copy_from_slice(self.take(32)?);
         Ok(Pubkey::new_from_array(bytes))
     }
 
@@ -439,7 +447,9 @@ impl CompiledMessage {
             pos: 0,
         };
         let signatures = reader.compact()?;
-        reader.take(signatures.saturating_mul(64))?;
+        let signatures_start = reader.pos;
+        reader.take(signatures.saturating_mul(SIGNATURE_LEN))?;
+        let message_start = reader.pos;
         let mut versioned = false;
         if reader
             .bytes
@@ -491,6 +501,8 @@ impl CompiledMessage {
             return Err(VaultIntentError::Malformed("trailing bytes"));
         }
         Ok(Self {
+            signatures_start,
+            message_start,
             required_signers,
             readonly_signed,
             readonly_unsigned,
@@ -510,6 +522,30 @@ struct Flags {
 struct ServedMessage {
     keys: Vec<(Pubkey, Flags)>,
     instructions: Vec<Instruction>,
+    transaction: VerifiedTransaction,
+}
+
+#[derive(Debug)]
+pub struct VerifiedTransaction {
+    bytes: Vec<u8>,
+    signatures_start: usize,
+    message_start: usize,
+    signers: Vec<Pubkey>,
+}
+
+impl VerifiedTransaction {
+    pub fn sign(mut self, signer: &dyn SignerLike) -> Result<String, VaultIntentError> {
+        let key = Pubkey::new_from_array(signer.pubkey_bytes());
+        let index = self
+            .signers
+            .iter()
+            .position(|required| *required == key)
+            .ok_or(VaultIntentError::SignerNotRequired(key))?;
+        let signature = signer.sign_message(&self.bytes[self.message_start..]);
+        let slot = self.signatures_start + index * SIGNATURE_LEN;
+        self.bytes[slot..slot + SIGNATURE_LEN].copy_from_slice(&signature);
+        Ok(STANDARD.encode(self.bytes))
+    }
 }
 
 impl ServedMessage {
@@ -600,7 +636,17 @@ impl ServedMessage {
                 })
             })
             .collect::<Result<Vec<_>, VaultIntentError>>()?;
-        Ok(Self { keys, instructions })
+        let transaction = VerifiedTransaction {
+            signatures_start: message.signatures_start,
+            message_start: message.message_start,
+            signers: message.static_keys[..message.required_signers].to_vec(),
+            bytes,
+        };
+        Ok(Self {
+            keys,
+            instructions,
+            transaction,
+        })
     }
 
     fn compute_budget(
@@ -616,21 +662,15 @@ impl ServedMessage {
                         && ix.data.len() == len
                         && ix.data.first() == Some(&tag)
                 })
-                .map(|ix| ix.data[1..].to_vec())
+                .map(|ix| &ix.data[1..])
                 .ok_or(VaultIntentError::ComputeBudget(index))
         };
-        let limit = budget(0, SET_COMPUTE_UNIT_LIMIT, 5)?;
-        let price = budget(1, SET_COMPUTE_UNIT_PRICE, 9)?;
-        let limit = u32::from_le_bytes(
-            limit
-                .try_into()
-                .map_err(|_| VaultIntentError::ComputeBudget(0))?,
-        );
-        let price = u64::from_le_bytes(
-            price
-                .try_into()
-                .map_err(|_| VaultIntentError::ComputeBudget(1))?,
-        );
+        let mut limit = [0; 4];
+        limit.copy_from_slice(budget(0, SET_COMPUTE_UNIT_LIMIT, 5)?);
+        let limit = u32::from_le_bytes(limit);
+        let mut price = [0; 8];
+        price.copy_from_slice(budget(1, SET_COMPUTE_UNIT_PRICE, 9)?);
+        let price = u64::from_le_bytes(price);
         let max_limit = bounds.max_unit_limit.min(MAX_COMPUTE_UNIT_LIMIT);
         if limit == 0 || limit > max_limit {
             return Err(VaultIntentError::ComputeUnitLimit {
@@ -687,15 +727,18 @@ impl ServedMessage {
         if ix.data[112..] != *order_id {
             return Err(VaultIntentError::QuoteSignature("binds a different order"));
         }
-        let signature: [u8; 64] = ix.data[48..112]
-            .try_into()
-            .map_err(|_| VaultIntentError::QuoteSignature("truncated signature"))?;
+        let mut signature = [0; SIGNATURE_LEN];
+        signature.copy_from_slice(&ix.data[48..112]);
         verify_order_id_signature_bytes(order_id, &signature, &signer.to_bytes())
             .map_err(|_| VaultIntentError::QuoteSignature("signature does not verify"))?;
         Ok(ix.clone())
     }
 
-    fn matches(&self, payer: Pubkey, expected: &[Instruction]) -> Result<(), VaultIntentError> {
+    fn matches(
+        self,
+        payer: Pubkey,
+        expected: &[Instruction],
+    ) -> Result<VerifiedTransaction, VaultIntentError> {
         let mut flags: HashMap<Pubkey, Flags> = HashMap::new();
         flags.insert(
             payer,
@@ -800,7 +843,7 @@ impl ServedMessage {
                 Some(_) => {}
             }
         }
-        Ok(())
+        Ok(self.transaction)
     }
 }
 

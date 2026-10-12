@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 
+use sha2::{Digest, Sha256};
+
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
 
-use super::{VaultAccount, VaultChainError, pda};
+use super::{VaultAccount, VaultChainError, VaultRequestKind, pda};
 use crate::chain::ix::{
     ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
     derive_associated_token_address as ata, derive_associated_token_address_with_bump,
@@ -26,20 +28,96 @@ pub(super) enum VaultIx {
     OpenPositionForVaultAsTaker = 41,
     OpenPositionForVaultAsMaker = 42,
     VaultFundMakerPosition = 43,
-    VaultSpotRebalance = 47,
-    RecoveryConvertToMain = 48,
+    VaultSpotRebalance = 45,
+    RecoveryConvertToMain = 46,
     ProcessWithdrawals = 38,
     ProcessDeposits = 39,
     FinalizeVaultCycle = 40,
-    SetAcceptingDeposits = 46,
-    RotateVaultDelegate = 49,
-    ProposeVaultUpdate = 57,
-    ApplyVaultUpdate = 58,
-    CancelVaultUpdate = 59,
-    ProcessFinalWithdrawal = 64,
-    OpenPositionBetweenVaults = 65,
-    DisableVaultDelegate = 72,
-    ClosingConvertToMain = 78,
+    SetAcceptingDeposits = 44,
+    RotateVaultDelegate = 47,
+    ProposeVaultUpdate = 55,
+    ApplyVaultUpdate = 56,
+    CancelVaultUpdate = 57,
+    ProcessFinalWithdrawal = 60,
+    OpenPositionBetweenVaults = 61,
+    DisableVaultDelegate = 62,
+    ClosingConvertToMain = 68,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DepositPayout {
+    user: Pubkey,
+    refund: Option<Pubkey>,
+    shares: Option<Pubkey>,
+}
+
+impl DepositPayout {
+    #[must_use]
+    pub const fn new(user: Pubkey) -> Self {
+        Self {
+            user,
+            refund: None,
+            shares: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn refund_to(mut self, account: Pubkey) -> Self {
+        self.refund = Some(account);
+        self
+    }
+
+    #[must_use]
+    pub const fn shares_to(mut self, account: Pubkey) -> Self {
+        self.shares = Some(account);
+        self
+    }
+}
+
+impl From<Pubkey> for DepositPayout {
+    fn from(user: Pubkey) -> Self {
+        Self::new(user)
+    }
+}
+
+impl From<&Pubkey> for DepositPayout {
+    fn from(user: &Pubkey) -> Self {
+        Self::new(*user)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WithdrawalPayout {
+    user: Pubkey,
+    shares_back: Option<Pubkey>,
+}
+
+impl WithdrawalPayout {
+    #[must_use]
+    pub const fn new(user: Pubkey) -> Self {
+        Self {
+            user,
+            shares_back: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn shares_back_to(mut self, account: Pubkey) -> Self {
+        self.shares_back = Some(account);
+        self
+    }
+}
+
+impl From<Pubkey> for WithdrawalPayout {
+    fn from(user: Pubkey) -> Self {
+        Self::new(user)
+    }
+}
+
+impl From<&Pubkey> for WithdrawalPayout {
+    fn from(user: &Pubkey) -> Self {
+        Self::new(*user)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,19 +324,15 @@ impl VaultManager {
         ix
     }
 
-    pub fn process_deposits(&self, users: &[Pubkey]) -> Result<Instruction, VaultChainError> {
-        let users: Vec<_> = users.iter().map(|user| (*user, None, None)).collect();
-        self.process_deposits_with_destinations(&users)
-    }
-
-    /// `ProcessDeposits` with `(user, main refund override, share recipient override)`.
-    pub fn process_deposits_with_destinations(
-        &self,
-        users: &[(Pubkey, Option<Pubkey>, Option<Pubkey>)],
-    ) -> Result<Instruction, VaultChainError> {
-        validate_batch(users.iter().map(|(user, _, _)| user), users.len())?;
+    pub fn process_deposits<I>(&self, payouts: I) -> Result<Instruction, VaultChainError>
+    where
+        I: IntoIterator,
+        I::Item: Into<DepositPayout>,
+    {
+        let payouts: Vec<DepositPayout> = payouts.into_iter().map(Into::into).collect();
+        validate_batch(payouts.iter().map(|payout| &payout.user), payouts.len())?;
         let (program_id, vault) = (&self.args.program_id, &self.addresses.vault);
-        let mut accounts = Vec::with_capacity(11 + users.len() * 7);
+        let mut accounts = Vec::with_capacity(11 + payouts.len() * 7);
         accounts.extend([
             AccountMeta::new(self.args.actor, true),
             AccountMeta::new(*vault, false),
@@ -272,15 +346,20 @@ impl VaultManager {
             AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false),
             AccountMeta::new_readonly(self.addresses.manager_stake_ata, false),
         ]);
-        for (user, refund, share) in users {
+        for DepositPayout {
+            user,
+            refund,
+            shares,
+        } in &payouts
+        {
             let escrow = pda::deposit_escrow_authority(program_id, vault, user).0;
             let share_ata = self.share_ata(user);
             let refund = match refund {
                 Some(refund) => *refund,
                 None => ata(user, &self.args.main_mint, &self.args.main_token_program),
             };
-            let share = match share {
-                Some(share) => *share,
+            let share = match shares {
+                Some(shares) => *shares,
                 None => share_ata,
             };
             accounts.extend([
@@ -299,19 +378,15 @@ impl VaultManager {
         Ok(self.instruction(VaultIx::ProcessDeposits, accounts, &[]))
     }
 
-    pub fn process_withdrawals(&self, users: &[Pubkey]) -> Result<Instruction, VaultChainError> {
-        let users: Vec<_> = users.iter().map(|user| (*user, None)).collect();
-        self.process_withdrawals_with_share_destinations(&users)
-    }
-
-    /// `ProcessWithdrawals` with `(user, share return override)`.
-    pub fn process_withdrawals_with_share_destinations(
-        &self,
-        users: &[(Pubkey, Option<Pubkey>)],
-    ) -> Result<Instruction, VaultChainError> {
-        validate_batch(users.iter().map(|(user, _)| user), users.len())?;
+    pub fn process_withdrawals<I>(&self, payouts: I) -> Result<Instruction, VaultChainError>
+    where
+        I: IntoIterator,
+        I::Item: Into<WithdrawalPayout>,
+    {
+        let payouts: Vec<WithdrawalPayout> = payouts.into_iter().map(Into::into).collect();
+        validate_batch(payouts.iter().map(|payout| &payout.user), payouts.len())?;
         let (program_id, vault) = (&self.args.program_id, &self.addresses.vault);
-        let mut accounts = Vec::with_capacity(10 + users.len() * 7);
+        let mut accounts = Vec::with_capacity(10 + payouts.len() * 7);
         accounts.extend([
             AccountMeta::new(self.args.actor, true),
             AccountMeta::new(*vault, false),
@@ -324,11 +399,11 @@ impl VaultManager {
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
             AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false),
         ]);
-        for (user, share) in users {
+        for WithdrawalPayout { user, shares_back } in &payouts {
             let escrow = pda::withdraw_escrow_authority(program_id, vault, user).0;
             let share_ata = self.share_ata(user);
-            let share = match share {
-                Some(share) => *share,
+            let share = match shares_back {
+                Some(account) => *account,
                 None => share_ata,
             };
             accounts.extend([
@@ -351,21 +426,13 @@ impl VaultManager {
     }
 
     #[must_use]
-    pub fn process_final_withdrawal(&self, user: Pubkey) -> Instruction {
-        self.process_final_withdrawal_with_share_destination(user, None)
-    }
-
-    #[must_use]
-    pub fn process_final_withdrawal_with_share_destination(
-        &self,
-        user: Pubkey,
-        share_destination: Option<Pubkey>,
-    ) -> Instruction {
+    pub fn process_final_withdrawal(&self, payout: impl Into<WithdrawalPayout>) -> Instruction {
+        let WithdrawalPayout { user, shares_back } = payout.into();
         let (program_id, a) = (&self.args.program_id, &self.addresses);
         let escrow = pda::withdraw_escrow_authority(program_id, &a.vault, &user).0;
         let share_ata = self.share_ata(&user);
-        let share = match share_destination {
-            Some(share) => share,
+        let share = match shares_back {
+            Some(account) => account,
             None => share_ata,
         };
         self.instruction(
@@ -428,58 +495,41 @@ impl VaultManager {
     }
 
     #[must_use]
-    pub fn deposit_batch_shape_with_destinations(
+    pub fn deposit_batch_shape(
         &self,
         users: &[Pubkey],
         missing_share_accounts: usize,
         missing_main_refund_accounts: usize,
     ) -> CapitalBatchShape {
-        let (program_id, vault) = (&self.args.program_id, &self.addresses.vault);
-        let (main_mint, main_program) = (&self.args.main_mint, &self.args.main_token_program);
-        let main_checks = if *main_program == TOKEN_2022_PROGRAM_ID {
-            2
-        } else {
-            1
-        };
-        let (manager, manager_bump) = pda::manager_stake(program_id, vault);
-        let common_steps = steps(manager_bump)
-            + ata_steps(&manager, &self.args.share_mint, &TOKEN_PROGRAM_ID)
-            + ata_steps(vault, main_mint, main_program) * main_checks;
-        let mut share_steps = [0; VAULT_CAPITAL_BATCH_USERS];
-        let mut main_steps = [0; VAULT_CAPITAL_BATCH_USERS];
-        let per_user: u32 = users
-            .iter()
-            .take(VAULT_CAPITAL_BATCH_USERS)
-            .enumerate()
-            .map(|(index, user)| {
-                let request_bump = pda::deposit_request(program_id, vault, user).1;
-                let (escrow, escrow_bump) = pda::deposit_escrow_authority(program_id, vault, user);
-                share_steps[index] = ata_steps(user, &self.args.share_mint, &TOKEN_PROGRAM_ID);
-                main_steps[index] = ata_steps(user, main_mint, main_program);
-                steps(request_bump)
-                    + steps(escrow_bump)
-                    + ata_steps(&escrow, main_mint, main_program) * main_checks
-                    + main_steps[index]
-                    + share_steps[index]
-            })
-            .sum();
-        CapitalBatchShape {
-            users: batch_users(users.len()),
-            created_destinations: batch_users(missing_share_accounts)
-                + batch_users(missing_main_refund_accounts),
-            derivation_steps: per_user
-                + max_creation_steps(share_steps, missing_share_accounts.min(users.len()))
-                + max_creation_steps(main_steps, missing_main_refund_accounts.min(users.len()))
-                + common_steps,
-        }
+        self.batch_shape(
+            VaultRequestKind::Deposit,
+            users,
+            missing_share_accounts,
+            missing_main_refund_accounts,
+        )
     }
 
     #[must_use]
-    pub fn withdrawal_batch_shape_with_destinations(
+    pub fn withdrawal_batch_shape(
         &self,
         users: &[Pubkey],
         missing_main_accounts: usize,
         missing_share_return_accounts: usize,
+    ) -> CapitalBatchShape {
+        self.batch_shape(
+            VaultRequestKind::Withdraw,
+            users,
+            missing_share_return_accounts,
+            missing_main_accounts,
+        )
+    }
+
+    fn batch_shape(
+        &self,
+        kind: VaultRequestKind,
+        users: &[Pubkey],
+        missing_share: usize,
+        missing_main: usize,
     ) -> CapitalBatchShape {
         let (program_id, vault) = (&self.args.program_id, &self.addresses.vault);
         let (main_mint, main_program) = (&self.args.main_mint, &self.args.main_token_program);
@@ -489,34 +539,78 @@ impl VaultManager {
         } else {
             1
         };
-        let common_steps = ata_steps(vault, main_mint, main_program) * main_checks;
-        let mut main_steps = [0; VAULT_CAPITAL_BATCH_USERS];
+        let mut common_steps = ata_steps(vault, main_mint, main_program) * main_checks;
+        if kind == VaultRequestKind::Deposit {
+            let (manager, manager_bump) = pda::manager_stake(program_id, vault);
+            common_steps +=
+                steps(manager_bump) + ata_steps(&manager, share_mint, &TOKEN_PROGRAM_ID);
+        }
         let mut share_steps = [0; VAULT_CAPITAL_BATCH_USERS];
+        let mut main_steps = [0; VAULT_CAPITAL_BATCH_USERS];
         let per_user: u32 = users
             .iter()
             .take(VAULT_CAPITAL_BATCH_USERS)
             .enumerate()
             .map(|(index, user)| {
-                let request_bump = pda::withdraw_request(program_id, vault, user).1;
-                let (escrow, escrow_bump) = pda::withdraw_escrow_authority(program_id, vault, user);
-                main_steps[index] = ata_steps(user, main_mint, main_program);
+                let (request_bump, escrow_bump, escrow_steps) = match kind {
+                    VaultRequestKind::Deposit => {
+                        let (escrow, bump) = pda::deposit_escrow_authority(program_id, vault, user);
+                        (
+                            pda::deposit_request(program_id, vault, user).1,
+                            bump,
+                            ata_steps(&escrow, main_mint, main_program) * main_checks,
+                        )
+                    }
+                    VaultRequestKind::Withdraw => {
+                        let (escrow, bump) =
+                            pda::withdraw_escrow_authority(program_id, vault, user);
+                        (
+                            pda::withdraw_request(program_id, vault, user).1,
+                            bump,
+                            ata_steps(&escrow, share_mint, &TOKEN_PROGRAM_ID),
+                        )
+                    }
+                };
                 share_steps[index] = ata_steps(user, share_mint, &TOKEN_PROGRAM_ID);
+                main_steps[index] = ata_steps(user, main_mint, main_program);
                 steps(request_bump)
                     + steps(escrow_bump)
-                    + ata_steps(&escrow, share_mint, &TOKEN_PROGRAM_ID)
+                    + escrow_steps
                     + main_steps[index]
                     + share_steps[index]
             })
             .sum();
         CapitalBatchShape {
             users: batch_users(users.len()),
-            created_destinations: batch_users(missing_main_accounts)
-                + batch_users(missing_share_return_accounts),
+            created_destinations: batch_users(missing_share) + batch_users(missing_main),
             derivation_steps: per_user
-                + max_creation_steps(main_steps, missing_main_accounts.min(users.len()))
-                + max_creation_steps(share_steps, missing_share_return_accounts.min(users.len()))
+                + max_creation_steps(share_steps, missing_share.min(users.len()))
+                + max_creation_steps(main_steps, missing_main.min(users.len()))
                 + common_steps,
         }
+    }
+
+    /// Share account the program creates for `user` when the canonical share ATA cannot receive.
+    #[must_use]
+    pub fn share_return_account(&self, kind: VaultRequestKind, user: &Pubkey) -> Pubkey {
+        let (program_id, vault) = (&self.args.program_id, &self.addresses.vault);
+        let request = match kind {
+            VaultRequestKind::Deposit => pda::deposit_request(program_id, vault, user).0,
+            VaultRequestKind::Withdraw => pda::withdraw_request(program_id, vault, user).0,
+        };
+        let digest = Sha256::new()
+            .chain_update(b"acta-share-return-v1")
+            .chain_update(request)
+            .finalize();
+        let seed = hex::encode(&digest[..16]);
+        Pubkey::new_from_array(
+            Sha256::new()
+                .chain_update(self.args.actor)
+                .chain_update(seed)
+                .chain_update(TOKEN_PROGRAM_ID)
+                .finalize()
+                .into(),
+        )
     }
 
     fn share_ata(&self, user: &Pubkey) -> Pubkey {

@@ -5,6 +5,7 @@ use solana_sdk::{
     signature::Signature, signer::Signer, transaction::Transaction,
 };
 
+use crate::chain::ChainError;
 use crate::chain::accounts::{MarketInfo, PositionInfo, parse_market, parse_position};
 use crate::chain::ix::{
     DepositPremiumIxArgs, FundPositionIxArgs, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
@@ -16,7 +17,6 @@ use crate::chain::wsol::{
     NativeSolBudget, NativeSolFunding, WrapPlan, WsolWrapRequest, is_native_mint, plan_wsol_wrap,
     token_account_rent_lamports,
 };
-use crate::chain::{ChainError, LookupTableError};
 
 const ADDRESS_LOOKUP_TABLE_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("AddressLookupTab1e1111111111111111111111111");
@@ -25,12 +25,12 @@ const LOOKUP_TABLE_META_LEN: usize = 56;
 fn parse_lookup_table(
     key: Pubkey,
     account: &Account,
-) -> Result<AddressLookupTableAccount, LookupTableError> {
+) -> Result<AddressLookupTableAccount, ChainError> {
     if account.owner != ADDRESS_LOOKUP_TABLE_PROGRAM_ID {
-        return Err(LookupTableError::Chain(ChainError::AccountOwnerMismatch {
+        return Err(ChainError::AccountOwnerMismatch {
             expected: ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
             actual: account.owner,
-        }));
+        });
     }
     let data = &account.data;
     let (Some(kind), Some(deactivation), Some(addresses)) = (
@@ -38,13 +38,13 @@ fn parse_lookup_table(
         data.get(4..12),
         data.get(LOOKUP_TABLE_META_LEN..),
     ) else {
-        return Err(LookupTableError::Chain(ChainError::InvalidAccountData));
+        return Err(ChainError::InvalidAccountData);
     };
     if kind != 1u32.to_le_bytes() || addresses.len() % 32 != 0 {
-        return Err(LookupTableError::Chain(ChainError::InvalidAccountData));
+        return Err(ChainError::InvalidAccountData);
     }
     if deactivation != u64::MAX.to_le_bytes() {
-        return Err(LookupTableError::Deactivated(key));
+        return Err(ChainError::LookupTableDeactivated(key));
     }
     Ok(AddressLookupTableAccount {
         key,
@@ -378,18 +378,17 @@ impl ChainClient {
     pub async fn address_lookup_tables(
         &self,
         keys: &[Pubkey],
-    ) -> Result<Vec<AddressLookupTableAccount>, LookupTableError> {
+    ) -> Result<Vec<AddressLookupTableAccount>, ChainError> {
         let accounts = self
             .rpc
             .get_multiple_accounts_with_commitment(keys, self.commitment)
-            .await
-            .map_err(ChainError::from)?
+            .await?
             .value;
         keys.iter()
             .zip(accounts)
             .map(|(key, account)| match account {
                 Some(account) => parse_lookup_table(*key, &account),
-                None => Err(LookupTableError::Missing(*key)),
+                None => Err(ChainError::MissingLookupTable(*key)),
             })
             .collect()
     }

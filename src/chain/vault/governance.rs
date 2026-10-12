@@ -176,7 +176,6 @@ impl VaultManager {
             VaultIx::CancelVaultUpdate,
             vec![
                 AccountMeta::new_readonly(self.args.actor, true),
-                AccountMeta::new_readonly(self.addresses.global_config, false),
                 AccountMeta::new(self.addresses.vault, false),
                 AccountMeta::new(self.pending_update(kind), false),
                 AccountMeta::new(proposal_payer, false),

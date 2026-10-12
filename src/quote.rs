@@ -170,24 +170,39 @@ fn validate_market_binding(
     if expiry.subsec_nanos() != 0 || expiry.as_secs() > i64::MAX as u64 {
         return Err(MarketBinding("expiry_ts"));
     }
-    let expected_market = Pubkey::try_find_program_address(
-        &[
-            b"market",
-            &underlying,
-            &quote,
-            &expiry.as_secs().to_le_bytes(),
-            &[u8::from(descriptor.is_put)],
-        ],
+    let expected_market = market_pda(
         &Pubkey::new_from_array(expected_program),
+        &Pubkey::new_from_array(underlying),
+        &Pubkey::new_from_array(quote),
+        expiry.as_secs(),
+        descriptor.is_put,
     )
-    .ok_or(MarketBinding("market PDA derivation"))?
-    .0
     .to_bytes();
     let market = identity("market.market_pda", &descriptor.market_pda)?;
     if market != expected_market {
         return Err(MarketBinding("market_pda"));
     }
     Ok(market)
+}
+
+pub(crate) fn market_pda(
+    program_id: &solana_pubkey::Pubkey,
+    underlying_mint: &solana_pubkey::Pubkey,
+    quote_mint: &solana_pubkey::Pubkey,
+    expiry_ts: u64,
+    is_put: bool,
+) -> solana_pubkey::Pubkey {
+    solana_pubkey::Pubkey::find_program_address(
+        &[
+            b"market",
+            underlying_mint.as_ref(),
+            quote_mint.as_ref(),
+            &expiry_ts.to_le_bytes(),
+            &[u8::from(is_put)],
+        ],
+        program_id,
+    )
+    .0
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -282,7 +297,6 @@ impl QuoteBuilder<'_> {
 
     /// The exact preimage the server will reconstruct for this quote.
     ///
-    /// Exposed so a maker can inspect the bytes or sign them out of band.
     /// `maker` is the signing key's fallback identity; an owner set with
     /// [`Self::maker_owner`] wins, matching the `sign` paths.
     ///

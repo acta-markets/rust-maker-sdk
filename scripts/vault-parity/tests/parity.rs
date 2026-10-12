@@ -6,8 +6,8 @@ use acta_contract_sdk::token::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
 use acta_contract_sdk::{DepositRequest, OracleSource, Vault, WithdrawRequest, pda};
 use acta_maker_sdk::VaultDelegatePermissions;
 use acta_maker_sdk::chain::vault::{
-    self as m, VaultAccount, VaultManager, VaultManagerArgs, VaultPhase, VaultRequest,
-    VaultRequestKind, VaultSafety,
+    self as m, DepositPayout, VaultAccount, VaultManager, VaultManagerArgs, VaultPhase,
+    VaultRequest, VaultRequestKind, VaultSafety, WithdrawalPayout,
 };
 use solana_pubkey::Pubkey;
 
@@ -169,8 +169,10 @@ fn capital_instructions_match() {
                 ct.process_final_withdrawal(key(12)),
             ),
             (
-                mk.process_final_withdrawal_with_share_destination(key(12), Some(key(13))),
-                ct.process_final_withdrawal_with_share_destination(key(12), Some(key(13))),
+                mk.process_final_withdrawal(WithdrawalPayout::new(key(12)).shares_back_to(key(13))),
+                ct.process_final_withdrawal(
+                    c::WithdrawalPayout::new(key(12)).shares_back_to(key(13)),
+                ),
             ),
         ];
         for count in 1..=3 {
@@ -184,25 +186,41 @@ fn capital_instructions_match() {
                 ct.process_withdrawals(&u).unwrap(),
             ));
         }
-        let deposit_dest = [
-            (key(20), Some(key(21)), None),
-            (key(22), None, Some(key(23))),
-        ];
         pairs.push((
-            mk.process_deposits_with_destinations(&deposit_dest)
-                .unwrap(),
-            ct.process_deposits_with_destinations(&deposit_dest)
-                .unwrap(),
+            mk.process_deposits([
+                DepositPayout::new(key(20)).refund_to(key(21)),
+                DepositPayout::new(key(22)).shares_to(key(23)),
+            ])
+            .unwrap(),
+            ct.process_deposits([
+                c::DepositPayout::new(key(20)).refund_to(key(21)),
+                c::DepositPayout::new(key(22)).shares_to(key(23)),
+            ])
+            .unwrap(),
         ));
-        let withdraw_dest = [(key(20), Some(key(21))), (key(22), None)];
         pairs.push((
-            mk.process_withdrawals_with_share_destinations(&withdraw_dest)
-                .unwrap(),
-            ct.process_withdrawals_with_share_destinations(&withdraw_dest)
-                .unwrap(),
+            mk.process_withdrawals([
+                WithdrawalPayout::new(key(20)).shares_back_to(key(21)),
+                WithdrawalPayout::new(key(22)),
+            ])
+            .unwrap(),
+            ct.process_withdrawals([
+                c::WithdrawalPayout::new(key(20)).shares_back_to(key(21)),
+                c::WithdrawalPayout::new(key(22)),
+            ])
+            .unwrap(),
         ));
         for (index, (maker, contract)) in pairs.iter().enumerate() {
             assert_eq!(maker, contract, "capital #{index}, main {main}");
+        }
+        for (mk_kind, ct_kind) in [
+            (VaultRequestKind::Deposit, c::VaultRequestKind::Deposit),
+            (VaultRequestKind::Withdraw, c::VaultRequestKind::Withdraw),
+        ] {
+            assert_eq!(
+                mk.share_return_account(mk_kind, &key(20)),
+                ct.share_return_account(ct_kind, &key(20)),
+            );
         }
     }
 }
@@ -233,12 +251,12 @@ fn batch_shapes_and_compute_units_match() {
             for missing in 0..=u.len() {
                 for (maker, contract) in [
                     (
-                        mk.deposit_batch_shape_with_destinations(&u, missing, u.len() - missing),
-                        ct.deposit_batch_shape_with_destinations(&u, missing, u.len() - missing),
+                        mk.deposit_batch_shape(&u, missing, u.len() - missing),
+                        ct.deposit_batch_shape(&u, missing, u.len() - missing),
                     ),
                     (
-                        mk.withdrawal_batch_shape_with_destinations(&u, missing, u.len() - missing),
-                        ct.withdrawal_batch_shape_with_destinations(&u, missing, u.len() - missing),
+                        mk.withdrawal_batch_shape(&u, missing, u.len() - missing),
+                        ct.withdrawal_batch_shape(&u, missing, u.len() - missing),
                     ),
                 ] {
                     assert_eq!(
@@ -262,15 +280,19 @@ fn batch_shapes_and_compute_units_match() {
                 }
                 assert_eq!(
                     m::vault_capital_batch_compute_units(
-                        mk.deposit_batch_shape_with_destinations(&u, missing, missing)
+                        mk.deposit_batch_shape(&u, missing, missing)
                     ),
-                    ct.deposit_batch_compute_units_with_destinations(&u, missing, missing)
+                    c::vault_capital_batch_compute_units(
+                        ct.deposit_batch_shape(&u, missing, missing)
+                    )
                 );
                 assert_eq!(
                     m::vault_capital_batch_compute_units(
-                        mk.withdrawal_batch_shape_with_destinations(&u, missing, missing)
+                        mk.withdrawal_batch_shape(&u, missing, missing)
                     ),
-                    ct.withdrawal_batch_compute_units_with_destinations(&u, missing, missing)
+                    c::vault_capital_batch_compute_units(
+                        ct.withdrawal_batch_shape(&u, missing, missing)
+                    )
                 );
             }
         }
@@ -419,7 +441,7 @@ fn patterned(len: usize) -> Vec<u8> {
 fn vault_account_decodes_like_contract() {
     for (main_kind, second_kind) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
         let mut data = patterned(VaultAccount::LEN);
-        data[..5].copy_from_slice(&[9, 2, 255, 3, 1]);
+        data[..5].copy_from_slice(&[9, 1, 255, 3, 1]);
         data[12..16].copy_from_slice(&3u32.to_le_bytes());
         data[402] = main_kind;
         data[403] = second_kind;

@@ -1,11 +1,13 @@
-//! Operate a vault over `/vault`: quote, sign sponsored fills, follow the projection.
-//! `_unverified` signing trusts the server; production should use `verify_and_sign_sponsored_tx`
-//! with the agreed terms and `verify_and_sign_swap`, as `rebalance` does.
+//! Operate a vault over `/vault`: quote, follow the projection, sign fills and swaps only after
+//! verifying them against locally known terms (`sign_fill`, `rebalance`).
 
 #[allow(dead_code)]
 mod common;
 
-use acta_maker_sdk::chain::vault::{ComputeBudgetBounds, VaultManager, VaultSwapIntent};
+use acta_maker_sdk::chain::vault::{
+    ComputeBudgetBounds, JUPITER_V6_PROGRAM_ID, VaultManager, VaultOpenIntent, VaultSwapIntent,
+    VaultTradeTerms,
+};
 use acta_maker_sdk::ws::managed::*;
 use acta_maker_sdk::ws::types::*;
 use acta_maker_sdk::{
@@ -109,10 +111,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
                 client.quote(quote).await?;
             }
-            ServerMessage::SponsoredTxToSign(to_sign) => {
-                let signed = client.sign_sponsored_tx_unverified(to_sign)?;
-                client.submit_signed_sponsored_tx(signed).await?;
-            }
             ServerMessage::OrderConfirmed(confirmed) => {
                 tracing::info!(position = %confirmed.position_pda, "vault position opened");
             }
@@ -124,6 +122,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+const COMPUTE_BOUNDS: ComputeBudgetBounds = ComputeBudgetBounds {
+    max_unit_limit: 600_000,
+    max_unit_price_micro_lamports: 50_000,
+};
+
+#[allow(dead_code)]
+async fn sign_fill(
+    client: &VaultOperatorClient,
+    holder: &VaultManager,
+    taker: Pubkey,
+    terms: VaultTradeTerms,
+    lookup_tables: &[AddressLookupTableAccount],
+    to_sign: &SponsoredTxToSignData,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let signed = client.verify_and_sign_sponsored_tx(
+        to_sign,
+        &VaultOpenIntent::Fill {
+            holder,
+            taker,
+            terms,
+        },
+        lookup_tables,
+        COMPUTE_BOUNDS,
+    )?;
+    client.submit_signed_sponsored_tx(signed).await?;
     Ok(())
 }
 
@@ -154,12 +180,10 @@ async fn rebalance(
             main_price_update: price_updates.0,
             second_price_update: price_updates.1,
             min_output_floor,
+            router: JUPITER_V6_PROGRAM_ID,
         },
         lookup_tables,
-        ComputeBudgetBounds {
-            max_unit_limit: 600_000,
-            max_unit_price_micro_lamports: 50_000,
-        },
+        COMPUTE_BOUNDS,
     )?;
     let ack = client.swap_submit(submit).await?;
     tracing::info!(execution = ?ack.execution_id, "swap queued");

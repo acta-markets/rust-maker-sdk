@@ -71,8 +71,7 @@ pub use ws::types::{ClientMessage, ServerMessage};
 #[cfg(feature = "vault")]
 pub use ws::vault::{
     VaultClientError, VaultOperatorClient, VaultOperatorConfig, VaultProjection,
-    VaultProjectionReceiver, VaultRequestError, VaultTxError, ensure_deadline_ahead,
-    sign_transaction_base64, sign_transaction_base64_unverified,
+    VaultProjectionReceiver, VaultRequestError, VaultTxError,
 };
 
 pub use nonce::{AtomicNonceGenerator, NonceError, NonceGenerator};

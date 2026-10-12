@@ -21,21 +21,15 @@ use crate::ws::types::{
     VaultAuthSuccessData,
 };
 
-#[cfg(feature = "chain")]
 use solana_sdk::message::AddressLookupTableAccount;
 
-#[cfg(feature = "chain")]
 use crate::chain::vault::{
-    ComputeBudgetBounds, VaultIntentError, VaultOpenIntent, VaultSwapIntent, verify_vault_open,
-    verify_vault_swap,
+    ComputeBudgetBounds, VaultOpenIntent, VaultSwapIntent, verify_vault_open, verify_vault_swap,
 };
 
 use super::config::VaultOperatorConfig;
 use super::projection::VaultProjectionReceiver;
-use super::tx::{
-    VaultTxError, ensure_deadline_ahead, ensure_system_time_ahead,
-    sign_transaction_base64_unverified, verify_transaction_message,
-};
+use super::tx::{VaultTxError, ensure_deadline_ahead, ensure_system_time_ahead};
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -200,25 +194,7 @@ impl VaultOperatorClient {
         self.send(ClientMessage::AcceptQuote(payload)).await
     }
 
-    pub fn sign_sponsored_tx(
-        &self,
-        to_sign: &SponsoredTxToSignData,
-        expected_message: &[u8],
-    ) -> Result<SubmitSignedSponsoredTxData, VaultTxError> {
-        let transaction = verify_transaction_message(
-            &to_sign.tx_base64,
-            expected_message,
-            self.operator.as_ref(),
-        )?;
-        ensure_system_time_ahead("signature_deadline", to_sign.signature_deadline)?;
-        Ok(SubmitSignedSponsoredTxData {
-            order_id: to_sign.order_id,
-            tx_base64: transaction.sign(self.operator.as_ref()),
-        })
-    }
-
     /// Signs only if the served transaction opens exactly `intent` within `bounds`.
-    #[cfg(feature = "chain")]
     pub fn verify_and_sign_sponsored_tx(
         &self,
         to_sign: &SponsoredTxToSignData,
@@ -226,25 +202,11 @@ impl VaultOperatorClient {
         tables: &[AddressLookupTableAccount],
         bounds: ComputeBudgetBounds,
     ) -> Result<SubmitSignedSponsoredTxData, VaultTxError> {
-        let order_id = verify_vault_open(&to_sign.tx_base64, intent, tables, bounds)?;
-        if order_id != *to_sign.order_id.as_bytes() {
-            return Err(VaultIntentError::OrderId.into());
-        }
-        self.sign_sponsored_tx_unverified(to_sign)
-    }
-
-    /// UNVERIFIED: signs server bytes; caller must establish their full intent.
-    pub fn sign_sponsored_tx_unverified(
-        &self,
-        to_sign: &SponsoredTxToSignData,
-    ) -> Result<SubmitSignedSponsoredTxData, VaultTxError> {
+        let transaction = verify_vault_open(to_sign, intent, tables, bounds)?;
         ensure_system_time_ahead("signature_deadline", to_sign.signature_deadline)?;
         Ok(SubmitSignedSponsoredTxData {
             order_id: to_sign.order_id,
-            tx_base64: sign_transaction_base64_unverified(
-                &to_sign.tx_base64,
-                self.operator.as_ref(),
-            )?,
+            tx_base64: transaction.sign(self.operator.as_ref())?,
         })
     }
 
@@ -271,46 +233,19 @@ impl VaultOperatorClient {
         .await
     }
 
-    pub fn sign_swap(
-        &self,
-        quote: &SwapQuoteResultData,
-        expected_message: &[u8],
-    ) -> Result<SwapSubmitData, VaultTxError> {
-        let transaction =
-            verify_transaction_message(&quote.tx_base64, expected_message, self.operator.as_ref())?;
-        ensure_deadline_ahead("valid_until", &quote.valid_until)?;
-        Ok(SwapSubmitData {
-            request_id: Uuid::new_v4(),
-            execution_id: quote.execution_id,
-            signed_tx_base64: transaction.sign(self.operator.as_ref()),
-        })
-    }
-
     /// Signs only if the served swap carries exactly the requested and quoted terms within `bounds`.
-    #[cfg(feature = "chain")]
     pub fn verify_and_sign_swap(
         &self,
         intent: &VaultSwapIntent<'_>,
         tables: &[AddressLookupTableAccount],
         bounds: ComputeBudgetBounds,
     ) -> Result<SwapSubmitData, VaultTxError> {
-        verify_vault_swap(intent, tables, bounds)?;
-        self.sign_swap_unverified(intent.quote)
-    }
-
-    /// UNVERIFIED: signs server bytes; caller must establish their full intent.
-    pub fn sign_swap_unverified(
-        &self,
-        quote: &SwapQuoteResultData,
-    ) -> Result<SwapSubmitData, VaultTxError> {
-        ensure_deadline_ahead("valid_until", &quote.valid_until)?;
+        let transaction = verify_vault_swap(intent, tables, bounds)?;
+        ensure_deadline_ahead("valid_until", &intent.quote.valid_until)?;
         Ok(SwapSubmitData {
             request_id: Uuid::new_v4(),
-            execution_id: quote.execution_id,
-            signed_tx_base64: sign_transaction_base64_unverified(
-                &quote.tx_base64,
-                self.operator.as_ref(),
-            )?,
+            execution_id: intent.quote.execution_id,
+            signed_tx_base64: transaction.sign(self.operator.as_ref())?,
         })
     }
 

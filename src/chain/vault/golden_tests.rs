@@ -4,9 +4,10 @@ use sha2::{Digest, Sha256};
 use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
 
 use super::{
-    VaultAccount, VaultChainError, VaultGovernanceUpdate, VaultGovernanceUpdateKind, VaultManager,
-    VaultManagerArgs, VaultPhase, VaultPolicyUpdate, VaultPositionRef, VaultRequest,
-    VaultRequestKind, VaultSafety, oracle_source_pyth_feed, pda, vault_capital_batch_compute_units,
+    DepositPayout, VaultAccount, VaultChainError, VaultGovernanceUpdate, VaultGovernanceUpdateKind,
+    VaultManager, VaultManagerArgs, VaultPhase, VaultPolicyUpdate, VaultPositionRef, VaultRequest,
+    VaultRequestKind, VaultSafety, WithdrawalPayout, oracle_source_pyth_feed, pda,
+    vault_capital_batch_compute_units,
 };
 use crate::VaultDelegatePermissions;
 use crate::chain::ix::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
@@ -67,13 +68,13 @@ const GOLDEN: [Golden; 2] = [
         token_program: TOKEN_PROGRAM_ID,
         addresses: "b7803a2b97b482d1",
         capital: [
-            "2e00/5/f779cd53a5637a79",
-            "2e01/5/f779cd53a5637a79",
+            "2c00/5/f779cd53a5637a79",
+            "2c01/5/f779cd53a5637a79",
             "25/17/0cce5b8f23f0b8b4",
             "25/18/8bc58b79ee932ac8",
             "28/7/f0c7f42cc0a16cbd",
-            "40/21/f93f7bc7d918f7ec",
-            "40/21/8420fd118883d1c0",
+            "3c/21/f93f7bc7d918f7ec",
+            "3c/21/8420fd118883d1c0",
             "27/18/76f93b7e4e221903",
             "26/17/19e49dfe00549d7e",
             "27/25/50fdb4c8ec7ee764",
@@ -90,13 +91,13 @@ const GOLDEN: [Golden; 2] = [
         token_program: TOKEN_2022_PROGRAM_ID,
         addresses: "6c68d1785a8a76a2",
         capital: [
-            "2e00/5/f779cd53a5637a79",
-            "2e01/5/f779cd53a5637a79",
+            "2c00/5/f779cd53a5637a79",
+            "2c01/5/f779cd53a5637a79",
             "25/17/335b18a1c174d7d7",
             "25/18/f53b718cd1792e02",
             "28/7/7a32261d5c71ada7",
-            "40/21/9b04ca82a25313bf",
-            "40/21/2c5400de9cff0c92",
+            "3c/21/9b04ca82a25313bf",
+            "3c/21/2c5400de9cff0c92",
             "27/18/a790fb648e3c9a58",
             "26/17/fdbf70b09ecc621d",
             "27/25/bff1bd589080ad28",
@@ -141,23 +142,23 @@ fn addresses_and_capital_instructions_match_golden() {
             m.process_idle_withdrawal(key(12), main, second),
             m.finalize_cycle(),
             m.process_final_withdrawal(key(12)),
-            m.process_final_withdrawal_with_share_destination(key(12), Some(key(13))),
+            m.process_final_withdrawal(WithdrawalPayout::new(key(12)).shares_back_to(key(13))),
         ];
         for count in 1..=3 {
-            capital.push(m.process_deposits(&users(count)).unwrap());
-            capital.push(m.process_withdrawals(&users(count)).unwrap());
+            capital.push(m.process_deposits(users(count)).unwrap());
+            capital.push(m.process_withdrawals(users(count)).unwrap());
         }
         capital.push(
-            m.process_deposits_with_destinations(&[
-                (key(20), Some(key(21)), None),
-                (key(22), None, Some(key(23))),
+            m.process_deposits([
+                DepositPayout::new(key(20)).refund_to(key(21)),
+                DepositPayout::new(key(22)).shares_to(key(23)),
             ])
             .unwrap(),
         );
         capital.push(
-            m.process_withdrawals_with_share_destinations(&[
-                (key(20), Some(key(21))),
-                (key(22), None),
+            m.process_withdrawals([
+                WithdrawalPayout::new(key(20)).shares_back_to(key(21)),
+                WithdrawalPayout::new(key(22)),
             ])
             .unwrap(),
         );
@@ -184,8 +185,8 @@ fn batch_shapes_and_compute_units_match_golden() {
             for missing in 0..=users.len() {
                 let rest = users.len() - missing;
                 for shape in [
-                    m.deposit_batch_shape_with_destinations(&users, missing, rest),
-                    m.withdrawal_batch_shape_with_destinations(&users, missing, rest),
+                    m.deposit_batch_shape(&users, missing, rest),
+                    m.withdrawal_batch_shape(&users, missing, rest),
                 ] {
                     for value in [
                         shape.users,
@@ -203,12 +204,12 @@ fn batch_shapes_and_compute_units_match_golden() {
             .map(|count| {
                 let users = users(count);
                 (
-                    vault_capital_batch_compute_units(m.deposit_batch_shape_with_destinations(
+                    vault_capital_batch_compute_units(m.deposit_batch_shape(
                         &users,
                         users.len(),
                         users.len(),
                     )),
-                    vault_capital_batch_compute_units(m.withdrawal_batch_shape_with_destinations(
+                    vault_capital_batch_compute_units(m.withdrawal_batch_shape(
                         &users,
                         users.len(),
                         users.len(),
@@ -358,26 +359,26 @@ fn governance_instructions_match_golden() {
     assert_eq!(
         actual,
         [
-            "3900fcffffffffffffff000000000000000000000000000000000000000000000000/5/5ec5dd1abd480928",
-            "3901d007c80000000000000000000000000000000000000000000000000000000000/5/45c03854ef6a24bc",
-            "3902f6ffffffffffffffffffffffffffffff00000000000000000000000000000000/5/87e39b3943882b86",
-            "39030500000007000000000000000000000000000000000000000000000000000000/5/8e0cd501f9328fa8",
-            "390403009600c4090000000000000000000000000000000000000000000000000000/5/48194846a6c25808",
-            "39051e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e/5/9104fa0231f4964e",
-            "3a00/4/d0371903118ce95d",
-            "3b00/5/abdc1cc51536dfb6",
-            "3a01/18/a48abe4390632431",
-            "3b01/5/60182776ff64aff8",
-            "3a02/18/6be772550a5b0b31",
-            "3b02/5/5441df267873fd5b",
-            "3a03/4/dc0663ae22446adb",
-            "3b03/5/e77b863dc778acb2",
-            "3a04/4/142623051969a573",
-            "3b04/5/00a1e87c02e4835b",
-            "3a05/4/da408c2b2eb99f79",
-            "3b05/5/dd663461db40b769",
-            "3120202020202020202020202020202020202020202020202020202020202020203f00000000b33f7100000000/5/db66018087f022ff",
-            "48/3/4a35ed45ecc4ab38",
+            "3700fcffffffffffffff000000000000000000000000000000000000000000000000/5/5ec5dd1abd480928",
+            "3701d007c80000000000000000000000000000000000000000000000000000000000/5/45c03854ef6a24bc",
+            "3702f6ffffffffffffffffffffffffffffff00000000000000000000000000000000/5/87e39b3943882b86",
+            "37030500000007000000000000000000000000000000000000000000000000000000/5/8e0cd501f9328fa8",
+            "370403009600c4090000000000000000000000000000000000000000000000000000/5/48194846a6c25808",
+            "37051e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e/5/9104fa0231f4964e",
+            "3800/4/d0371903118ce95d",
+            "3900/4/cd7fafcea90fbe03",
+            "3801/18/a48abe4390632431",
+            "3901/4/45147bb440919f0e",
+            "3802/18/6be772550a5b0b31",
+            "3902/4/a48478635846532e",
+            "3803/4/dc0663ae22446adb",
+            "3903/4/599a443650ae290a",
+            "3804/4/142623051969a573",
+            "3904/4/7f29ff5418d81c11",
+            "3805/4/da408c2b2eb99f79",
+            "3905/4/1008c0966018528c",
+            "2f20202020202020202020202020202020202020202020202020202020202020203f00000000b33f7100000000/5/db66018087f022ff",
+            "3e/3/4a35ed45ecc4ab38",
         ]
     );
     assert_eq!(unpriced, [true, false, false, true, true, true]);
@@ -550,4 +551,32 @@ fn capital_tx_users_fit_the_legacy_packet() {
     let withdrawals = oversized(withdrawals, m.process_withdrawals(extra).unwrap(), 10);
     assert!(wire_len(deposits) > PACKET_DATA_SIZE);
     assert!(wire_len(withdrawals) > PACKET_DATA_SIZE);
+}
+
+#[test]
+fn share_return_account_matches_create_with_seed() {
+    let m = manager(TOKEN_PROGRAM_ID);
+    let user = key(20);
+    for kind in [VaultRequestKind::Deposit, VaultRequestKind::Withdraw] {
+        let request = match kind {
+            VaultRequestKind::Deposit => {
+                super::pda::deposit_request(&m.args.program_id, &m.addresses.vault, &user)
+            }
+            VaultRequestKind::Withdraw => {
+                super::pda::withdraw_request(&m.args.program_id, &m.addresses.vault, &user)
+            }
+        }
+        .0;
+        let digest = Sha256::new()
+            .chain_update(b"acta-share-return-v1")
+            .chain_update(request)
+            .finalize();
+        let expected = Pubkey::create_with_seed(
+            &m.args.actor,
+            &hex::encode(&digest[..16]),
+            &TOKEN_PROGRAM_ID,
+        )
+        .unwrap();
+        assert_eq!(m.share_return_account(kind, &user), expected);
+    }
 }

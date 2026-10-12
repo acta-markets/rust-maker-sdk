@@ -110,13 +110,11 @@ impl Crank {
                     .map(|request| request.user)
                     .collect();
                 for batch in users.chunks(VAULT_CAPITAL_BATCH_USERS) {
-                    let units = vault_capital_batch_compute_units(
-                        manager.deposit_batch_shape_with_destinations(
-                            batch,
-                            batch.len(),
-                            batch.len(),
-                        ),
-                    );
+                    let units = vault_capital_batch_compute_units(manager.deposit_batch_shape(
+                        batch,
+                        batch.len(),
+                        batch.len(),
+                    ));
                     self.send(manager.process_deposits(batch)?, Some(units))
                         .await?;
                 }
@@ -136,13 +134,11 @@ impl Crank {
                     .parse()?;
                 let plan = plan_withdrawals(&queued, supply);
                 for batch in plan.partial.chunks(VAULT_CAPITAL_BATCH_USERS) {
-                    let units = vault_capital_batch_compute_units(
-                        manager.withdrawal_batch_shape_with_destinations(
-                            batch,
-                            batch.len(),
-                            batch.len(),
-                        ),
-                    );
+                    let units = vault_capital_batch_compute_units(manager.withdrawal_batch_shape(
+                        batch,
+                        batch.len(),
+                        batch.len(),
+                    ));
                     self.send(manager.process_withdrawals(batch)?, Some(units))
                         .await?;
                 }

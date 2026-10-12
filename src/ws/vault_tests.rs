@@ -11,7 +11,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
-use super::tx::{ensure_deadline_ahead_at, sign_transaction_base64_unverified};
+use super::tx::ensure_deadline_ahead_at;
 use super::{VaultOperatorClient, VaultOperatorConfig, VaultRequestError, VaultTxError};
 use crate::orders::{BytesSigner, SignerLike};
 use crate::types::ids::OrderId;
@@ -612,25 +612,6 @@ async fn vault_projection_advanced_reaches_the_typed_subscriber() {
     peer.await.expect("peer");
 }
 
-fn unsigned_tx(signers: &[[u8; 32]], extra_keys: &[[u8; 32]], v0: bool) -> String {
-    let mut bytes = vec![signers.len() as u8];
-    bytes.extend(std::iter::repeat_n(0u8, 64 * signers.len()));
-    if v0 {
-        bytes.push(0x80);
-    }
-    bytes.extend([signers.len() as u8, 0, extra_keys.len() as u8]);
-    bytes.push((signers.len() + extra_keys.len()) as u8);
-    for key in signers.iter().chain(extra_keys) {
-        bytes.extend_from_slice(key);
-    }
-    bytes.extend([3u8; 32]);
-    bytes.push(0);
-    if v0 {
-        bytes.push(0);
-    }
-    STANDARD.encode(bytes)
-}
-
 fn assert_signed_by(signed_base64: &str, slot: usize, signer: &BytesSigner) {
     let bytes = STANDARD.decode(signed_base64).expect("base64");
     let count = usize::from(bytes[0]);
@@ -644,50 +625,6 @@ fn assert_signed_by(signed_base64: &str, slot: usize, signer: &BytesSigner) {
         .expect("verifying key")
         .verify(message, &signature)
         .expect("signature over the message bytes");
-}
-
-#[test]
-fn signing_fills_only_the_operator_slot_for_v0_and_legacy() {
-    let signer = operator();
-    let peer = BytesSigner::from_secret([5u8; 32]);
-    for v0 in [true, false] {
-        let tx = unsigned_tx(
-            &[peer.pubkey_bytes(), signer.pubkey_bytes()],
-            &[[7u8; 32]],
-            v0,
-        );
-        let peer_signed = sign_transaction_base64_unverified(&tx, &peer).expect("peer signed");
-        let peer_bytes = STANDARD.decode(&peer_signed).unwrap();
-        let signed =
-            super::tx::sign_transaction_base64(&peer_signed, &peer_bytes[129..], signer.as_ref())
-                .expect("signed");
-        assert_signed_by(&signed, 1, &signer);
-        assert_signed_by(&signed, 0, &peer);
-        let bytes = STANDARD.decode(&signed).expect("base64");
-        assert_eq!(&bytes[1..65], &peer_bytes[1..65], "peer slot untouched");
-        assert_eq!(&bytes[129..], &peer_bytes[129..], "message untouched");
-    }
-}
-
-#[test]
-fn signing_rejects_a_transaction_that_does_not_require_the_operator() {
-    let tx = unsigned_tx(&[[5u8; 32]], &[operator().pubkey_bytes()], true);
-    assert!(matches!(
-        sign_transaction_base64_unverified(&tx, operator().as_ref()),
-        Err(VaultTxError::SignerNotRequired { .. })
-    ));
-    assert!(matches!(
-        sign_transaction_base64_unverified("not base64!", operator().as_ref()),
-        Err(VaultTxError::InvalidBase64)
-    ));
-    let mut bytes = STANDARD
-        .decode(unsigned_tx(&[operator().pubkey_bytes()], &[], true))
-        .expect("base64");
-    bytes[65] = 0x81;
-    assert!(matches!(
-        sign_transaction_base64_unverified(&STANDARD.encode(bytes), operator().as_ref()),
-        Err(VaultTxError::UnsupportedVersion(1))
-    ));
 }
 
 #[test]
@@ -711,59 +648,6 @@ fn deadlines_are_checked_before_signing() {
             ..
         })
     ));
-}
-
-#[tokio::test]
-async fn expired_submit_before_is_rejected_locally() {
-    let (_listener, url) = bind().await;
-    let client = VaultOperatorClient::spawn(config(url)).expect("spawn vault client");
-    let execution_id = OrderId::new([6u8; 32]);
-    let tx_base64 = unsigned_tx(&[operator().pubkey_bytes()], &[], true);
-    let message = STANDARD.decode(&tx_base64).unwrap()[65..].to_vec();
-    let sponsored = crate::ws::types::SponsoredTxToSignData {
-        order_id: execution_id,
-        tx_base64: tx_base64.clone(),
-        signature_deadline: std::time::UNIX_EPOCH,
-    };
-    assert!(matches!(
-        client.sign_sponsored_tx(&sponsored, b"different message"),
-        Err(VaultTxError::MessageMismatch)
-    ));
-    assert!(matches!(
-        client.sign_sponsored_tx(&sponsored, &message),
-        Err(VaultTxError::Expired { .. })
-    ));
-    let swap = SwapQuoteResultData {
-        request_id: Uuid::new_v4(),
-        execution_id,
-        mode: VaultSwapMode::Rebalance,
-        tx_base64: tx_base64.clone(),
-        in_amount: "1".into(),
-        quoted_out_amount: "1".into(),
-        minimum_out_amount: "1".into(),
-        valid_until: "1".into(),
-    };
-    assert!(matches!(
-        client.sign_swap(&swap, b"different message"),
-        Err(VaultTxError::MessageMismatch)
-    ));
-    assert!(matches!(
-        client.sign_swap(&swap, &message),
-        Err(VaultTxError::Expired { .. })
-    ));
-
-    let mut sponsored = sponsored;
-    sponsored.signature_deadline = std::time::SystemTime::now() + Duration::from_secs(3600);
-    let signed = client.sign_sponsored_tx(&sponsored, &message).unwrap();
-    assert_eq!(signed.order_id, execution_id);
-    assert_signed_by(&signed.tx_base64, 0, &operator());
-    let mut swap = swap;
-    swap.valid_until = u64::MAX.to_string();
-    let signed = client.sign_swap(&swap, &message).unwrap();
-    assert_eq!(signed.execution_id, execution_id);
-    assert_signed_by(&signed.signed_tx_base64, 0, &operator());
-
-    client.close().await.expect("close");
 }
 
 #[tokio::test]
@@ -1012,45 +896,6 @@ async fn failed_initial_reads_clear_the_authenticated_grant() {
     peer.await.unwrap();
 }
 
-#[test]
-fn locally_approved_message_is_required_before_signing() {
-    struct RefuseSignature([u8; 32]);
-    impl SignerLike for RefuseSignature {
-        fn pubkey_bytes(&self) -> [u8; 32] {
-            self.0
-        }
-        fn sign_message(&self, _: &[u8]) -> [u8; 64] {
-            panic!("unapproved bytes reached signer")
-        }
-    }
-    let signer = operator();
-    for v0 in [false, true] {
-        let trusted = unsigned_tx(&[signer.pubkey_bytes()], &[[7; 32]], v0);
-        let trusted_bytes = STANDARD.decode(&trusted).unwrap();
-        let expected = &trusted_bytes[65..];
-        let signed =
-            super::tx::sign_transaction_base64(&trusted, expected, signer.as_ref()).unwrap();
-        assert_signed_by(&signed, 0, &signer);
-        for index in [
-            trusted_bytes.len() - 1,
-            65 + usize::from(v0) + 4 + 32,
-            trusted_bytes.len() - 4,
-        ] {
-            let mut changed = trusted_bytes.clone();
-            changed[index] ^= 1;
-            assert!(matches!(
-                super::tx::sign_transaction_base64(
-                    &STANDARD.encode(changed),
-                    expected,
-                    &RefuseSignature(signer.pubkey_bytes())
-                ),
-                Err(VaultTxError::MessageMismatch)
-            ));
-        }
-    }
-}
-
-#[cfg(feature = "chain")]
 #[tokio::test]
 async fn checked_signing_verifies_served_intent_before_signing() {
     use std::str::FromStr;
@@ -1142,6 +987,14 @@ async fn checked_signing_verifies_served_intent_before_signing() {
             _
         )))
     ));
+    let expired = crate::ws::types::SponsoredTxToSignData {
+        signature_deadline: std::time::UNIX_EPOCH,
+        ..to_sign.clone()
+    };
+    assert!(matches!(
+        client.verify_and_sign_sponsored_tx(&expired, &intent, &table(case), bounds),
+        Err(VaultTxError::Expired { .. })
+    ));
     to_sign.order_id = OrderId::new([1; 32]);
     assert!(matches!(
         client.verify_and_sign_sponsored_tx(&to_sign, &intent, &table(case), bounds),
@@ -1178,6 +1031,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         quote,
         main_price_update: Pubkey::new_from_array([71; 32]),
         second_price_update: Pubkey::new_from_array([72; 32]),
+        router: crate::chain::vault::JUPITER_V6_PROGRAM_ID,
         min_output_floor: 1990,
     };
     assert!(matches!(

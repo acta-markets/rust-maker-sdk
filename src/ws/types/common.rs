@@ -24,9 +24,9 @@ pub enum WsChannel {
     Positions,
     ChainEvents,
     Markets,
-    Vaults = 7,
+    Vaults,
     #[serde(other)]
-    Unknown = 6,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
@@ -37,9 +37,9 @@ pub enum WsEndpointKind {
     Maker,
     MakerData,
     Taker,
-    Vault = 4,
+    Vault,
     #[serde(other)]
-    Unknown = 3,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]

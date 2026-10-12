@@ -9,6 +9,6 @@ publish = false
 [dependencies]
 
 [dev-dependencies]
-acta-maker-sdk = { path = "../..", features = ["vault-chain"] }
+acta-maker-sdk = { path = "../..", features = ["chain"] }
 acta-contract-sdk = { path = "../../../acta-contract/acta-contract-sdk" }
 solana-pubkey = "3.0.0"
