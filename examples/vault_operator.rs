@@ -5,7 +5,7 @@
 mod common;
 
 use acta_maker_sdk::chain::vault::{
-    ComputeBudgetBounds, JUPITER_V6_PROGRAM_ID, VaultManager, VaultOpenIntent, VaultSwapIntent,
+    ComputeBudgetBounds, DEVNET_SWAP_ROUTER_ID, VaultManager, VaultOpenIntent, VaultSwapIntent,
     VaultTradeTerms,
 };
 use acta_maker_sdk::ws::managed::*;
@@ -180,7 +180,7 @@ async fn rebalance(
             main_price_update: price_updates.0,
             second_price_update: price_updates.1,
             min_output_floor,
-            router: JUPITER_V6_PROGRAM_ID,
+            router: DEVNET_SWAP_ROUTER_ID,
         },
         lookup_tables,
         COMPUTE_BOUNDS,

@@ -67,13 +67,7 @@ pub struct RfqBroadcastMessage {
     pub expires_at: SystemTime,
     pub taker: String,
     pub order_options: Vec<RfqOrderOption>,
-    /// When the server emitted this broadcast.
-    ///
-    /// `expires_at` is whole seconds, so on its own it cannot distinguish an
-    /// RFQ that arrived promptly from one delayed behind a slow fan-out.
-    /// Compare against [`ManagedInbound::received_at`] to measure delivery.
-    ///
-    /// [`ManagedInbound::received_at`]: crate::ws::managed::ManagedInbound
+    /// Server emission time; compare with [`ManagedInbound::received_at`](crate::ws::managed::ManagedInbound::received_at) to measure delivery delay.
     #[serde_as(as = "UnixMillis")]
     pub sent_at_unix_ms: SystemTime,
 }
