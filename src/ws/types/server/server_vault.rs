@@ -21,6 +21,12 @@ pub struct VaultProjectionAdvancedData {
     pub event_index: u32,
 }
 
+/// Sent after a Vault was created, re-delegated or closed; re-list Vaults to follow it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultCatalogChangedData {
+    pub vault_pda: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapQuoteResultData {
     pub request_id: Uuid,

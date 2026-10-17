@@ -102,6 +102,7 @@ pub enum ServerMessage {
     ReferralCodeClaimed(ReferralCodeClaimedData),
     MyReferralInfo(MyReferralInfoData),
     VaultProjectionAdvanced(VaultProjectionAdvancedData),
+    VaultCatalogChanged(VaultCatalogChangedData),
     ReferenceChanged(ReferenceChangedData),
     SwapQuoteResult(SwapQuoteResultData),
     SwapSubmitResult(SwapSubmitResultData),
@@ -377,6 +378,7 @@ impl ServerMessage {
             | Self::AuthSuccess(_)
             | Self::VaultAuthSuccess(_)
             | Self::VaultProjectionAdvanced(_)
+            | Self::VaultCatalogChanged(_)
             | Self::ReferenceChanged(_)
             | Self::AuthError(_)
             | Self::LogoutSuccess(_)

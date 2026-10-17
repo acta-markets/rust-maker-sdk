@@ -161,6 +161,22 @@ fn vault_projection_advanced_carries_numeric_version_and_slot() {
 }
 
 #[test]
+fn vault_catalog_changed_names_the_vault() {
+    let message = ServerMessage::VaultCatalogChanged(VaultCatalogChangedData {
+        vault_pda: "vault".to_string(),
+    });
+    let parsed = assert_server_wire(
+        &message,
+        r#"{"type":"VaultCatalogChanged","data":{"vault_pda":"vault"}}"#,
+    );
+    let ServerMessage::VaultCatalogChanged(data) = parsed else {
+        panic!("expected VaultCatalogChanged");
+    };
+    assert_eq!(data.vault_pda, "vault");
+    assert_eq!(message.request_id(), None);
+}
+
+#[test]
 fn vault_swap_results_roundtrip_without_claiming_chain_confirmation() {
     let quote = ServerMessage::SwapQuoteResult(SwapQuoteResultData {
         request_id: request_id(),

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `ServerMessage::VaultCatalogChanged(VaultCatalogChangedData { vault_pda })` goes to `vaults` subscribers after a vault is created, re-delegated or closed; re-list vaults on it.
 - Breaking: `VaultSwapRoute` and `VaultSwapIntent` take `router`, the swap router pinned by the target program build (`JUPITER_V6_PROGRAM_ID`; the devnet build pins `DEVNET_SWAP_ROUTER_ID`).
 - Removed, breaking: vault signing has one path. `VaultOperatorClient::sign_sponsored_tx` / `sign_swap` (byte-equality against an expected message), `sign_sponsored_tx_unverified` / `sign_swap_unverified`, `ws::vault::sign_transaction_base64` / `sign_transaction_base64_unverified`, `ensure_deadline_ahead` and `VaultTxError::{InvalidBase64, MessageMismatch, Malformed, UnsupportedVersion, SignerNotRequired}` are gone. Transaction decoding errors arrive as `VaultTxError::Intent(VaultIntentError::…)`, and `VaultIntentError::SignerNotRequired` is new.
 - Features, breaking: `vault-chain` is removed. `chain::vault` comes with `chain` (which now pulls `base64`, not the WebSocket stack); `vault` implies `chain`.
