@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.4
+## 0.5.0
 
 - `ServerMessage::VaultCatalogChanged(VaultCatalogChangedData { vault_pda })` goes to `vaults` subscribers after a vault is created, re-delegated or closed; re-list vaults on it.
 - Breaking: `VaultSwapRoute` and `VaultSwapIntent` take `router`, the swap router pinned by the target program build (`JUPITER_V6_PROGRAM_ID`; the devnet build pins `DEVNET_SWAP_ROUTER_ID`).

@@ -32,7 +32,7 @@ Requires Rust 1.89 or later.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.4.4", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.5.0", features = ["ws-client"] }
 ```
 
 ### 3. Run the examples
