@@ -19,7 +19,7 @@ Until then every connection ends with `maker_not_registered`.
 You need two keys (they may be the same key):
 
 - **Owner**: the registered maker identity. It holds funds and signs on-chain
-  maker transactions (`DepositPremium`, `WithdrawPremium`, `FundPosition`).
+  maker transactions (`DepositPremium`, `WithdrawPremium`, `DepositFundsToPosition`).
 - **Quote-signing key**: registered together with the owner. It signs the
   authentication challenge and every quote; both name the owner as the maker.
 
@@ -32,7 +32,7 @@ Requires Rust 1.89 or later.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.5.0", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.5.1", features = ["ws-client"] }
 ```
 
 ### 3. Run the examples
@@ -127,7 +127,7 @@ acceptance; never replay old signed quotes after a reconnect.
 ### 5. After a fill
 
 `QuoteFilled` means the position is open on chain. Optionally fund the
-settlement leg with `FundPosition` ([Chain helpers](#chain-helpers)); a position
+settlement leg with `DepositFundsToPosition` (`fund_position`, [Chain helpers](#chain-helpers)); a position
 that expires in the money without it is closed by a permissionless liquidator
 instead of settling with you. Settlement is run by Acta's keeper and pays the
 owner's ATA directly; no SDK call is needed.
@@ -141,8 +141,8 @@ owner's ATA directly; no SDK call is needed.
 - **Maker, own event loop** (`ws-client`): `WsClient` is a plain socket; you own
   auth, reconnect and recovery. Read `hello_auth`, `quote`, `discovery`.
 - **Vault operator** (`vault`): `VaultOperatorClient` on `/vault` quotes for the
-  vault, verifies and signs served opens and swaps, streams projection cursors
-  and `VaultCatalogChanged`; `VaultManager` builds the capital-cycle crank.
+  vault, verifies and signs served opens and swaps, streams projection cursors;
+  `VaultManager` builds the capital-cycle crank.
   Read `vault_operator`, `vault_capital` and [Vault operators](#vault-operators).
 - **Chain helpers** (`chain`, `chain-rpc`): premium deposit/withdrawal and
   position funding, account decoders. See [Chain helpers](#chain-helpers).
@@ -171,10 +171,12 @@ owner's ATA directly; no SDK call is needed.
 | `vault_operator` | `vault` | `/vault` session: quotes, verified fill and swap signing, projection cursor |
 | `vault_capital` | `chain-rpc` | Capital-cycle crank: deposit window, equity, deposits, withdrawals, finalize |
 
-Maker examples read `ACTA_KEYPAIR_PATH`, `ACTA_MAKER_OWNER` and `ACTA_WS_URL`.
-`vault_operator` signs with the operator key in `ACTA_KEYPAIR_PATH` for
-`ACTA_VAULT_PDA`. `vault_capital` also reads `ACTA_RPC_URL`, signs with the
-vault's governance or delegate key and sends one capital step per pass.
+Maker examples read `ACTA_KEYPAIR_PATH`, `ACTA_MAKER_OWNER` and `ACTA_WS_URL`;
+`loopback_latency` reads none. `vault_operator` reads the same three (it
+validates `ACTA_MAKER_OWNER` if set) and signs with the operator key in
+`ACTA_KEYPAIR_PATH` for `ACTA_VAULT_PDA`. `vault_capital` reads
+`ACTA_KEYPAIR_PATH`, `ACTA_VAULT_PDA` and `ACTA_RPC_URL` (default: devnet), signs
+with the vault's governance or delegate key and sends one capital step per pass.
 
 ```sh
 ACTA_VAULT_PDA=<vault> cargo run --locked --features vault --example vault_operator
@@ -263,8 +265,7 @@ lane returns `QueueFull`.
 Cancel with `raw().send_await(ClientMessage::CancelQuote(request), timeout)`:
 `CancelQuoteAck` lists the order IDs actually cancelled, `CancelAllQuotesAck` the
 aggregate. `QuoteCancelled` is a lifecycle event, not a receipt. A disconnect
-between write and ACK leaves the outcome unknown. `CancelRfq` has no receipt:
-`send()` it and wait for `RfqClosed`.
+between write and ACK leaves the outcome unknown.
 
 Keep each submitted `OrderId` until a cancellation, lifecycle fact or positive
 lookup resolves it. `GetOrderStatus` returns `Pending`, `Confirmed { position_pda }`
@@ -337,9 +338,9 @@ verified. `ManagedWsConfig::auth_timeout` covers signing, so signer futures must
 be safe to cancel.
 
 Server limits: 32 KiB per message, 50 quotes per batch, 50 quotes/s (burst 100)
-per wallet, 30 messages/s (burst 60) per connection. Critical pushes (RFQs, ACKs,
-fills) retry twice for 250 ms, then the server closes the connection to force
-recovery.
+per connection (a batch costs one per quote), 30 messages/s (burst 60) per
+connection. If a session's outbound queue is full when an RFQ, acknowledgement or
+fill is pushed, the server drops it and closes the connection to force recovery.
 
 ## Vault operators
 
@@ -357,8 +358,16 @@ shows cursor handling and verified fill and swap signing.
 - **Readiness:** each auth reads `GetMyActiveRfqs` and `GetPositions`; with maker
   permission also `GetMmSummary`, `GetActiveRfqs`, `GetMyQuotes { scope: Live }`.
 - **Subscriptions:** only `WsChannel::Vaults`, no mint filters, on by default.
-  RFQs arrive regardless. `VaultCatalogChanged { vault_pda }` means a vault was
-  created, re-delegated or closed: re-list vaults.
+  RFQs arrive without a subscription to grants with `SIGN_MAKER_QUOTES` while the
+  vault is tradable (`Normal` safety, caps prefilter).
+- **Discovering vaults:** `VaultCatalogChanged { vault_pda }` (a vault was created,
+  re-delegated or closed) is not sent on `/vault`. Add `WsChannel::Vaults` to your
+  existing `/maker` quote session, or hold a taker session; a second `/maker`
+  quote session for the same owner replaces the first (`session_replaced`), and
+  `/maker/data` cannot subscribe. Maker and taker `vaults` subscribers also get
+  `VaultProjectionAdvanced` for every vault. `VaultCatalogChanged` is best-effort
+  (not replayed; on a full queue it is dropped and the connection closed), so re-list
+  vaults over HTTP after every (re)connect as well as on each event.
 - **Quoting:** `sign_quote` puts the vault in `maker_owner`. A writer vault with
   `OPEN_TAKER` can take a holder vault's quote; the order binds both vaults, the
   writer operator signs and pays, the holder delegate signs the quote.
@@ -376,6 +385,8 @@ shows cursor handling and verified fill and swap signing.
   checked, the blockhash is not. v0 lookup tables come from
   `ChainClient::address_lookup_tables`. `verify_vault_open` / `verify_vault_swap`
   do the same for callers outside the operator client.
+- **Taker RFQs:** with `OPEN_TAKER`, `CancelRfq` has no receipt: `send()` it and
+  wait for `RfqClosed`.
 - **Operations:** rebalance needs `REBALANCE`; recovery swaps are governance-only.
   With `FUND_MAKER`, `VaultManager::fund_maker_position` moves the settlement leg
   (call: quote, put: underlying) from the vault into a position it holds.
@@ -418,13 +429,17 @@ wrap externally.
 ## HTTP reference data
 
 `HttpClient` reads `venue()` (program ID, minimum quote validity, settlement
-buffer, refresh lead, RFQ and signature timeouts, per-RFQ and per-taker limits),
+buffer, refresh lead, pre-expiry cutoff, RFQ and signature timeouts, per-RFQ and
+per-taker limits),
 `tokens()` (by mint; underlyings add size rule, strike tick and quote mints),
 `markets(&MarketFilter)` (by underlying, quote, expiry, side and `active`;
-`Some(false)` adds closed and finalized markets) and `vaults()` / `vault(pda)` /
-`vault_positions(pda)`. Read limits from here instead of hardcoding them.
-Responses are revalidated with `If-None-Match`, so polling costs a 304; refetch
-when `subscribe_reference_changes()` yields new ETags.
+`Some(false)` adds closed and finalized markets the server has seen since it
+started, not full history) and `vaults()` / `vault(pda)` / `vault_positions(pda)`.
+Read limits from here instead of hardcoding them. Venue, token and market
+responses are revalidated with `If-None-Match`, so polling costs a 304; refetch
+when `subscribe_reference_changes()` yields new ETags (on `/maker/data` this
+requires the backend release that delivers `ReferenceChanged` there).
+Vault reads are not cached.
 
 ## Wire notes
 
@@ -440,8 +455,8 @@ are raw units, not USD.
 
 ## Latency budget
 
-`examples/loopback_latency.rs`, release build, `low_latency()`, 20 000 samples per
-leg, Apple silicon. This bounds SDK overhead; network and server time add on top.
+`examples/loopback_latency.rs`, release build, `low_latency()`, 20 000 outbound and
+5 000 inbound samples, Apple silicon. This bounds SDK overhead; network and server time add on top.
 
 | Leg | p50 | p90 | p99 |
 |-----|-----|-----|-----|

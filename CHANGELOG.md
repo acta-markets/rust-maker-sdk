@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- `ServerMessage::ReferenceChanged` now reaches `/maker/data` sessions with the matching backend release, so `MakerDataClient::subscribe_reference_changes()` yields there.
+- README fact fixes: the quote rate limit is per connection; `CancelRfq` is documented on the `/vault` taker path (`OPEN_TAKER`); `VaultCatalogChanged` is not sent on `/vault`, reaches `vaults` subscribers on `/maker` quote and taker sessions, and is best-effort; ETag revalidation covers venue, token and market reads only; each example's environment variables; the funding instruction is named `DepositFundsToPosition`.
+
 ## 0.5.0
 
 - `ServerMessage::VaultCatalogChanged(VaultCatalogChangedData { vault_pda })` goes to `vaults` subscribers after a vault is created, re-delegated or closed; re-list vaults on it.
