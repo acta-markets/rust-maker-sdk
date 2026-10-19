@@ -11,3 +11,5 @@ pub mod maker;
 pub mod managed;
 pub mod reconnect;
 pub mod types;
+#[cfg(feature = "vault")]
+pub mod vault;

@@ -1,8 +1,8 @@
-use crate::ws::types::{AuthErrorData, ServerError, ServerMessage};
+use crate::ws::types::{AuthErrorData, ServerError, ServerMessage, WsErrorCode};
 
 use super::ManagedWsTerminationReason;
 
-/// A control failure that ends the current session attempt.
+/// A control frame that ends the current session attempt.
 pub(super) enum ControlFailure {
     Retry(String),
     ClearCredentials(String),
@@ -29,10 +29,9 @@ pub(super) fn classify(message: &ServerMessage) -> Option<ControlFailure> {
     }
 }
 
-/// An `AuthError` frame always ends the attempt, so this is total: an
-/// unrecognised reason is retryable rather than "keep going".
+/// Every `AuthError` ends the attempt; unknown reasons trigger a retry.
 pub(super) fn classify_auth_error(error: &AuthErrorData) -> ControlFailure {
-    let code = error.reason.as_str();
+    let code = &error.reason;
     let message = error.message.as_deref();
     match classify_code(code, message) {
         Some(failure) => failure,
@@ -40,29 +39,36 @@ pub(super) fn classify_auth_error(error: &AuthErrorData) -> ControlFailure {
     }
 }
 
-fn classify_code(code: &str, message: Option<&str>) -> Option<ControlFailure> {
+fn classify_code(code: &WsErrorCode, message: Option<&str>) -> Option<ControlFailure> {
     match code {
-        "session_replaced" => Some(ControlFailure::Terminate(
+        WsErrorCode::SessionReplaced => Some(ControlFailure::Terminate(
             ManagedWsTerminationReason::SessionReplaced,
         )),
-        "blacklisted"
-        | "maker_unregistered"
-        | "maker_not_registered"
-        | "invalid_pubkey"
-        | "invalid_signature" => Some(ControlFailure::Terminate(
+        WsErrorCode::Blacklisted
+        | WsErrorCode::MakerUnregistered
+        | WsErrorCode::MakerNotRegistered
+        | WsErrorCode::InvalidPubkey
+        | WsErrorCode::InvalidSignature
+        | WsErrorCode::InvalidOperator
+        | WsErrorCode::InvalidVault
+        | WsErrorCode::OperatorMismatch
+        | WsErrorCode::VaultOperatorUnauthorized => Some(ControlFailure::Terminate(
             ManagedWsTerminationReason::AuthenticationRejected {
                 reason: code.to_string(),
                 message: message.map(str::to_owned),
             },
         )),
-        "session_expired" => Some(ControlFailure::ClearCredentials(format_detail(
+        WsErrorCode::VaultSessionInvalidated => {
+            Some(ControlFailure::Retry(format_detail(code, message)))
+        }
+        WsErrorCode::SessionExpired => Some(ControlFailure::ClearCredentials(format_detail(
             code, message,
         ))),
         _ => None,
     }
 }
 
-fn format_detail(code: &str, message: Option<&str>) -> String {
+fn format_detail(code: &WsErrorCode, message: Option<&str>) -> String {
     match message {
         Some(message) => format!("{code} ({message})"),
         None => code.to_string(),
@@ -73,12 +79,12 @@ fn format_detail(code: &str, message: Option<&str>) -> String {
 mod tests {
     use super::{ControlFailure, classify};
     use crate::ws::managed::ManagedWsTerminationReason;
-    use crate::ws::types::{ServerError, ServerMessage, VersionMismatchData};
+    use crate::ws::types::{ServerError, ServerMessage, VersionMismatchData, WsErrorCode};
 
     #[test]
     fn backend_session_replaced_frame_is_terminal() {
         let action = classify(&ServerMessage::Error(ServerError::Generic {
-            code: "session_replaced".to_string(),
+            code: WsErrorCode::SessionReplaced,
             message: "This session was replaced by a newer connection".to_string(),
         }));
 
@@ -110,7 +116,7 @@ mod tests {
     #[test]
     fn expired_session_clears_resume_credentials() {
         let action = classify(&ServerMessage::Error(ServerError::Generic {
-            code: "session_expired".to_string(),
+            code: WsErrorCode::SessionExpired,
             message: "Authentication session expired".to_string(),
         }));
 

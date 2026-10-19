@@ -29,7 +29,6 @@ extract_variants() {
   ' "$source_file" | sort
 }
 
-# `Unknown` is an SDK-only decoding fallback, not a wire value emitted by the backend.
 compare_enum() {
   local enum_name="$1"
   local sdk_file="$2"

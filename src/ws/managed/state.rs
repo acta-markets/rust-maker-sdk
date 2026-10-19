@@ -30,11 +30,9 @@ pub enum ManagedWsTerminationReason {
         reason: String,
         message: Option<String>,
     },
-    /// The session task panicked. The connection is gone and will not
-    /// reconnect; respawn the client to continue.
+    /// Session task panicked; respawn the client to reconnect.
     SessionPanicked,
-    /// The server did not enable a feature this configuration requires, so
-    /// trading would run without a guarantee the maker asked for.
+    /// Server did not enable a required feature.
     FeatureUnsupported {
         feature: String,
     },

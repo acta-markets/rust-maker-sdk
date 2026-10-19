@@ -6,6 +6,7 @@ use acta_maker_sdk::ws::{client::WsClient, managed::normalize_maker_ws_url, type
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let common::Config { signer, owner, url } = common::load()?;
+    let owner = owner.ok_or("set ACTA_MAKER_OWNER to the registered maker owner")?;
     let mut client = WsClient::connect(&normalize_maker_ws_url(&url)).await?;
 
     client

@@ -1,5 +1,5 @@
-//! Unsigned Unix timestamps truncate sub-second input, matching the backend.
-//! `serde_with::TimestampSeconds<i64>` rounds instead and can change a signed expiry.
+//! Wire timestamps: unsigned whole units, truncated to match the backend.
+//! Rounding serializers can change signed expiry values.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

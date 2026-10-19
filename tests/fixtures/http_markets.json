@@ -1,0 +1,21 @@
+{
+  "markets": [
+    {
+      "pda": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+      "underlying": "So11111111111111111111111111111111111111112",
+      "quote": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "expiry_ts": 1767225600,
+      "is_put": true,
+      "status": "finalized",
+      "settlement_price": 150000000000
+    },
+    {
+      "pda": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+      "underlying": "So11111111111111111111111111111111111111112",
+      "quote": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "expiry_ts": 4102444800,
+      "is_put": false,
+      "status": "active"
+    }
+  ]
+}

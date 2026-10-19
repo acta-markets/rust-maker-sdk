@@ -1,4 +1,6 @@
-//! Build the signed preimage and quote message from the same validated RFQ terms.
+//! Quote assembly: [`RfqBinding`] decodes identities and resolves offered strikes;
+//! [`QuoteBuilder`] derives the signed preimage and [`QuoteMessage`] from the
+//! same strike, price, expiry and nonce.
 
 use crate::orders::{OrderPreimageArgs, SignerLike, compute_order_id, sign_order_id_with_signer};
 use crate::signing::{AsyncSignerLike, SigningError};
@@ -22,7 +24,7 @@ pub enum QuoteBuildError {
     #[error("rfq market does not match trusted signing terms: {0}")]
     MarketBinding(&'static str),
 
-    /// Strike is absent from `RfqBroadcast.strike` and `order_options`.
+    /// Strike absent from `RfqBroadcast.strike` and `order_options`.
     #[error("strike {requested} is not offered by this rfq; offered: {offered:?}")]
     StrikeNotOffered {
         requested: Strike,
@@ -32,17 +34,32 @@ pub enum QuoteBuildError {
     #[error("quote is missing `{0}`")]
     Missing(&'static str),
 
+    #[error("valid_until {valid_until} is after market expiry {market_expiry}")]
+    ValidUntilAfterMarketExpiry {
+        valid_until: QuoteExpiry,
+        market_expiry: QuoteExpiry,
+    },
+
+    #[error("valid_until {valid_until} is before the venue minimum {min_valid_until}")]
+    ValidUntilTooSoon {
+        valid_until: QuoteExpiry,
+        min_valid_until: QuoteExpiry,
+    },
+
     #[error("signing failed: {0}")]
     Signing(#[from] SigningError),
 }
 
-/// Validated RFQ identities and strikes. Reuse for quotes and replacements.
+/// An RFQ with its identities decoded and its strike set resolved.
+///
+/// Reuse per RFQ to avoid repeated decoding and strike resolution.
 #[derive(Debug, Clone)]
 pub struct RfqBinding {
     rfq_id: Uuid,
     chain_id: u64,
     program_id: [u8; 32],
     market: [u8; 32],
+    market_expiry: QuoteExpiry,
     taker: [u8; 32],
     position_type: PositionType,
     quantity: Quantity,
@@ -72,7 +89,7 @@ impl RfqBinding {
         rfq: &RfqBroadcastMessage,
         expected_program: [u8; 32],
     ) -> Result<Self, QuoteBuildError> {
-        let market = validate_market_binding(rfq, expected_program)?;
+        let (market, market_expiry) = validate_market_binding(rfq, expected_program)?;
         let mut offered_strikes = Vec::with_capacity(1 + rfq.order_options.len());
         offered_strikes.push(rfq.strike);
         offered_strikes.extend(
@@ -87,6 +104,7 @@ impl RfqBinding {
             chain_id: rfq.market.chain_id.value(),
             program_id: expected_program,
             market,
+            market_expiry,
             taker: identity("taker", &rfq.taker)?,
             position_type: rfq.position_type,
             quantity: rfq.quantity,
@@ -100,7 +118,7 @@ impl RfqBinding {
         self.rfq_id
     }
 
-    /// RFQ quantity in underlying atoms, included in the signed preimage.
+    /// RFQ quantity used for pricing and included in the signed preimage.
     #[must_use]
     pub const fn quantity(&self) -> Quantity {
         self.quantity
@@ -109,6 +127,12 @@ impl RfqBinding {
     #[must_use]
     pub const fn position_type(&self) -> PositionType {
         self.position_type
+    }
+
+    /// Latest `valid_until` the venue accepts for this RFQ.
+    #[must_use]
+    pub const fn market_expiry(&self) -> QuoteExpiry {
+        self.market_expiry
     }
 
     /// Every strike this RFQ will accept a quote on.
@@ -124,6 +148,7 @@ impl RfqBinding {
             strike: self.requested_strike,
             price: None,
             valid_until: None,
+            min_valid_until: None,
             nonce: None,
             maker: None,
         }
@@ -133,7 +158,7 @@ impl RfqBinding {
 fn validate_market_binding(
     rfq: &RfqBroadcastMessage,
     expected_program: [u8; 32],
-) -> Result<[u8; 32], QuoteBuildError> {
+) -> Result<([u8; 32], QuoteExpiry), QuoteBuildError> {
     use QuoteBuildError::MarketBinding;
     use solana_pubkey::Pubkey;
 
@@ -166,24 +191,39 @@ fn validate_market_binding(
     if expiry.subsec_nanos() != 0 || expiry.as_secs() > i64::MAX as u64 {
         return Err(MarketBinding("expiry_ts"));
     }
-    let expected_market = Pubkey::try_find_program_address(
-        &[
-            b"market",
-            &underlying,
-            &quote,
-            &expiry.as_secs().to_le_bytes(),
-            &[u8::from(descriptor.is_put)],
-        ],
+    let expected_market = market_pda(
         &Pubkey::new_from_array(expected_program),
+        &Pubkey::new_from_array(underlying),
+        &Pubkey::new_from_array(quote),
+        expiry.as_secs(),
+        descriptor.is_put,
     )
-    .ok_or(MarketBinding("market PDA derivation"))?
-    .0
     .to_bytes();
     let market = identity("market.market_pda", &descriptor.market_pda)?;
     if market != expected_market {
         return Err(MarketBinding("market_pda"));
     }
-    Ok(market)
+    Ok((market, QuoteExpiry::from_unix_seconds(expiry.as_secs())))
+}
+
+pub(crate) fn market_pda(
+    program_id: &solana_pubkey::Pubkey,
+    underlying_mint: &solana_pubkey::Pubkey,
+    quote_mint: &solana_pubkey::Pubkey,
+    expiry_ts: u64,
+    is_put: bool,
+) -> solana_pubkey::Pubkey {
+    solana_pubkey::Pubkey::find_program_address(
+        &[
+            b"market",
+            underlying_mint.as_ref(),
+            quote_mint.as_ref(),
+            &expiry_ts.to_le_bytes(),
+            &[u8::from(is_put)],
+        ],
+        program_id,
+    )
+    .0
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -192,6 +232,7 @@ struct Resolved {
     price: Price,
     valid_until: QuoteExpiry,
     nonce: Nonce,
+    maker: [u8; 32],
 }
 
 /// Accumulates the maker's side of a quote, then signs it.
@@ -202,6 +243,7 @@ pub struct QuoteBuilder<'a> {
     strike: Strike,
     price: Option<Price>,
     valid_until: Option<QuoteExpiry>,
+    min_valid_until: Option<QuoteExpiry>,
     nonce: Option<Nonce>,
     maker: Option<[u8; 32]>,
 }
@@ -223,13 +265,19 @@ impl QuoteBuilder<'_> {
         self
     }
 
+    /// Earliest `valid_until` the venue accepts: now plus `min_quote_validity_seconds`
+    /// from `GET /api/v1/venue`.
+    pub const fn min_valid_until(mut self, min_valid_until: QuoteExpiry) -> Self {
+        self.min_valid_until = Some(min_valid_until);
+        self
+    }
+
     pub const fn nonce(mut self, nonce: Nonce) -> Self {
         self.nonce = Some(nonce);
         self
     }
 
-    /// Authenticated maker owner used in the signed preimage.
-    /// Set this when a delegated key signs; defaults to the signer's public key.
+    /// Maker owner in the signed preimage, required even when it signs itself.
     pub const fn maker_owner(mut self, owner: [u8; 32]) -> Self {
         self.maker = Some(owner);
         self
@@ -242,24 +290,34 @@ impl QuoteBuilder<'_> {
                 offered: self.binding.offered_strikes.clone(),
             });
         }
+        let valid_until = self
+            .valid_until
+            .ok_or(QuoteBuildError::Missing("valid_until"))?;
+        let min_valid_until = self
+            .min_valid_until
+            .ok_or(QuoteBuildError::Missing("min_valid_until"))?;
+        if valid_until > self.binding.market_expiry {
+            return Err(QuoteBuildError::ValidUntilAfterMarketExpiry {
+                valid_until,
+                market_expiry: self.binding.market_expiry,
+            });
+        }
+        if valid_until < min_valid_until {
+            return Err(QuoteBuildError::ValidUntilTooSoon {
+                valid_until,
+                min_valid_until,
+            });
+        }
         Ok(Resolved {
             strike: self.strike,
             price: self.price.ok_or(QuoteBuildError::Missing("price"))?,
-            valid_until: self
-                .valid_until
-                .ok_or(QuoteBuildError::Missing("valid_until"))?,
+            valid_until,
             nonce: self.nonce.ok_or(QuoteBuildError::Missing("nonce"))?,
+            maker: self.maker.ok_or(QuoteBuildError::Missing("maker_owner"))?,
         })
     }
 
-    const fn maker_for(&self, signer_pubkey: [u8; 32]) -> [u8; 32] {
-        match self.maker {
-            Some(owner) => owner,
-            None => signer_pubkey,
-        }
-    }
-
-    fn args_for(&self, resolved: Resolved, maker: [u8; 32]) -> OrderPreimageArgs {
+    fn args_for(&self, resolved: Resolved) -> OrderPreimageArgs {
         OrderPreimageArgs {
             chain_id: self.binding.chain_id,
             program_id: self.binding.program_id,
@@ -270,30 +328,30 @@ impl QuoteBuilder<'_> {
             quantity: self.binding.quantity.value(),
             gross_price: resolved.price.value(),
             valid_until: resolved.valid_until.as_unix_seconds(),
-            maker,
+            maker: resolved.maker,
             taker: self.binding.taker,
             nonce: resolved.nonce.value(),
         }
     }
 
-    /// Preimage fields for inspection or external signing.
-    /// [`Self::maker_owner`] overrides the fallback `maker`, as in the sign paths.
+    /// The exact preimage the server will reconstruct for this quote.
     ///
     /// # Errors
     /// See [`QuoteBuildError`].
-    pub fn preimage_args(&self, maker: [u8; 32]) -> Result<OrderPreimageArgs, QuoteBuildError> {
-        let resolved = self.resolve()?;
-        Ok(self.args_for(resolved, self.maker_for(maker)))
+    pub fn preimage_args(&self) -> Result<OrderPreimageArgs, QuoteBuildError> {
+        Ok(self.args_for(self.resolve()?))
     }
 
     /// Sign with a local key.
     ///
-    /// Re-signing identical terms reproduces the same `order_id`.
-    /// Use a fresh nonce for a new quote.
+    /// Reusable builder. Give each quote a fresh nonce to avoid duplicate order IDs.
     ///
     /// # Errors
     /// See [`QuoteBuildError`].
-    pub fn sign<S: SignerLike>(&self, signer: &S) -> Result<QuoteMessage, QuoteBuildError> {
+    pub fn sign<S: SignerLike + ?Sized>(
+        &self,
+        signer: &S,
+    ) -> Result<QuoteMessage, QuoteBuildError> {
         let (resolved, order_id, signature) = self.sign_parts(signer)?;
         Ok(self.assemble(resolved, order_id, signature))
     }
@@ -310,19 +368,17 @@ impl QuoteBuilder<'_> {
         signer: &S,
     ) -> Result<QuoteMessage, QuoteBuildError> {
         let resolved = self.resolve()?;
-        let args = self.args_for(resolved, self.maker_for(signer.pubkey_bytes()));
-        let order_id = compute_order_id(&args);
+        let order_id = compute_order_id(&self.args_for(resolved));
         let signature = crate::orders::sign_order_id_with_async_signer(&order_id, signer).await?;
         Ok(self.assemble(resolved, order_id, signature))
     }
 
-    fn sign_parts<S: SignerLike>(
+    fn sign_parts<S: SignerLike + ?Sized>(
         &self,
         signer: &S,
     ) -> Result<(Resolved, [u8; 32], [u8; 64]), QuoteBuildError> {
         let resolved = self.resolve()?;
-        let args = self.args_for(resolved, self.maker_for(signer.pubkey_bytes()));
-        let order_id = compute_order_id(&args);
+        let order_id = compute_order_id(&self.args_for(resolved));
         Ok((
             resolved,
             order_id,
@@ -349,7 +405,7 @@ impl QuoteBuilder<'_> {
 }
 
 impl QuoteMessage {
-    /// Attach the replaced order ID without changing or re-signing this quote.
+    /// Add the replaced order's ID without signing again; supports remote signers.
     #[must_use]
     pub fn into_replacement(self, old_order_id: OrderId) -> ReplaceQuoteMessage {
         ReplaceQuoteMessage {

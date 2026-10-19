@@ -19,17 +19,23 @@ use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
-use crate::ws::client::PreparedClientMessage;
+use crate::ws::client::{PreparedClientMessage, ServerClose};
 use crate::ws::error::WsClientError;
-use crate::ws::types::{ClientMessage, ServerMessage};
+use crate::ws::types::{ClientMessage, ServerMessage, VaultAuthSuccessData};
 
 pub use config::{GapPolicy, ManagedWsConfig, ManagedWsConfigError};
+#[cfg(all(feature = "vault", feature = "http"))]
+pub(crate) use endpoint::ws_base_url;
 pub use endpoint::{
     MakerWsEndpoint, normalize_maker_data_ws_url, normalize_maker_ws_url,
     normalize_maker_ws_url_for_endpoint,
 };
-pub use inbound::{ManagedInbound, ManagedMessageReceiver, ManagedReceiveError};
+pub use inbound::{
+    ManagedInbound, ManagedMessageReceiver, ManagedReceiveError, ReferenceChangeReceiver,
+};
 pub use outbound::{OutboundMessageError, SendTicket};
+#[cfg(feature = "vault")]
+pub(crate) use signer::ChallengeSigning;
 pub use state::{ManagedWsState, ManagedWsTerminationReason, WaitUntilReadyError};
 #[cfg(feature = "test-helpers")]
 pub use test_peer::ManagedWsTestPeer;
@@ -58,8 +64,14 @@ pub enum ManagedWsEvent {
     Authenticated,
     Reconciled,
     Ready,
-    Reconnecting { attempt: u64, delay_ms: u64 },
-    Disconnected,
+    Reconnecting {
+        attempt: u64,
+        delay_ms: u64,
+    },
+    /// `close` is the server's close frame, if it sent one.
+    Disconnected {
+        close: Option<ServerClose>,
+    },
     Error(String),
     Terminated(ManagedWsTerminationReason),
 }
@@ -137,6 +149,7 @@ pub struct ManagedWsHandle {
     initial_messages_rx: Arc<StdMutex<Option<broadcast::Receiver<ManagedInbound>>>>,
     initial_events_rx: Arc<StdMutex<Option<broadcast::Receiver<ManagedWsEvent>>>>,
     state_rx: watch::Receiver<ManagedWsState>,
+    vault_auth_rx: watch::Receiver<Option<VaultAuthSuccessData>>,
     shutdown: Arc<ShutdownOnLastHandle>,
     next_await_id: Arc<AtomicU64>,
     task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -180,6 +193,10 @@ impl ManagedWsHandle {
         }
     }
 
+    pub fn subscribe_reference_changes(&self) -> ReferenceChangeReceiver {
+        ReferenceChangeReceiver::new(self.subscribe_messages())
+    }
+
     /// Lifecycle events, including the since-spawn backlog for the first subscriber.
     pub fn subscribe_events(&self) -> broadcast::Receiver<ManagedWsEvent> {
         self.initial_events_rx
@@ -197,6 +214,18 @@ impl ManagedWsHandle {
     #[must_use]
     pub fn state(&self) -> ManagedWsState {
         self.state_rx.borrow().clone()
+    }
+
+    /// Vault grant for the current connection, as the server saw it at auth; `None` on maker sessions.
+    #[must_use]
+    pub fn vault_auth(&self) -> Option<VaultAuthSuccessData> {
+        self.vault_auth_rx.borrow().clone()
+    }
+
+    /// Follow vault authentications and invalidation (`None`) across reconnects.
+    #[must_use]
+    pub fn subscribe_vault_auth(&self) -> watch::Receiver<Option<VaultAuthSuccessData>> {
+        self.vault_auth_rx.clone()
     }
 
     #[must_use]
@@ -280,6 +309,26 @@ impl ManagedWsHandle {
 
     pub fn try_send(&self, message: ClientMessage) -> Result<SendTicket, ManagedWsError> {
         let connection_epoch = self.command_epoch(&message)?;
+        self.try_send_with_epoch(message, connection_epoch)
+    }
+
+    /// Non-blocking [`Self::send_in_epoch`].
+    pub fn try_send_in_epoch(
+        &self,
+        message: ClientMessage,
+        connection_epoch: u64,
+    ) -> Result<SendTicket, ManagedWsError> {
+        if self.ready_epoch()? != connection_epoch {
+            return Err(ManagedWsError::NotReady);
+        }
+        self.try_send_with_epoch(message, Some(connection_epoch))
+    }
+
+    fn try_send_with_epoch(
+        &self,
+        message: ClientMessage,
+        connection_epoch: Option<u64>,
+    ) -> Result<SendTicket, ManagedWsError> {
         let message = self.prepare_outbound(&message)?;
         let (tx, rx) = oneshot::channel();
         match self.cmd_tx.try_send(ManagedCommand::Send {
@@ -321,19 +370,8 @@ impl ManagedWsHandle {
         timeout_duration: Duration,
         connection_epoch: Option<u64>,
     ) -> Result<Arc<ServerMessage>, SendAwaitError> {
-        let prepared = self.prepare_outbound(&message)?;
-        let registration = AwaitTracker::prepare(&message)?;
-        let await_id = self.next_await_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
         let deadline = tokio::time::Instant::now() + timeout_duration;
-        let command = ManagedCommand::SendAwait {
-            await_id,
-            message: prepared,
-            connection_epoch,
-            registration,
-            tx,
-        };
-
+        let (command, response) = self.await_command(message, connection_epoch, deadline)?;
         if tokio::time::timeout_at(deadline, self.cmd_tx.send(command))
             .await
             .map_err(|_| SendAwaitError::Timeout)?
@@ -341,15 +379,67 @@ impl ManagedWsHandle {
         {
             return Err(SendAwaitError::Disconnected);
         }
+        response.await
+    }
 
-        match tokio::time::timeout_at(deadline, rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(SendAwaitError::Disconnected),
-            Err(_) => {
-                let _ = self.cancel_tx.send(await_id);
-                Err(SendAwaitError::Timeout)
-            }
+    /// Enqueues without waiting for queue space, so a caller can enqueue under its own lock;
+    /// the returned future resolves on the correlated response.
+    #[cfg(feature = "vault")]
+    pub(crate) fn try_send_await_in_epoch(
+        &self,
+        message: ClientMessage,
+        timeout_duration: Duration,
+        connection_epoch: u64,
+    ) -> Result<
+        impl Future<Output = Result<Arc<ServerMessage>, SendAwaitError>> + use<'_>,
+        SendAwaitError,
+    > {
+        if self.ready_epoch().ok() != Some(connection_epoch) {
+            return Err(SendAwaitError::NotReady);
         }
+        let deadline = tokio::time::Instant::now() + timeout_duration;
+        let (command, response) = self.await_command(message, Some(connection_epoch), deadline)?;
+        match self.cmd_tx.try_send(command) {
+            Ok(()) => Ok(response),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(SendAwaitError::QueueFull),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(SendAwaitError::Disconnected),
+        }
+    }
+
+    fn await_command(
+        &self,
+        message: ClientMessage,
+        connection_epoch: Option<u64>,
+        deadline: tokio::time::Instant,
+    ) -> Result<
+        (
+            ManagedCommand,
+            impl Future<Output = Result<Arc<ServerMessage>, SendAwaitError>> + use<'_>,
+        ),
+        SendAwaitError,
+    > {
+        let prepared = self.prepare_outbound(&message)?;
+        let registration = AwaitTracker::prepare(&message)?;
+        let await_id = self.next_await_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        let command = ManagedCommand::SendAwait {
+            await_id,
+            message: prepared,
+            connection_epoch,
+            registration,
+            tx,
+        };
+        let response = async move {
+            match tokio::time::timeout_at(deadline, rx).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Err(SendAwaitError::Disconnected),
+                Err(_) => {
+                    let _ = self.cancel_tx.send(await_id);
+                    Err(SendAwaitError::Timeout)
+                }
+            }
+        };
+        Ok((command, response))
     }
 
     fn prepare_outbound(
@@ -386,6 +476,7 @@ impl ManagedWsHandle {
         let (events_tx, initial_events_rx) = broadcast::channel(broadcast_buffer);
         let (state_tx, state_rx) = watch::channel(ManagedWsState::Connecting);
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let (_vault_auth_tx, vault_auth_rx) = watch::channel(None);
         (
             Self {
                 cmd_tx,
@@ -396,6 +487,7 @@ impl ManagedWsHandle {
                 initial_messages_rx: Arc::new(StdMutex::new(Some(initial_messages_rx))),
                 initial_events_rx: Arc::new(StdMutex::new(Some(initial_events_rx))),
                 state_rx,
+                vault_auth_rx,
                 shutdown: Arc::new(ShutdownOnLastHandle { tx: shutdown_tx }),
                 next_await_id: Arc::new(AtomicU64::new(1)),
                 task: Arc::new(tokio::sync::Mutex::new(None)),
@@ -460,6 +552,8 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
     let (events_tx, initial_events_rx) = broadcast::channel(broadcast_buffer);
     let (state_tx, state_rx) = watch::channel(ManagedWsState::Connecting);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (vault_auth_tx, vault_auth_rx) = watch::channel(None);
+    let connection_open = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let session = session::run_managed_ws(
         config,
@@ -467,19 +561,21 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
             cmd_rx,
             cancel_rx,
             gap_rx,
+            connection_open: Arc::clone(&connection_open),
         },
         messages_tx.clone(),
         events_tx.clone(),
         state_tx.clone(),
         shutdown_rx,
+        vault_auth_tx.clone(),
     );
-    // The handle keeps the broadcast senders alive, so a panicked session task
-    // would leave subscribers waiting forever unless the panic is published.
     let panic_events_tx = events_tx.clone();
     let panic_state_tx = state_tx.clone();
     let task = tokio::spawn(async move {
         use futures_util::FutureExt;
         if let Err(payload) = std::panic::AssertUnwindSafe(session).catch_unwind().await {
+            vault_auth_tx.send_if_modified(|grant| grant.take().is_some());
+            session::connection_ended(&connection_open, &panic_events_tx, None);
             session::terminate(
                 &panic_events_tx,
                 &panic_state_tx,
@@ -498,6 +594,7 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
         initial_messages_rx: Arc::new(StdMutex::new(Some(initial_messages_rx))),
         initial_events_rx: Arc::new(StdMutex::new(Some(initial_events_rx))),
         state_rx,
+        vault_auth_rx,
         shutdown: Arc::new(ShutdownOnLastHandle { tx: shutdown_tx }),
         next_await_id: Arc::new(AtomicU64::new(1)),
         task: Arc::new(tokio::sync::Mutex::new(Some(task))),

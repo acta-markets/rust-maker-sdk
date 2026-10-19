@@ -100,7 +100,7 @@ async fn authenticate_peer(socket: &mut Socket) {
     )
     .await;
     let mut reads = 0;
-    while reads < 3 {
+    while reads < 2 {
         let reply = match client_frame(socket).await.expect("recovery request") {
             ClientMessage::GetSubscriptions(m) => {
                 ServerMessage::Subscriptions(SubscriptionsMessage {
@@ -114,29 +114,6 @@ async fn authenticate_peer(socket: &mut Socket) {
                 request_id: m.request_id,
                 subscribed: m.channels,
             }),
-            ClientMessage::GetMmSummary(m) => {
-                reads += 1;
-                ServerMessage::MmSummary(MmSummaryData {
-                    request_id: m.request_id,
-                    maker_pda: "maker".to_string(),
-                    caps: MyCapsData {
-                        request_id: m.request_id,
-                        positions: MakerPositionCapInfo {
-                            current: 0,
-                            limit: 0,
-                        },
-                        notional: Vec::new(),
-                        balances: Vec::new(),
-                    },
-                    positions: Vec::new(),
-                    active_quotes: Vec::new(),
-                    markets: Vec::new(),
-                    tokens: Vec::new(),
-                    computed_at: UNIX_EPOCH,
-                    unrenderable_positions: Vec::new(),
-                    positions_has_more: false,
-                })
-            }
             ClientMessage::GetActiveRfqs(m) => {
                 reads += 1;
                 ServerMessage::ActiveRfqs(ActiveRfqsData {
@@ -185,7 +162,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         authenticate_peer(&mut socket).await;
         eprintln!("peer: authenticated");
 
-        // Phase 1: the client fires OUTBOUND data-lane queries; record each arrival.
         outbound_started_rx.await.expect("client started");
         let mut arrivals = Vec::with_capacity(OUTBOUND);
         while arrivals.len() < OUTBOUND {
@@ -197,7 +173,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         eprintln!("peer: phase 1 done");
-        // Phase 2: push INBOUND acknowledgements, recording the send instant.
         let mut sends = Vec::with_capacity(INBOUND);
         let mut next_send = tokio::time::Instant::now();
         for i in 0..INBOUND {
@@ -207,7 +182,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 replaced_order_id: None,
             });
             next_send += INBOUND_PACING;
-            // Keep answering liveness pings while pacing.
             loop {
                 tokio::select! {
                     () = tokio::time::sleep_until(next_send) => break,
@@ -250,6 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             client_version: None,
         },
         signer,
+        "maker",
     )
     .low_latency();
     let handle = spawn_managed_ws(config)?;
@@ -257,9 +232,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handle.wait_until_ready().await?;
     eprintln!("client: ready");
 
-    // Phase 1: enqueue -> wire.
-    // One frame in flight at a time: the number is the path of one frame from
-    // `try_send` to the peer's socket, not the depth of a burst queue.
     let mut enqueued = Vec::with_capacity(OUTBOUND);
     outbound_started_tx.send(()).expect("peer waiting");
     for _ in 0..OUTBOUND {
@@ -273,7 +245,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!("client: written");
 
-    // Phase 2: wire -> session parse -> subscriber.
     let mut parsed = Vec::with_capacity(INBOUND);
     let mut delivered = Vec::with_capacity(INBOUND);
     loop {

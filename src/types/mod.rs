@@ -12,6 +12,7 @@ pub mod expiry;
 pub mod ids;
 pub mod invite;
 pub mod unix_time;
+pub mod vault;
 
 pub use domain::*;
 pub use errors::*;
@@ -19,3 +20,4 @@ pub use expiry::QuoteExpiry;
 pub use ids::*;
 pub use invite::*;
 pub use unix_time::{UnixMillis, UnixSeconds};
+pub use vault::*;

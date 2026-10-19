@@ -37,7 +37,6 @@ fn scaled_quote_amount(
         .checked_mul(underlying_scale)
         .ok_or(ChainError::SettlementAmountOverflow)?;
     let numerator = u128::from(strike) * u128::from(quantity);
-    // Both scales are powers of ten: cancel before multiplying, without rounding twice.
     let amount = if quote_scale <= denominator {
         numerator / (denominator / quote_scale)
     } else {

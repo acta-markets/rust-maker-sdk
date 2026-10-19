@@ -76,7 +76,7 @@ fn auth_error_parses_optional_message() {
     let parsed_with_message: ServerMessage = serde_json::from_value(raw_with_message).unwrap();
     match parsed_with_message {
         ServerMessage::AuthError(data) => {
-            assert_eq!(data.reason, "invalid_signature");
+            assert_eq!(data.reason, WsErrorCode::InvalidSignature);
             assert!(!data.is_session_expired());
             assert_eq!(data.message.as_deref(), Some("bad signature bytes"));
         }
@@ -93,7 +93,7 @@ fn auth_error_parses_optional_message() {
         serde_json::from_value(raw_without_message).unwrap();
     match parsed_without_message {
         ServerMessage::AuthError(data) => {
-            assert_eq!(data.reason, "session_expired");
+            assert_eq!(data.reason, WsErrorCode::SessionExpired);
             assert!(data.is_session_expired());
             assert_eq!(data.message, None);
         }
@@ -531,7 +531,7 @@ fn server_error_variants_roundtrip() {
             limit: 3,
         }),
         ServerError::Generic {
-            code: "test".to_string(),
+            code: WsErrorCode::Unknown("test".into()),
             message: "test error".to_string(),
         },
     ];
@@ -596,6 +596,7 @@ fn request_error_roundtrip() {
     let original = ServerMessage::RequestError(RequestErrorEnvelope {
         request_id: Uuid::new_v4(),
         error: ServerError::RfqNotFound,
+        delivery: None,
     });
     let json = serde_json::to_value(&original).unwrap();
     let parsed: ServerMessage = serde_json::from_value(json).unwrap();
@@ -996,7 +997,6 @@ fn chain_event_identity_requires_instruction_index() {
 
 #[test]
 fn future_payload_of_known_error_stays_usable() {
-    // A future cap variant lands in CapError::Unknown with its payload intact.
     let parsed = parse_server_message(
         r#"{"type":"Error","data":{"type":"Cap","data":{"future_cap":{"limit":1}}}}"#,
     )
@@ -1006,8 +1006,6 @@ fn future_payload_of_known_error_stays_usable() {
         ServerMessage::Error(ServerError::Cap(CapError::Unknown(_)))
     ));
 
-    // A known error whose payload no longer matches at all still degrades to
-    // UnknownServerError instead of dropping the frame.
     let parsed = parse_server_message(
         r#"{"type":"Error","data":{"type":"RateLimit","data":{"object":"payload"}}}"#,
     )
@@ -1306,7 +1304,6 @@ fn future_cap_variant_parses_as_unknown_instead_of_dropping_the_message() {
         _ => panic!("Expected QuoteRejected"),
     }
 
-    // A reason string this build does not know still parses as `Unknown`.
     let reason = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":"quota_exhausted"}}"#;
     match serde_json::from_str::<ServerMessage>(reason).unwrap() {
         ServerMessage::QuoteRejected(data) => assert_eq!(data.reason, QuoteRejectReason::Unknown),
@@ -1524,4 +1521,31 @@ fn required_wire_fields_preserve_values_and_reject_missing_or_null() {
             );
         }
     }
+}
+
+#[test]
+fn reference_frames_decode() {
+    let tokens: ServerMessage = serde_json::from_value(json!({
+        "type": "Tokens",
+        "data": {
+            "request_id": "00000000-0000-0000-0000-000000000000",
+            "tokens": [{ "mint": "M", "symbol": "SOL", "decimals": 9, "quote_mints": ["Q"] }]
+        }
+    }))
+    .unwrap();
+    let ServerMessage::Tokens(tokens) = tokens else {
+        panic!("expected Tokens");
+    };
+    assert_eq!(tokens.tokens[0].quote_mints, ["Q"]);
+    assert!(tokens.tokens[0].size_rule.is_none());
+
+    let changed: ServerMessage = serde_json::from_value(json!({
+        "type": "ReferenceChanged",
+        "data": { "tokens_etag": "\"t\"", "markets_etag": "\"m\"" }
+    }))
+    .unwrap();
+    assert!(matches!(
+        changed,
+        ServerMessage::ReferenceChanged(data) if data.markets_etag == "\"m\""
+    ));
 }

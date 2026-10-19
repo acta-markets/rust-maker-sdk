@@ -11,7 +11,6 @@ const PROGRAM: [u8; 32] =
 const TAKER: [u8; 32] = [11u8; 32];
 
 fn market() -> [u8; 32] {
-    // Golden derived with @solana/web3.js for the descriptor in broadcast().
     solana_pubkey::pubkey!("6E9r7Y4Q7mVpNDUJ47dYAdNQAZN1u3FxrutUWAfjL4zb").to_bytes()
 }
 
@@ -52,22 +51,25 @@ fn binding(strike: u64, alternatives: &[u64]) -> RfqBinding {
     RfqBinding::from_broadcast(&broadcast(strike, alternatives)).expect("valid identities")
 }
 
-// Regression: serialization rounded sub-seconds while the preimage truncated them.
+fn quote_on(binding: &RfqBinding) -> QuoteBuilder<'_> {
+    binding
+        .quote()
+        .maker_owner(signer().pubkey_bytes())
+        .min_valid_until(QuoteExpiry::from_unix_seconds(1))
+}
+
 #[test]
 fn wire_valid_until_is_the_value_that_was_signed() {
     let fractional = SystemTime::UNIX_EPOCH + Duration::from_millis(1_800_000_000_700);
     let expiry = QuoteExpiry::from_system_time(fractional).expect("in range");
     let signer = signer();
     let builder_binding = binding(100, &[]);
-    let builder = builder_binding
-        .quote()
+    let builder = quote_on(&builder_binding)
         .price(Price::new(1_000))
         .valid_until(expiry)
         .nonce(Nonce::new(77));
 
-    let args = builder
-        .preimage_args(signer.pubkey_bytes())
-        .expect("resolves");
+    let args = builder.preimage_args().expect("resolves");
     let quote = builder.sign(&signer).expect("signs");
 
     let json: serde_json::Value =
@@ -82,8 +84,7 @@ fn wire_valid_until_is_the_value_that_was_signed() {
 fn order_id_recomputes_from_the_transmitted_message() {
     let signer = signer();
     let bind = binding(100, &[]);
-    let quote = bind
-        .quote()
+    let quote = quote_on(&bind)
         .price(Price::new(2_500))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_123))
         .nonce(Nonce::new(9))
@@ -115,8 +116,7 @@ fn order_id_recomputes_from_the_transmitted_message() {
 fn signature_verifies_against_the_order_id() {
     let signer = signer();
     let bind = binding(100, &[]);
-    let quote = bind
-        .quote()
+    let quote = quote_on(&bind)
         .price(Price::new(1))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
         .nonce(Nonce::new(1))
@@ -140,8 +140,7 @@ fn alternative_strikes_from_order_options_are_accepted() {
         &[Strike::new(100), Strike::new(110), Strike::new(120)]
     );
 
-    let quote = bind
-        .quote()
+    let quote = quote_on(&bind)
         .strike(Strike::new(120))
         .price(Price::new(1))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
@@ -155,8 +154,7 @@ fn alternative_strikes_from_order_options_are_accepted() {
 #[test]
 fn a_strike_the_rfq_did_not_offer_is_refused_locally() {
     let bind = binding(100, &[110]);
-    let error = bind
-        .quote()
+    let error = quote_on(&bind)
         .strike(Strike::new(999))
         .price(Price::new(1))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
@@ -182,16 +180,14 @@ fn duplicate_order_option_does_not_repeat_the_requested_strike() {
 #[test]
 fn missing_fields_are_named() {
     let bind = binding(100, &[]);
-    let missing_price = bind
-        .quote()
+    let missing_price = quote_on(&bind)
         .valid_until(QuoteExpiry::from_unix_seconds(1))
         .nonce(Nonce::new(1))
         .sign(&signer())
         .expect_err("no price");
     assert!(matches!(missing_price, QuoteBuildError::Missing("price")));
 
-    let missing_expiry = bind
-        .quote()
+    let missing_expiry = quote_on(&bind)
         .price(Price::new(1))
         .nonce(Nonce::new(1))
         .sign(&signer())
@@ -201,13 +197,81 @@ fn missing_fields_are_named() {
         QuoteBuildError::Missing("valid_until")
     ));
 
-    let missing_nonce = bind
-        .quote()
+    let missing_nonce = quote_on(&bind)
         .price(Price::new(1))
         .valid_until(QuoteExpiry::from_unix_seconds(1))
         .sign(&signer())
         .expect_err("no nonce");
     assert!(matches!(missing_nonce, QuoteBuildError::Missing("nonce")));
+
+    let complete = quote_on(&bind)
+        .price(Price::new(1))
+        .valid_until(QuoteExpiry::from_unix_seconds(1))
+        .nonce(Nonce::new(1));
+    let missing_owner = bind
+        .quote()
+        .price(Price::new(1))
+        .valid_until(QuoteExpiry::from_unix_seconds(1))
+        .min_valid_until(QuoteExpiry::from_unix_seconds(1))
+        .nonce(Nonce::new(1))
+        .sign(&signer())
+        .expect_err("no owner");
+    assert!(matches!(
+        missing_owner,
+        QuoteBuildError::Missing("maker_owner")
+    ));
+    let missing_floor = bind
+        .quote()
+        .maker_owner(signer().pubkey_bytes())
+        .price(Price::new(1))
+        .valid_until(QuoteExpiry::from_unix_seconds(1))
+        .nonce(Nonce::new(1))
+        .sign(&signer())
+        .expect_err("no floor");
+    assert!(matches!(
+        missing_floor,
+        QuoteBuildError::Missing("min_valid_until")
+    ));
+    assert!(complete.sign(&signer()).is_ok());
+}
+
+#[test]
+fn valid_until_must_sit_between_the_venue_floor_and_market_expiry() {
+    let bind = binding(100, &[]);
+    let market_expiry = QuoteExpiry::from_unix_seconds(2_000_000_000);
+    assert_eq!(bind.market_expiry(), market_expiry);
+    let builder = quote_on(&bind)
+        .price(Price::new(1))
+        .nonce(Nonce::new(1))
+        .min_valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000));
+
+    assert!(
+        builder
+            .clone()
+            .valid_until(market_expiry)
+            .sign(&signer())
+            .is_ok()
+    );
+    assert!(
+        builder
+            .clone()
+            .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
+            .sign(&signer())
+            .is_ok()
+    );
+    assert!(matches!(
+        builder
+            .clone()
+            .valid_until(QuoteExpiry::from_unix_seconds(2_000_000_001))
+            .sign(&signer()),
+        Err(QuoteBuildError::ValidUntilAfterMarketExpiry { .. })
+    ));
+    assert!(matches!(
+        builder
+            .valid_until(QuoteExpiry::from_unix_seconds(1_799_999_999))
+            .preimage_args(),
+        Err(QuoteBuildError::ValidUntilTooSoon { .. })
+    ));
 }
 
 #[test]
@@ -225,8 +289,7 @@ fn a_malformed_identity_names_its_field() {
 fn a_replacement_carries_the_same_signed_identity() {
     let signer = signer();
     let bind = binding(100, &[]);
-    let builder = bind
-        .quote()
+    let builder = quote_on(&bind)
         .price(Price::new(3))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
         .nonce(Nonce::new(4));
@@ -257,8 +320,7 @@ impl AsyncSignerLike for RemoteSigner {
 async fn a_remote_signer_can_produce_a_quote_and_a_replacement() {
     let remote = RemoteSigner(signer());
     let bind = binding(100, &[]);
-    let builder = bind
-        .quote()
+    let builder = quote_on(&bind)
         .price(Price::new(11))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
         .nonce(Nonce::new(5));
@@ -286,8 +348,7 @@ fn delegated_signer_puts_the_maker_owner_in_the_preimage() {
     let signer = signer();
     let owner = [13u8; 32];
     let bind = binding(100, &[]);
-    let builder = bind
-        .quote()
+    let builder = quote_on(&bind)
         .price(Price::new(2_500))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_123))
         .nonce(Nonce::new(9));
@@ -321,7 +382,7 @@ fn delegated_signer_puts_the_maker_owner_in_the_preimage() {
     let args = builder
         .clone()
         .maker_owner(owner)
-        .preimage_args(signer.pubkey_bytes())
+        .preimage_args()
         .expect("preimage");
     assert_eq!(compute_order_id(&args), *quote.order_id.as_bytes());
 
@@ -339,8 +400,7 @@ async fn delegated_async_signer_matches_the_local_path() {
     let remote = RemoteSigner(signer());
     let owner = [13u8; 32];
     let bind = binding(100, &[]);
-    let builder = bind
-        .quote()
+    let builder = quote_on(&bind)
         .price(Price::new(11))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
         .nonce(Nonce::new(5))
@@ -384,12 +444,11 @@ fn put_binding_requires_the_locally_selected_program_and_seed_terms() {
     ));
     let binding = RfqBinding::from_broadcast_for_program(&rfq, custom_program)
         .expect("configured deployment");
-    let preimage = binding
-        .quote()
+    let preimage = quote_on(&binding)
         .price(Price::new(1))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
         .nonce(Nonce::new(1))
-        .preimage_args(TAKER)
+        .preimage_args()
         .expect("preimage");
     assert_eq!(preimage.program_id, custom_program);
     assert_eq!(preimage.market, pda);

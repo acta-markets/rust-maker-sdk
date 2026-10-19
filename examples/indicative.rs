@@ -9,6 +9,7 @@ use acta_maker_sdk::{SignerLike, WS_PROTOCOL_VERSION};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let common::Config { signer, owner, url } = common::load()?;
+    let owner = owner.ok_or("set ACTA_MAKER_OWNER to the registered maker owner")?;
     let mut client = WsClient::connect(&normalize_maker_ws_url(&url)).await?;
 
     client
@@ -39,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .map(|&strike| IndicativeStrikePrice {
                         strike,
-                        price: Price::new(1_500_000_000), // your pricing logic
+                        price: Price::new(1_500_000_000),
                     })
                     .collect();
 

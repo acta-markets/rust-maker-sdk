@@ -1,8 +1,9 @@
 #![cfg(feature = "chain")]
 
 use acta_maker_sdk::chain::ix::{
-    ChainIxError, DepositPremiumIxArgs, FundPositionIxArgs, WithdrawPremiumIxArgs,
-    build_deposit_premium_ixs, build_fund_position_ixs, build_withdraw_premium_ixs,
+    ChainIxError, DepositPremiumIxArgs, FundPositionIxArgs, UpdateQuoteSigningIxArgs,
+    WithdrawPremiumIxArgs, build_deposit_premium_ixs, build_fund_position_ixs,
+    build_update_quote_signing_ixs, build_withdraw_premium_ixs, maker_pda_with_program_id,
 };
 use solana_sdk::pubkey::Pubkey;
 
@@ -48,6 +49,33 @@ fn deposit_premium_ixs_structure() {
         u64::from_le_bytes(amount_bytes.try_into().unwrap()),
         1_000_000
     );
+}
+
+#[test]
+fn update_quote_signing_ixs_structure() {
+    let program_id = test_pubkey(1);
+    let owner = test_pubkey(2);
+    let new_key = test_pubkey(3);
+    let ixs = build_update_quote_signing_ixs(
+        &program_id,
+        &UpdateQuoteSigningIxArgs {
+            maker_owner: owner,
+            new_quote_signing: new_key,
+        },
+    );
+    assert_eq!(ixs.len(), 1);
+    let ix = &ixs[0];
+    assert_eq!(ix.program_id, program_id);
+    assert_eq!(ix.data[0], 3, "UpdateMakerQuoteSigning discriminant");
+    assert_eq!(&ix.data[1..], new_key.as_ref());
+    assert_eq!(ix.accounts.len(), 2);
+    assert_eq!(ix.accounts[0].pubkey, owner);
+    assert!(ix.accounts[0].is_signer && !ix.accounts[0].is_writable);
+    assert_eq!(
+        ix.accounts[1].pubkey,
+        maker_pda_with_program_id(&program_id, &owner).0
+    );
+    assert!(!ix.accounts[1].is_signer && ix.accounts[1].is_writable);
 }
 
 #[test]
@@ -97,7 +125,7 @@ fn fund_position_covered_call_uses_quote_mint() {
         maker_owner: test_pubkey(2),
         position_pda: test_pubkey(3),
         market_pda: test_pubkey(4),
-        position_type: 0, // covered call → uses quote_mint
+        position_type: 0,
         underlying_mint,
         quote_mint,
         underlying_token_program_id: token_program(),

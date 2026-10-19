@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use crate::ws::managed::{
     MakerWsEndpoint, ManagedMessageReceiver, ManagedWsConfig, ManagedWsError, ManagedWsEvent,
-    ManagedWsHandle, ManagedWsState, SendAwaitError, WaitUntilReadyError, spawn_managed_ws,
+    ManagedWsHandle, ManagedWsState, ReferenceChangeReceiver, SendAwaitError, WaitUntilReadyError,
+    spawn_managed_ws,
 };
 use crate::ws::types::*;
 use tokio::sync::broadcast;
@@ -139,6 +140,10 @@ impl MakerDataClient {
 
     pub fn subscribe_messages(&self) -> ManagedMessageReceiver {
         self.inner.subscribe_messages()
+    }
+
+    pub fn subscribe_reference_changes(&self) -> ReferenceChangeReceiver {
+        self.inner.subscribe_reference_changes()
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<ManagedWsEvent> {
@@ -297,6 +302,7 @@ mod tests {
                 client_version: None,
             },
             Arc::new(crate::orders::BytesSigner::from_secret([1u8; 32])),
+            "owner",
         )
     }
 

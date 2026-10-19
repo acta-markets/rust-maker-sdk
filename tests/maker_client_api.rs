@@ -1,6 +1,6 @@
 #![cfg(feature = "ws-client")]
 
-//! Compile-time API-surface checks for maker clients.
+//! Compile-time checks for public maker methods, including macro-generated APIs.
 
 use acta_maker_sdk::quote::{QuoteBuilder, RfqBinding};
 use acta_maker_sdk::ws::maker::{MakerDataClient, MakerQuoteClient};
@@ -9,12 +9,12 @@ use acta_maker_sdk::ws::maker::{MakerDataClient, MakerQuoteClient};
 fn every_quote_plane_method_exists() {
     let _ = MakerQuoteClient::spawn;
 
-    let _ = MakerQuoteClient::quote;
-    let _ = MakerQuoteClient::try_quote;
-    let _ = MakerQuoteClient::replace_quote;
-    let _ = MakerQuoteClient::try_replace_quote;
-    let _ = MakerQuoteClient::batch_quotes;
-    let _ = MakerQuoteClient::try_batch_quotes;
+    let _ = MakerQuoteClient::quote_in_epoch;
+    let _ = MakerQuoteClient::try_quote_in_epoch;
+    let _ = MakerQuoteClient::replace_in_epoch;
+    let _ = MakerQuoteClient::try_replace_in_epoch;
+    let _ = MakerQuoteClient::batch_quotes_in_epoch;
+    let _ = MakerQuoteClient::try_batch_quotes_in_epoch;
     let _ = MakerQuoteClient::cancel_quote;
     let _ = MakerQuoteClient::try_cancel_quote;
     let _ = MakerQuoteClient::cancel_all_quotes;
@@ -65,12 +65,15 @@ fn every_quote_construction_entry_point_exists() {
     let _ = RfqBinding::quantity;
     let _ = RfqBinding::position_type;
     let _ = RfqBinding::offered_strikes;
+    let _ = RfqBinding::market_expiry;
     let _ = RfqBinding::quote;
 
     let _ = QuoteBuilder::strike;
     let _ = QuoteBuilder::price;
     let _ = QuoteBuilder::valid_until;
     let _ = QuoteBuilder::nonce;
+    let _ = QuoteBuilder::maker_owner;
+    let _ = QuoteBuilder::min_valid_until;
     let _ = QuoteBuilder::preimage_args;
     let _ = QuoteBuilder::sign::<acta_maker_sdk::BytesSigner>;
 

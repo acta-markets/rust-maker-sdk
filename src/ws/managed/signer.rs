@@ -25,14 +25,19 @@ impl ChallengeSigning {
 }
 
 impl ManagedWsConfig {
-    /// Configure an asynchronous Ed25519 signer.
+    /// Authenticate as maker owner `auth_pubkey`; the async `signer` must be its registered quote-signing key.
     #[must_use]
     pub fn new_async(
         url: impl Into<String>,
         hello: HelloData,
         signer: Arc<dyn AsyncSignerLike>,
+        auth_pubkey: impl Into<String>,
     ) -> Self {
-        let auth_pubkey = encode_base58(&signer.pubkey_bytes());
-        Self::new_with_signing(url, hello, auth_pubkey, ChallengeSigning::Async(signer))
+        Self::new_with_signing(
+            url,
+            hello,
+            auth_pubkey.into(),
+            ChallengeSigning::Async(signer),
+        )
     }
 }

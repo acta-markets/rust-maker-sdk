@@ -10,6 +10,7 @@ cargo check --locked --no-default-features
 cargo check --locked --features ws-client
 cargo check --locked --features chain
 cargo check --locked --features chain-rpc
+cargo check --locked --features vault
 cargo test --locked --all-features --no-fail-fast
 cargo clippy --locked --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --all-features --no-deps

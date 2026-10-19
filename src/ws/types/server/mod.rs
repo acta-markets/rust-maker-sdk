@@ -2,11 +2,13 @@ mod server_auth;
 mod server_query;
 mod server_quote;
 mod server_rfq;
+mod server_vault;
 
 pub use server_auth::*;
 pub use server_query::*;
 pub use server_quote::*;
 pub use server_rfq::*;
+pub use server_vault::*;
 
 use crate::types::unix_time::UnixMillis;
 use std::time::SystemTime;
@@ -22,6 +24,7 @@ use strum::IntoStaticStr;
 use uuid::Uuid;
 
 use super::common::WsChannel;
+use super::error_code::WsErrorCode;
 use super::market::MarketInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr, strum::VariantNames)]
@@ -32,6 +35,7 @@ pub enum ServerMessage {
     VersionMismatch(VersionMismatchData),
     AuthRequest(AuthRequestData),
     AuthSuccess(AuthSuccessData),
+    VaultAuthSuccess(VaultAuthSuccessData),
     AuthError(AuthErrorData),
     LogoutSuccess(LogoutSuccessData),
     RfqCreated(RfqCreatedMessage),
@@ -98,6 +102,14 @@ pub enum ServerMessage {
     InviteRedeemed(InviteRedeemedData),
     ReferralCodeClaimed(ReferralCodeClaimedData),
     MyReferralInfo(MyReferralInfoData),
+    VaultProjectionAdvanced(VaultProjectionAdvancedData),
+    VaultCatalogChanged(VaultCatalogChangedData),
+    ReferenceChanged(ReferenceChangedData),
+    SwapQuoteResult(SwapQuoteResultData),
+    SwapSubmitResult(SwapSubmitResultData),
+    SwapStatus(SwapStatusMessage),
+    SwapSettled(SwapSettledMessage),
+    CommandAccepted(CommandAcceptedData),
     /// Forward-compat: any message type this SDK version doesn't know yet.
     Unknown(UnknownServerMessage),
 }
@@ -118,6 +130,24 @@ pub struct UnknownServerError {
 pub struct RequestErrorEnvelope {
     pub request_id: Uuid,
     pub error: ServerError,
+    /// Present on `SubmitSignedSponsoredTx` and `SwapSubmit` failures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<Delivery>,
+}
+
+/// Whether a rejected submission can have reached the keeper pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    NotForwarded,
+    /// The signed transaction may be in flight.
+    Unknown,
+}
+
+/// The server accepted a correlated command. It never reports chain success.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandAcceptedData {
+    pub request_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,7 +325,7 @@ pub enum ServerError {
     },
 
     #[error("{message}")]
-    Generic { code: String, message: String },
+    Generic { code: WsErrorCode, message: String },
 
     /// Forward-compat: any error code this SDK version doesn't know yet.
     #[error("unrecognized server error")]
@@ -361,10 +391,20 @@ impl ServerMessage {
             Self::InviteRedeemed(m) => Some(m.request_id),
             Self::ReferralCodeClaimed(m) => Some(m.request_id),
             Self::MyReferralInfo(m) => Some(m.request_id),
+            Self::SwapQuoteResult(m) => Some(m.request_id),
+            Self::SwapSubmitResult(m) => Some(m.request_id),
+            Self::SwapStatus(m) => Some(m.request_id),
+            Self::CommandAccepted(m) => Some(m.request_id),
+
             Self::Welcome(_)
             | Self::VersionMismatch(_)
             | Self::AuthRequest(_)
             | Self::AuthSuccess(_)
+            | Self::VaultAuthSuccess(_)
+            | Self::VaultProjectionAdvanced(_)
+            | Self::VaultCatalogChanged(_)
+            | Self::ReferenceChanged(_)
+            | Self::SwapSettled(_)
             | Self::AuthError(_)
             | Self::LogoutSuccess(_)
             | Self::RfqCreated(_)
@@ -439,6 +479,8 @@ fn unknown_fallback(text: &str) -> Option<ServerMessage> {
     struct RequestErrorDataWire {
         request_id: Uuid,
         error: Tag,
+        #[serde(default)]
+        delivery: Option<Delivery>,
     }
 
     let tag = serde_json::from_str::<Tag>(text).ok()?;
@@ -469,6 +511,7 @@ fn unknown_fallback(text: &str) -> Option<ServerMessage> {
                     error_type: env.data.error.r#type,
                     raw_json: text.into(),
                 }),
+                delivery: env.data.delivery,
             }))
         }
         _ => None,

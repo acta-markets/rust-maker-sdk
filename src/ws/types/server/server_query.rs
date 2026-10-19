@@ -1,5 +1,4 @@
 use crate::types::unix_time::UnixSeconds;
-use std::collections::HashMap;
 use std::time::SystemTime;
 
 use crate::types::QuoteExpiry;
@@ -51,8 +50,13 @@ pub struct ExpiriesData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokensData {
     pub request_id: Uuid,
-    pub underlyings: Vec<TokenInfo>,
-    pub quotes_by_underlying: HashMap<String, Vec<TokenInfo>>,
+    pub tokens: Vec<TokenInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReferenceChangedData {
+    pub tokens_etag: String,
+    pub markets_etag: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -459,6 +463,7 @@ pub struct StatsUpdateMessage {
 pub struct SponsoredTxToSignData {
     pub order_id: OrderId,
     pub tx_base64: String,
+    pub last_valid_block_height: u64,
     #[serde_as(as = "UnixSeconds")]
     pub signature_deadline: SystemTime,
 }

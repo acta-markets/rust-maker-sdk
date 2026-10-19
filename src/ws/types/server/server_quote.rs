@@ -85,6 +85,8 @@ pub enum QuoteRejectReason {
     RfqNotFound,
     RfqNotActive,
     DuplicateOrderId,
+    RateLimited,
+    TradingPaused,
     InternalError,
     #[serde(other)]
     Unknown,

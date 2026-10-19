@@ -1,4 +1,3 @@
-#[cfg(feature = "chain-rpc")]
 mod accounts;
 mod error;
 pub mod ix;
@@ -9,16 +8,18 @@ pub mod rpc;
 #[cfg(feature = "chain-rpc")]
 mod settlement;
 
+pub mod vault;
+
 #[cfg(feature = "chain-rpc")]
 pub mod wsol;
 
-#[cfg(feature = "chain-rpc")]
-pub use accounts::{MarketInfo, PositionInfo, PositionStatus};
+pub use accounts::{MakerInfo, MarketInfo, PositionInfo, PositionStatus};
 pub use error::ChainError;
 pub use ix::{
-    ChainIxError, DepositPremiumIxArgs, FundPositionIxArgs, WithdrawPremiumIxArgs,
-    build_deposit_premium_ixs, build_fund_position_ixs, build_withdraw_premium_ixs,
-    derive_associated_token_address, maker_pda_with_program_id,
+    ChainIxError, DepositPremiumIxArgs, FundPositionIxArgs, UpdateQuoteSigningIxArgs,
+    WithdrawPremiumIxArgs, build_deposit_premium_ixs, build_fund_position_ixs,
+    build_update_quote_signing_ixs, build_withdraw_premium_ixs, derive_associated_token_address,
+    maker_pda_with_program_id,
 };
 
 #[cfg(feature = "chain-rpc")]

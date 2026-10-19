@@ -20,7 +20,7 @@ pub(super) async fn handle_ws_read(
     inbound: &mut InboundPublisher<'_>,
     events_tx: &broadcast::Sender<ManagedWsEvent>,
     shutdown_rx: &mut watch::Receiver<bool>,
-) -> Option<AuthenticatedSessionEnd> {
+) -> Option<(AuthenticatedSessionEnd, bool)> {
     match read_result {
         Some(Ok(server_msg)) => {
             let message = inbound.publish(server_msg);
@@ -33,14 +33,15 @@ pub(super) async fn handle_ws_read(
                 if !matches!(error, SessionFailure::Shutdown) {
                     send_event(events_tx, ManagedWsEvent::Error(error.to_string()));
                 }
-                return Some(error.into_session_end());
+                let rejected = error.is_server_rejection();
+                return Some((error.into_session_end(), rejected));
             }
         }
         Some(Err(error)) => {
             send_event(events_tx, ManagedWsEvent::Error(error.to_string()));
-            return Some(AuthenticatedSessionEnd::Disconnected);
+            return Some((AuthenticatedSessionEnd::Disconnected, false));
         }
-        None => return Some(AuthenticatedSessionEnd::Disconnected),
+        None => return Some((AuthenticatedSessionEnd::Disconnected, false)),
     }
     None
 }

@@ -5,7 +5,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::auth::AuthenticationError;
+use super::auth::{AuthOutcome, AuthenticationError};
 use super::{
     AuthenticatedSessionEnd, InboundPublisher, SessionEnd, SessionFailure, auth::authenticate,
     ready::establish,
@@ -44,11 +44,13 @@ async fn invalid_auth_never_reaches_either_signer() {
         "ws://localhost/maker",
         base.hello(),
         Arc::new(ExplodingSigner),
+        "maker",
     );
     let asynchronous = ManagedWsConfig::new_async(
         "ws://localhost/maker",
         base.hello(),
         Arc::new(ExplodingSigner),
+        "maker",
     );
     for challenge in ["x".repeat(32), "é".repeat(16), "challenge".to_owned()] {
         for config in [&sync, &asynchronous] {
@@ -66,7 +68,12 @@ async fn canonical_auth_signs_original_bytes_for_delegated_owner() {
 
     let signer = BytesSigner::from_secret([1; 32]);
     let owner = BytesSigner::from_secret([2; 32]).pubkey_base58();
-    let config = config("ws://localhost/maker".into()).with_auth_pubkey(&owner);
+    let config = ManagedWsConfig::new(
+        "ws://localhost/maker",
+        config("ws://localhost/maker".into()).hello(),
+        Arc::new(signer.clone()),
+        owner.clone(),
+    );
     let challenge = crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE;
     let response = super::auth::build_auth_response(&config, challenge)
         .await
@@ -84,13 +91,87 @@ async fn canonical_auth_signs_original_bytes_for_delegated_owner() {
         crate::orders::sign_order_id_with_signer(&[0; 32], &signer)
     );
 }
+#[cfg(feature = "vault")]
+#[tokio::test]
+async fn vault_auth_binds_both_identities_before_either_signer() {
+    let operator = crate::wire::encode_base58(&[7; 32]);
+    let vault = crate::wire::encode_base58(&[8; 32]);
+    let other = crate::wire::encode_base58(&[9; 32]);
+    let base = config("ws://localhost/vault".into());
+    let sync = ManagedWsConfig::new(
+        "ws://localhost/vault",
+        base.hello(),
+        Arc::new(ExplodingSigner),
+        operator.clone(),
+    )
+    .with_vault_auth(vault.clone());
+    let asynchronous = ManagedWsConfig::new_async(
+        "ws://localhost/vault",
+        base.hello(),
+        Arc::new(ExplodingSigner),
+        operator.clone(),
+    )
+    .with_vault_auth(vault.clone());
+    let canonical = crate::ws::auth::test_vault_auth_challenge(&operator, &vault);
+    let invalid = [
+        "x".repeat(32),
+        crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_owned(),
+        crate::ws::auth::test_vault_auth_challenge(&other, &vault),
+        crate::ws::auth::test_vault_auth_challenge(&operator, &other),
+        canonical.replace("Acta RFQ Authentication", "Acta Admin Authentication"),
+        canonical.replace("2026-09-15", "2026-02-30"),
+        canonical.replace("Nonce: ", "Nonce: a"),
+        format!("{canonical}\n"),
+    ];
+    for challenge in invalid {
+        for config in [&sync, &asynchronous] {
+            let error = super::auth::build_auth_response(config, &challenge)
+                .await
+                .expect_err("reject before signing");
+            assert_eq!(error.to_string(), "invalid vault authentication challenge");
+        }
+    }
+    assert!(crate::ws::auth::validate_maker_auth_challenge(&canonical).is_err());
+}
+
+#[cfg(feature = "vault")]
+#[tokio::test]
+async fn canonical_vault_auth_signs_original_operator_challenge() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let signer = Arc::new(BytesSigner::from_secret([5; 32]));
+    let vault = crate::wire::encode_base58(&[8; 32]);
+    let base = config("ws://localhost/vault".into());
+    let config = ManagedWsConfig::new(
+        "ws://localhost/vault",
+        base.hello(),
+        signer.clone(),
+        signer.pubkey_base58(),
+    )
+    .with_vault_auth(vault.clone());
+    let challenge = crate::ws::auth::test_vault_auth_challenge(&signer.pubkey_base58(), &vault);
+    let response = super::auth::build_auth_response(&config, &challenge)
+        .await
+        .expect("canonical vault auth");
+    assert_eq!(response.challenge, challenge);
+    assert_eq!(response.pubkey, signer.pubkey_base58());
+    let signature = crate::wire::decode_base58_64(&response.signature).expect("signature");
+    VerifyingKey::from_bytes(&signer.pubkey_bytes())
+        .expect("key")
+        .verify(challenge.as_bytes(), &Signature::from_bytes(&signature))
+        .expect("original bytes");
+}
+
 use crate::ws::types::{
     ActiveRfqsData, AuthErrorData, AuthRequestData, AuthSuccessData, ClientMessage,
     FEATURE_CANCEL_ON_DISCONNECT, HelloData, MakerPositionCapInfo, MakerQuoteScope, MmSummaryData,
-    MyCapsData, MyQuotesMessage, RequestErrorEnvelope, ServerError, ServerMessage,
-    SubscribeAckData, SubscribeData, SubscriptionsMessage, UnsubscribeAckData, WelcomeData,
-    WsChannel,
+    MyCapsData, MyQuotesMessage, ServerMessage, SubscribeAckData, SubscribeData,
+    SubscriptionsMessage, UnsubscribeAckData, WelcomeData, WsChannel, WsErrorCode,
 };
+
+fn maker_auth() -> AuthOutcome {
+    AuthOutcome { vault: None }
+}
 
 fn config(url: String) -> ManagedWsConfig {
     ManagedWsConfig::new(
@@ -102,8 +183,8 @@ fn config(url: String) -> ManagedWsConfig {
             client_version: None,
         },
         Arc::new(BytesSigner::from_secret([1u8; 32])),
+        "maker",
     )
-    .with_auth_pubkey("maker")
 }
 
 #[tokio::test]
@@ -156,39 +237,12 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
             }),
         )
         .await;
-        let ClientMessage::GetMmSummary(summary) = receive_client(&mut socket).await else {
-            panic!("expected GetMmSummary after subscriptions recovery");
-        };
         let ClientMessage::GetActiveRfqs(active) = receive_client(&mut socket).await else {
             panic!("expected GetActiveRfqs after subscriptions recovery");
         };
         let ClientMessage::GetMyQuotes(my_quotes) = receive_client(&mut socket).await else {
             panic!("expected GetMyQuotes after subscriptions recovery");
         };
-        send_server(
-            &mut socket,
-            ServerMessage::MmSummary(MmSummaryData {
-                request_id: summary.request_id,
-                maker_pda: String::new(),
-                caps: MyCapsData {
-                    request_id: uuid::Uuid::new_v4(),
-                    positions: MakerPositionCapInfo {
-                        current: 0,
-                        limit: 0,
-                    },
-                    notional: Vec::new(),
-                    balances: Vec::new(),
-                },
-                positions: Vec::new(),
-                active_quotes: Vec::new(),
-                markets: Vec::new(),
-                tokens: Vec::new(),
-                computed_at: std::time::SystemTime::UNIX_EPOCH,
-                unrenderable_positions: Vec::new(),
-                positions_has_more: false,
-            }),
-        )
-        .await;
         send_server(
             &mut socket,
             ServerMessage::ActiveRfqs(ActiveRfqsData {
@@ -226,7 +280,7 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
     };
 
     let desired = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
-    establish(&mut client, &config, &mut inbound, &desired)
+    establish(&mut client, &config, &mut inbound, &desired, &maker_auth())
         .await
         .expect("ready quote session");
     server_task.await.expect("test server task");
@@ -282,14 +336,11 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
             }),
         )
         .await;
-        let ClientMessage::GetMmSummary(_) = receive_client(&mut socket).await else {
-            panic!("expected required GetMmSummary");
-        };
         let ClientMessage::GetActiveRfqs(active) = receive_client(&mut socket).await else {
-            panic!("expected GetActiveRfqs second");
+            panic!("expected GetActiveRfqs first");
         };
         let ClientMessage::GetMyQuotes(my_quotes) = receive_client(&mut socket).await else {
-            panic!("expected GetMyQuotes third");
+            panic!("expected GetMyQuotes second");
         };
         assert_eq!(my_quotes.scope, MakerQuoteScope::Live);
         assert!(my_quotes.cursor.is_none());
@@ -326,7 +377,7 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
     };
 
     let desired = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
-    let error = establish(&mut client, &config, &mut inbound, &desired)
+    let error = establish(&mut client, &config, &mut inbound, &desired, &maker_auth())
         .await
         .expect_err("a partial Live quote response fails the barrier");
     let my_quotes_id = server_task.await.expect("test server task");
@@ -338,7 +389,7 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
 }
 
 #[tokio::test]
-async fn data_readiness_skips_quote_subscription_recovery() {
+async fn data_readiness_reads_only_the_mm_summary() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test websocket");
@@ -348,26 +399,34 @@ async fn data_readiness_skips_quote_subscription_recovery() {
         let mut socket = tokio_tungstenite::accept_async(stream)
             .await
             .expect("websocket handshake");
-        let ClientMessage::GetMmSummary(_) = receive_client(&mut socket).await else {
+        let ClientMessage::GetMmSummary(summary) = receive_client(&mut socket).await else {
             panic!("data readiness must not send GetSubscriptions or Subscribe");
-        };
-        let ClientMessage::GetActiveRfqs(_) = receive_client(&mut socket).await else {
-            panic!("expected GetActiveRfqs");
-        };
-        let ClientMessage::GetMyQuotes(my_quotes) = receive_client(&mut socket).await else {
-            panic!("expected GetMyQuotes");
         };
         send_server(
             &mut socket,
-            ServerMessage::RequestError(RequestErrorEnvelope {
-                request_id: my_quotes.request_id,
-                error: ServerError::Generic {
-                    code: "unavailable".to_string(),
-                    message: "quotes projection is rebuilding".to_string(),
+            ServerMessage::MmSummary(MmSummaryData {
+                request_id: summary.request_id,
+                maker_pda: String::new(),
+                caps: MyCapsData {
+                    request_id: summary.request_id,
+                    positions: MakerPositionCapInfo {
+                        current: 0,
+                        limit: 0,
+                    },
+                    notional: Vec::new(),
+                    balances: Vec::new(),
                 },
+                positions: Vec::new(),
+                active_quotes: Vec::new(),
+                markets: Vec::new(),
+                tokens: Vec::new(),
+                computed_at: std::time::SystemTime::UNIX_EPOCH,
+                unrenderable_positions: Vec::new(),
+                positions_has_more: false,
             }),
         )
         .await;
+        socket
     });
 
     let mut client = WsClient::connect(&format!("ws://{address}"))
@@ -383,26 +442,48 @@ async fn data_readiness_skips_quote_subscription_recovery() {
     };
     let desired = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
 
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        establish(&mut client, &config, &mut inbound, &desired, &maker_auth()),
+    )
+    .await
+    .expect("one MmSummary completes data readiness")
+    .expect("data readiness");
+    let mut socket = server_task.await.expect("test server task");
     assert!(
-        establish(&mut client, &config, &mut inbound, &desired)
+        tokio::time::timeout(std::time::Duration::from_millis(100), socket.next())
             .await
-            .is_err()
+            .is_err(),
+        "data readiness sent a read beyond GetMmSummary"
     );
-    server_task.await.expect("test server task");
 }
 
 async fn receive_client(
     socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
 ) -> ClientMessage {
-    let message = socket
-        .next()
-        .await
-        .expect("client message")
-        .expect("valid websocket message");
-    let Message::Text(text) = message else {
-        panic!("expected client text message");
-    };
-    serde_json::from_str(&text).expect("valid client protocol message")
+    loop {
+        let message = socket
+            .next()
+            .await
+            .expect("client message")
+            .expect("valid websocket message");
+        let Message::Text(text) = message else {
+            panic!("expected client text message");
+        };
+        let message: ClientMessage =
+            serde_json::from_str(&text).expect("valid client protocol message");
+        if matches!(message, ClientMessage::Ping) {
+            send_server(
+                socket,
+                ServerMessage::Pong(crate::ws::types::PongData {
+                    server_time_unix_ms: std::time::SystemTime::now(),
+                }),
+            )
+            .await;
+        } else {
+            return message;
+        }
+    }
 }
 
 async fn send_server(
@@ -498,7 +579,9 @@ where
         sequence: &mut sequence,
     };
 
-    let result = authenticate(&mut client, &config, &mut inbound, resume_session_id).await;
+    let result = authenticate(&mut client, &config, &mut inbound, resume_session_id)
+        .await
+        .map(|_| ());
     server_task.await.expect("test server task");
     result
 }
@@ -702,7 +785,7 @@ async fn managed_auth_resumes_then_falls_back_only_when_expired() {
             send_server(
                 &mut socket,
                 ServerMessage::AuthError(AuthErrorData {
-                    reason: "session_expired".to_string(),
+                    reason: WsErrorCode::SessionExpired,
                     message: None,
                 }),
             )
@@ -773,6 +856,7 @@ async fn a_panicked_session_task_publishes_session_panicked() {
             client_version: None,
         },
         Arc::new(ExplodingSigner),
+        "maker",
     );
     let handle = spawn_managed_ws(config).expect("spawn managed session");
     let mut states = handle.subscribe_state();
@@ -792,6 +876,26 @@ async fn a_panicked_session_task_publishes_session_panicked() {
         reason,
         ManagedWsTerminationReason::SessionPanicked
     ));
+
+    let mut events = handle.subscribe_events();
+    let mut disconnects = 0;
+    loop {
+        match events.recv().await.expect("event") {
+            crate::ws::managed::ManagedWsEvent::Disconnected { close } => {
+                assert!(close.is_none());
+                disconnects += 1;
+            }
+            crate::ws::managed::ManagedWsEvent::Terminated(reason) => {
+                assert_eq!(reason, ManagedWsTerminationReason::SessionPanicked);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        disconnects, 1,
+        "a connected session that panics reports one disconnect"
+    );
 
     assert!(matches!(
         handle.close().await,
@@ -862,39 +966,12 @@ async fn complete_quote_readiness(
         }),
     )
     .await;
-    let ClientMessage::GetMmSummary(summary) = receive_client(socket).await else {
-        panic!("expected GetMmSummary during quote readiness");
-    };
     let ClientMessage::GetActiveRfqs(active) = receive_client(socket).await else {
         panic!("expected GetActiveRfqs during quote readiness");
     };
     let ClientMessage::GetMyQuotes(my_quotes) = receive_client(socket).await else {
         panic!("expected GetMyQuotes during quote readiness");
     };
-    send_server(
-        socket,
-        ServerMessage::MmSummary(MmSummaryData {
-            request_id: summary.request_id,
-            maker_pda: String::new(),
-            caps: MyCapsData {
-                request_id: uuid::Uuid::new_v4(),
-                positions: MakerPositionCapInfo {
-                    current: 0,
-                    limit: 0,
-                },
-                notional: Vec::new(),
-                balances: Vec::new(),
-            },
-            positions: Vec::new(),
-            active_quotes: Vec::new(),
-            markets: Vec::new(),
-            tokens: Vec::new(),
-            computed_at: std::time::SystemTime::UNIX_EPOCH,
-            unrenderable_positions: Vec::new(),
-            positions_has_more: false,
-        }),
-    )
-    .await;
     send_server(
         socket,
         ServerMessage::ActiveRfqs(ActiveRfqsData {
@@ -951,7 +1028,6 @@ async fn pending_subscription_does_not_block_cancellation() {
             matches!(command, ClientMessage::AddMints(_)),
             "expected AddMints, got {command:?}"
         );
-        // Leave AddMints unacknowledged. CancelAll must still reach the socket.
         let command = receive_command(&mut socket).await;
         let ClientMessage::CancelAllQuotes(cancel) = command else {
             panic!("expected cancellation, got {command:?}");
@@ -1081,7 +1157,7 @@ async fn invalid_signature_terminates_only_after_three_consecutive_rejections() 
             send_server(
                 &mut socket,
                 ServerMessage::AuthError(AuthErrorData {
-                    reason: "invalid_signature".to_string(),
+                    reason: WsErrorCode::InvalidSignature,
                     message: None,
                 }),
             )
@@ -1109,8 +1185,6 @@ async fn invalid_signature_terminates_only_after_three_consecutive_rejections() 
         }
         other => panic!("expected AuthenticationRejected, got {other:?}"),
     }
-    // All three accepts happened; a single-strike terminal would leave the
-    // server task waiting and this join hanging.
     server_task.await.expect("three connections were made");
 }
 
@@ -1141,7 +1215,7 @@ async fn reconnect_limit_during_strikes_reports_the_auth_rejection() {
             send_server(
                 &mut socket,
                 ServerMessage::AuthError(AuthErrorData {
-                    reason: "invalid_signature".to_string(),
+                    reason: WsErrorCode::InvalidSignature,
                     message: None,
                 }),
             )
@@ -1182,6 +1256,7 @@ async fn invalid_mid_session_challenge_never_enters_writer_lane() {
         "ws://localhost/maker",
         base.hello(),
         Arc::new(ExplodingSigner),
+        "maker",
     );
     let (frames_tx, mut frames_rx) = tokio::sync::mpsc::unbounded_channel();
     let sink = Box::pin(futures_util::sink::unfold(frames_tx, |tx, frame| {
@@ -1217,7 +1292,7 @@ async fn invalid_mid_session_challenge_never_enters_writer_lane() {
     .await;
     assert!(matches!(
         result,
-        Some(AuthenticatedSessionEnd::Disconnected)
+        Some((AuthenticatedSessionEnd::Disconnected, false))
     ));
     drop(lanes);
     writer_task.await.expect("writer drains and closes");

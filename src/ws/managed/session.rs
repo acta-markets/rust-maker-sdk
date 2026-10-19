@@ -1,12 +1,14 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use futures_util::SinkExt;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::{Instant, interval, timeout};
 
-use crate::ws::client::{PreparedClientMessage, WsClient, WsFrame};
+use crate::ws::client::{PreparedClientMessage, ServerClose, WsClient, WsFrame};
 use crate::ws::reconnect::{ReconnectBackoff, jittered_reconnect_delay_with_ratio};
-use crate::ws::types::{ClientMessage, ServerMessage};
+use crate::ws::types::{ClientMessage, ServerMessage, VaultAuthSuccessData};
 
 use super::desired_subscriptions::DesiredSubscriptions;
 use super::reconnect_window::wait_reconnect_window;
@@ -19,6 +21,8 @@ use super::{
 };
 
 const INVALID_SIGNATURE_STRIKE_LIMIT: u32 = 3;
+/// How long a session ended by a server error frame waits for the server's close frame.
+pub(super) const SERVER_CLOSE_GRACE: Duration = Duration::from_secs(1);
 
 enum SessionEnd {
     CloseRequested,
@@ -58,6 +62,9 @@ impl AuthenticatedSessionEnd {
 enum SessionFailure {
     #[error("{0}")]
     Retryable(String),
+    /// A retryable server error frame; the server usually closes next.
+    #[error("{0}")]
+    Rejected(String),
     #[error("session was replaced by another authenticated connection")]
     CredentialsExpired(String),
     #[error("managed websocket terminated: {0:?}")]
@@ -69,7 +76,7 @@ enum SessionFailure {
 impl SessionFailure {
     fn from_control(message: &ServerMessage) -> Option<Self> {
         control::classify(message).map(|failure| match failure {
-            control::ControlFailure::Retry(detail) => Self::Retryable(detail),
+            control::ControlFailure::Retry(detail) => Self::Rejected(detail),
             control::ControlFailure::ClearCredentials(detail) => Self::CredentialsExpired(detail),
             control::ControlFailure::Terminate(reason) => Self::Terminated(reason),
         })
@@ -79,9 +86,17 @@ impl SessionFailure {
         match self {
             Self::CredentialsExpired(_) => AuthenticatedSessionEnd::CredentialsExpired,
             Self::Terminated(reason) => AuthenticatedSessionEnd::Terminated(reason),
-            Self::Retryable(_) => AuthenticatedSessionEnd::Disconnected,
+            Self::Retryable(_) | Self::Rejected(_) => AuthenticatedSessionEnd::Disconnected,
             Self::Shutdown => AuthenticatedSessionEnd::CloseRequested,
         }
+    }
+
+    /// Classified from a server error frame, so a close frame may follow.
+    const fn is_server_rejection(&self) -> bool {
+        matches!(
+            self,
+            Self::Rejected(_) | Self::CredentialsExpired(_) | Self::Terminated(_)
+        )
     }
 }
 
@@ -110,6 +125,7 @@ struct SessionRuntime<'a, 'inbound> {
     events_tx: &'a broadcast::Sender<ManagedWsEvent>,
     resume_session_id: &'a mut Option<String>,
     shutdown_rx: &'a mut watch::Receiver<bool>,
+    vault_auth_tx: &'a watch::Sender<Option<VaultAuthSuccessData>>,
 }
 
 impl InboundPublisher<'_> {
@@ -131,6 +147,23 @@ pub(super) struct HandleInputs {
     pub(super) cmd_rx: mpsc::Receiver<ManagedCommand>,
     pub(super) cancel_rx: mpsc::UnboundedReceiver<u64>,
     pub(super) gap_rx: mpsc::UnboundedReceiver<()>,
+    /// Set while a socket is open; shared with the panic handler.
+    pub(super) connection_open: Arc<AtomicBool>,
+}
+
+/// Emit `Disconnected` exactly once for the connection that just ended.
+pub(super) fn connection_ended(
+    open: &AtomicBool,
+    events_tx: &broadcast::Sender<ManagedWsEvent>,
+    close: Option<ServerClose>,
+) {
+    if !open.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    if let Some(close) = &close {
+        tracing::warn!(code = close.code, reason = %close.reason, "server closed the connection");
+    }
+    send_event(events_tx, ManagedWsEvent::Disconnected { close });
 }
 
 pub(super) async fn run_managed_ws(
@@ -140,11 +173,13 @@ pub(super) async fn run_managed_ws(
     events_tx: broadcast::Sender<ManagedWsEvent>,
     state_tx: watch::Sender<ManagedWsState>,
     mut shutdown_rx: watch::Receiver<bool>,
+    vault_auth_tx: watch::Sender<Option<VaultAuthSuccessData>>,
 ) {
     let HandleInputs {
         mut cmd_rx,
         mut cancel_rx,
         mut gap_rx,
+        connection_open,
     } = inputs;
     let mut tracker = AwaitTracker::new(config.max_pending_awaits);
     let mut subscriptions = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
@@ -166,6 +201,7 @@ pub(super) async fn run_managed_ws(
         };
         match connect_result {
             Ok(client) => {
+                let server_close = client.server_close_slot();
                 connection_epoch = connection_epoch.wrapping_add(1);
                 let mut inbound_sequence = 0u64;
                 let mut inbound = InboundPublisher {
@@ -179,6 +215,7 @@ pub(super) async fn run_managed_ws(
                     ManagedWsState::Connected { connection_epoch },
                     ManagedWsEvent::Connected,
                 );
+                connection_open.store(true, Ordering::Release);
 
                 let outcome = run_session(
                     client,
@@ -193,14 +230,17 @@ pub(super) async fn run_managed_ws(
                         events_tx: &events_tx,
                         resume_session_id: &mut resume_session_id,
                         shutdown_rx: &mut shutdown_rx,
+                        vault_auth_tx: &vault_auth_tx,
                     },
                     &state_tx,
                     connection_epoch,
                 )
                 .await;
 
+                vault_auth_tx.send_if_modified(|grant| grant.take().is_some());
                 tracker.drain_all();
                 subscriptions.connection_lost();
+                connection_ended(&connection_open, &events_tx, server_close.get().cloned());
 
                 match outcome {
                     SessionEnd::CloseRequested => {
@@ -209,7 +249,6 @@ pub(super) async fn run_managed_ws(
                     }
                     SessionEnd::AuthenticationFailed => {}
                     SessionEnd::Terminated(reason) => {
-                        // Retry isolated invalid_signature failures; bound repeated rejections.
                         let strike = matches!(
                             &reason,
                             ManagedWsTerminationReason::AuthenticationRejected {
@@ -251,7 +290,6 @@ pub(super) async fn run_managed_ws(
                         );
                     }
                 }
-                send_event(&events_tx, ManagedWsEvent::Disconnected);
             }
             Err(err) => {
                 send_event(&events_tx, ManagedWsEvent::Error(err.to_string()));
@@ -266,8 +304,6 @@ pub(super) async fn run_managed_ws(
                     config.max_reconnect_attempts
                 )),
             );
-            // A limit hit mid-strike is still an auth problem; name that
-            // instead of the generic reconnect ceiling.
             let reason = match pending_auth_rejection.take() {
                 Some(rejection) => rejection,
                 None => ManagedWsTerminationReason::ReconnectLimitReached {
@@ -305,8 +341,6 @@ async fn run_session(
     state_tx: &watch::Sender<ManagedWsState>,
     connection_epoch: u64,
 ) -> SessionEnd {
-    // Gaps reported against the previous connection are answered by this
-    // one's snapshot; a lag from here on is this connection's problem.
     while runtime.gap_rx.try_recv().is_ok() {}
 
     let auth_result = race_shutdown(
@@ -320,13 +354,16 @@ async fn run_session(
         ),
     )
     .await;
-    match auth_result {
+    let auth = match auth_result {
         Phase::ShutdownRequested => {
             return finish_unsplit(client, config, SessionEnd::CloseRequested).await;
         }
-        Phase::Done(Ok(())) => {}
+        Phase::Done(Ok(outcome)) => outcome,
         Phase::Done(Err(err)) => {
             send_event(runtime.events_tx, ManagedWsEvent::Error(err.to_string()));
+            if err.is_server_rejection() {
+                client.await_server_close(SERVER_CLOSE_GRACE).await;
+            }
             if let Some(reason) = err.termination_reason() {
                 return finish_unsplit(client, config, SessionEnd::Terminated(reason)).await;
             }
@@ -339,6 +376,9 @@ async fn run_session(
             );
             return SessionEnd::AuthenticationFailed;
         }
+    };
+    if auth.vault.is_some() {
+        runtime.vault_auth_tx.send_replace(auth.vault.clone());
     }
     transition_state(
         state_tx,
@@ -351,7 +391,13 @@ async fn run_session(
     let readiness_result = race_shutdown(
         runtime.shutdown_rx,
         config.readiness_timeout,
-        ready::establish(&mut client, config, runtime.inbound, runtime.subscriptions),
+        ready::establish(
+            &mut client,
+            config,
+            runtime.inbound,
+            runtime.subscriptions,
+            &auth,
+        ),
     )
     .await;
     match readiness_result {
@@ -374,6 +420,9 @@ async fn run_session(
         }
         Phase::Done(Err(err)) => {
             send_event(runtime.events_tx, ManagedWsEvent::Error(err.to_string()));
+            if err.is_server_rejection() {
+                client.await_server_close(SERVER_CLOSE_GRACE).await;
+            }
             let end = err.into_session_end().finish(authenticated_at);
             return finish_unsplit(client, config, end).await;
         }
@@ -386,8 +435,6 @@ async fn run_session(
         }
     }
 
-    // From here the socket is split: this task reads and correlates, the
-    // writer task preserves FIFO for trading commands and prioritizes transport control.
     let (sink, mut reader) = client.split();
     let (lanes, mut writer_task) = writer::spawn(
         sink,
@@ -409,9 +456,8 @@ async fn run_session(
     let mut pong_deadline = None;
     let mut subscription_deadline = None;
     let mut subscription_written = None;
-    // The deadline starts when the ping is on the wire, not when it is queued
-    // behind other control frames.
     let mut ping_written: Option<oneshot::Receiver<Result<(), ManagedWsError>>> = None;
+    let mut server_rejection = false;
 
     let end = loop {
         tokio::select! {
@@ -462,7 +508,6 @@ async fn run_session(
                 let (written_tx, written_rx) = oneshot::channel();
                 match lanes.frame(ping.clone(), Some(written_tx)) {
                     Ok(()) => ping_written = Some(written_rx),
-                    // A stalled writer is ended by its own write timeout.
                     Err((LaneFull::Full, _)) => {}
                     Err((LaneFull::Closed, _)) => break AuthenticatedSessionEnd::Disconnected,
                 }
@@ -500,7 +545,7 @@ async fn run_session(
                 if matches!(read_result, Some(Ok(ServerMessage::Pong(_)))) {
                     pong_deadline = None;
                 }
-                if let Some(end) = session_message::handle_ws_read(
+                if let Some((end, rejected)) = session_message::handle_ws_read(
                     read_result,
                     &lanes,
                     config,
@@ -509,20 +554,35 @@ async fn run_session(
                     runtime.events_tx,
                     runtime.shutdown_rx,
                 ).await {
+                    server_rejection = rejected;
                     break end;
                 }
             }
         }
     };
 
-    match end {
-        AuthenticatedSessionEnd::CloseRequested | AuthenticatedSessionEnd::Terminated(_) => {
-            lanes.close(writer_task, config.write_timeout).await;
+    state_tx.send_replace(ManagedWsState::Connected { connection_epoch });
+    runtime
+        .vault_auth_tx
+        .send_if_modified(|grant| grant.take().is_some());
+    let final_end = matches!(
+        end,
+        AuthenticatedSessionEnd::CloseRequested | AuthenticatedSessionEnd::Terminated(_)
+    );
+    if server_rejection {
+        // Let the server close first: a client Close can cut it off before it
+        // sends its code. Nothing can be sent or awaited, so frames read here are dropped.
+        let sink = lanes.stop(writer_task, config.write_timeout).await;
+        runtime.tracker.drain_all();
+        reader.await_server_close(SERVER_CLOSE_GRACE).await;
+        if final_end && let Some(mut sink) = sink {
+            let _ = timeout(config.write_timeout, sink.close()).await;
         }
-        AuthenticatedSessionEnd::Disconnected | AuthenticatedSessionEnd::CredentialsExpired => {
-            drop(lanes);
-            writer_task.abort();
-        }
+    } else if final_end {
+        lanes.close(writer_task, config.write_timeout).await;
+    } else {
+        drop(lanes);
+        writer_task.abort();
     }
     end.finish(authenticated_at)
 }
@@ -565,10 +625,7 @@ enum Phase<T> {
     Done(T),
 }
 
-/// Run one phase of the connection lifecycle, letting shutdown pre-empt it.
-///
-/// Shutdown is polled first so a close request wins a tie with a phase that
-/// completed in the same wakeup.
+/// Run a lifecycle phase; shutdown wins if both complete in the same wakeup.
 async fn race_shutdown<F: std::future::Future>(
     shutdown_rx: &mut watch::Receiver<bool>,
     deadline: Duration,

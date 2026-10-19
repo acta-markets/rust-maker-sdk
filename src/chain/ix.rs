@@ -41,6 +41,12 @@ pub struct FundPositionIxArgs {
     pub create_atas: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct UpdateQuoteSigningIxArgs {
+    pub maker_owner: Pubkey,
+    pub new_quote_signing: Pubkey,
+}
+
 pub fn build_deposit_premium_ixs(
     program_id: &Pubkey,
     args: &DepositPremiumIxArgs,
@@ -124,6 +130,25 @@ pub fn build_withdraw_premium_ixs(
     Ok(ixs)
 }
 
+/// Rotate the maker's quote-signing key; `maker_owner` signs.
+pub fn build_update_quote_signing_ixs(
+    program_id: &Pubkey,
+    args: &UpdateQuoteSigningIxArgs,
+) -> Vec<Instruction> {
+    let (maker_pda, _) = maker_pda_with_program_id(program_id, &args.maker_owner);
+    let mut data = Vec::with_capacity(1 + 32);
+    data.push(InstructionKind::UpdateMakerQuoteSigning as u8);
+    data.extend_from_slice(args.new_quote_signing.as_ref());
+    vec![Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(args.maker_owner, true),
+            AccountMeta::new(maker_pda, false),
+        ],
+        data,
+    }]
+}
+
 pub fn build_fund_position_ixs(
     program_id: &Pubkey,
     args: &FundPositionIxArgs,
@@ -177,9 +202,9 @@ pub fn build_fund_position_ixs(
     Ok(ixs)
 }
 
-// On-chain program instruction discriminants (must match Solana program)
 #[repr(u8)]
 enum InstructionKind {
+    UpdateMakerQuoteSigning = 3,
     DepositPremium = 4,
     WithdrawPremium = 5,
     DepositFundsToPosition = 9,
@@ -201,11 +226,18 @@ pub fn derive_associated_token_address(
     mint: &Pubkey,
     token_program: &Pubkey,
 ) -> Pubkey {
+    derive_associated_token_address_with_bump(owner, mint, token_program).0
+}
+
+pub(crate) fn derive_associated_token_address_with_bump(
+    owner: &Pubkey,
+    mint: &Pubkey,
+    token_program: &Pubkey,
+) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[owner.as_ref(), token_program.as_ref(), mint.as_ref()],
         &ASSOCIATED_TOKEN_PROGRAM_ID,
     )
-    .0
 }
 
 fn create_associated_token_account_idempotent_ix(
@@ -230,7 +262,12 @@ fn create_associated_token_account_idempotent_ix(
     }
 }
 
-const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
+pub(crate) const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
+pub(crate) const SYSTEM_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("11111111111111111111111111111111");
 const RENT_SYSVAR_ID: Pubkey = solana_sdk::pubkey!("SysvarRent111111111111111111111111111111111");
+pub(crate) const TOKEN_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+pub(crate) const TOKEN_2022_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");

@@ -22,7 +22,6 @@ enum CorrelationKey {
     Request(Uuid),
     Quote(OrderId),
     Batch(Vec<OrderId>),
-    CreateRfq(Uuid),
 }
 
 impl CorrelationKey {
@@ -33,12 +32,7 @@ impl CorrelationKey {
             ClientMessage::BatchQuotes(message) => Some(vec![Self::Batch(sorted_order_ids(
                 message.quotes.iter().map(|quote| quote.order_id),
             ))]),
-            // RfqClosed is lifecycle evidence, not a correlated command result.
-            // CancelRfq has no success receipt in this wire contract.
             ClientMessage::CancelRfq(_) => None,
-            ClientMessage::RfqRequest(message) => message
-                .client_request_id
-                .map(|request_id| vec![Self::CreateRfq(request_id)]),
             _ => message
                 .request_id()
                 .map(|request_id| vec![Self::Request(request_id)]),
@@ -55,7 +49,6 @@ impl CorrelationKey {
                     .iter()
                     .filter_map(BatchQuoteResult::order_id),
             ))),
-            ServerMessage::RfqCreated(message) => message.client_request_id.map(Self::CreateRfq),
             _ => message.request_id().map(Self::Request),
         }
     }

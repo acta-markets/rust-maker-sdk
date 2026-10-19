@@ -112,6 +112,7 @@ fn managed_config_accepts_remote_signer_capability() {
             client_version: None,
         },
         Arc::new(signer),
+        "owner",
     );
 
     assert!(config.validate().is_ok());

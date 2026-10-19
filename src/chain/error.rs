@@ -33,10 +33,18 @@ pub enum ChainError {
         needed_lamports: u64,
         available_lamports: u64,
     },
+    #[error("lookup table {0} does not exist")]
+    MissingLookupTable(Pubkey),
+    #[error("lookup table {0} is deactivated")]
+    LookupTableDeactivated(Pubkey),
     #[error("native SOL budget overflow")]
     NativeSolBudgetOverflow,
     #[error(transparent)]
     Ix(#[from] ChainIxError),
+    #[error(transparent)]
+    Vault(#[from] super::vault::VaultChainError),
+    #[error("{0} does not match the account it was derived for")]
+    Identity(&'static str),
     #[cfg(feature = "chain-rpc")]
     #[error("transaction signing failed: {0}")]
     Signing(#[from] solana_sdk::signer::SignerError),

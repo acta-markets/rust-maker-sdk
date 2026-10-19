@@ -22,6 +22,8 @@ pub(super) enum WriterCommand {
     },
     Pong(Bytes),
     Close,
+    /// Stop without writing queued frames or a Close; the sink is handed back.
+    Stop,
 }
 
 /// Sender side of the writer task. The control lane is drained before the
@@ -77,7 +79,7 @@ impl WriterLanes {
         )
         .map_err(|(full, command)| match command {
             WriterCommand::Frame { done, .. } => (full, done),
-            WriterCommand::Pong(_) | WriterCommand::Close => (full, None),
+            WriterCommand::Pong(_) | WriterCommand::Close | WriterCommand::Stop => (full, None),
         })
     }
 
@@ -86,7 +88,7 @@ impl WriterLanes {
             .map_err(|(full, _)| full)
     }
 
-    pub(super) async fn close(self, mut task: JoinHandle<()>, write_timeout: Duration) {
+    pub(super) async fn close<S>(self, mut task: JoinHandle<Option<S>>, write_timeout: Duration) {
         let close_enqueued = self.enqueue(Lane::Control, WriterCommand::Close).is_ok();
         drop(self);
         if !close_enqueued || timeout(write_timeout, &mut task).await.is_err() {
@@ -94,16 +96,33 @@ impl WriterLanes {
             let _ = task.await;
         }
     }
+
+    /// Stop the writer ahead of any queued data frame, without a Close frame.
+    pub(super) async fn stop<S>(
+        self,
+        mut task: JoinHandle<Option<S>>,
+        write_timeout: Duration,
+    ) -> Option<S> {
+        let stop_enqueued = self.enqueue(Lane::Control, WriterCommand::Stop).is_ok();
+        drop(self);
+        if stop_enqueued && let Ok(Ok(sink)) = timeout(write_timeout, &mut task).await {
+            return sink;
+        }
+        task.abort();
+        let _ = task.await;
+        None
+    }
 }
 
-/// The task ends on `Close`, when both lanes are dropped, or on the first
-/// failed write; a failure is published as an `Error` event first.
+/// The task ends on `Close`, `Stop`, when both lanes are dropped, or on the first
+/// failed write; a failure is published as an `Error` event first. It returns the
+/// sink unless it was closed or failed.
 pub(super) fn spawn<S>(
     sink: S,
     write_timeout: Duration,
     capacity: usize,
     events_tx: broadcast::Sender<ManagedWsEvent>,
-) -> (WriterLanes, JoinHandle<()>)
+) -> (WriterLanes, JoinHandle<Option<S>>)
 where
     S: Sink<Message> + Unpin + Send + 'static,
     S::Error: Into<WsClientError> + Send,
@@ -120,7 +139,8 @@ async fn run<S>(
     mut data_rx: mpsc::Receiver<WriterCommand>,
     write_timeout: Duration,
     events_tx: broadcast::Sender<ManagedWsEvent>,
-) where
+) -> Option<S>
+where
     S: Sink<Message> + Unpin,
     S::Error: Into<WsClientError>,
 {
@@ -130,7 +150,7 @@ async fn run<S>(
             biased;
             command = control_rx.recv(), if control_open => (Lane::Control, command),
             command = data_rx.recv(), if data_open => (Lane::Data, command),
-            else => return,
+            else => return Some(sink),
         };
         let command = match next {
             (Lane::Control, None) => {
@@ -162,19 +182,20 @@ async fn run<S>(
                     let _ = done.send(result);
                 }
                 if failed {
-                    return;
+                    return None;
                 }
             }
             WriterCommand::Pong(payload) => {
                 if let Err(error) = write(&mut sink, Message::Pong(payload), write_timeout).await {
                     send_event(&events_tx, ManagedWsEvent::Error(error.to_string()));
-                    return;
+                    return None;
                 }
             }
             WriterCommand::Close => {
                 let _ = timeout(write_timeout, sink.close()).await;
-                return;
+                return None;
             }
+            WriterCommand::Stop => return Some(sink),
         }
     }
 }
@@ -308,8 +329,6 @@ mod tests {
         PreparedClientMessage::new(&ClientMessage::Ping).expect("serialize control frame")
     }
 
-    // Frames are queued before the writer task first runs, which holds on a
-    // current-thread runtime only.
     #[tokio::test(flavor = "current_thread")]
     async fn control_lane_is_written_before_queued_data() {
         let sink = RecordingSink::default();
@@ -366,8 +385,6 @@ mod tests {
         ));
     }
 
-    // Frames are queued before the writer task first runs, which holds on a
-    // current-thread runtime only.
     #[tokio::test(flavor = "current_thread")]
     async fn full_lane_is_reported_without_blocking() {
         let (events_tx, _) = broadcast::channel(4);

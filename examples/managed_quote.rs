@@ -1,12 +1,15 @@
 //! Quote RFQs with `MakerQuoteClient`.
 
 mod common;
+#[path = "common/venue.rs"]
+mod venue;
 
 use acta_maker_sdk::ws::maker::MakerQuoteClient;
 use acta_maker_sdk::ws::managed::*;
 use acta_maker_sdk::ws::types::*;
 use acta_maker_sdk::{
-    AtomicNonceGenerator, Nonce, Price, QuoteExpiry, RfqBinding, WS_PROTOCOL_VERSION,
+    AtomicNonceGenerator, Nonce, Price, QuoteBuildError, QuoteExpiry, RfqBinding,
+    WS_PROTOCOL_VERSION,
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -18,7 +21,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let common::Config { signer, owner, url } = common::load()?;
+    let owner = owner.ok_or("set ACTA_MAKER_OWNER to the registered maker owner")?;
     let maker_owner = acta_maker_sdk::decode_base58_32(&owner)?;
+    let min_validity = venue::min_quote_validity(&url).await?;
     let signer = Arc::new(signer);
     let signer_for_quotes = Arc::clone(&signer);
 
@@ -31,8 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             client_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         },
         signer,
+        owner,
     )
-    .with_auth_pubkey(owner)
     .low_latency()
     .with_initial_subscribe(SubscribeData {
         request_id: Uuid::new_v4(),
@@ -61,7 +66,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ManagedWsEvent::Reconnecting { attempt, delay_ms } => {
                     tracing::warn!(attempt, delay_ms, "reconnecting");
                 }
-                ManagedWsEvent::Disconnected => tracing::warn!("disconnected"),
+                ManagedWsEvent::Disconnected { close } => {
+                    tracing::warn!(?close, "disconnected");
+                }
                 _ => {}
             }
         }
@@ -70,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let epoch = client.wait_until_ready().await?;
     tracing::info!(epoch, "quote session ready");
     let mut recovery_epoch = epoch;
-    let mut recovered = (false, false, false);
+    let mut recovered = (false, false);
 
     loop {
         let msg = match rx.recv().await {
@@ -87,51 +94,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         if msg.connection_epoch != recovery_epoch {
             recovery_epoch = msg.connection_epoch;
-            recovered = (false, false, false);
+            recovered = (false, false);
         }
         match msg.message() {
-            ServerMessage::MmSummary(summary) => {
-                tracing::info!(
-                    positions = summary.positions.len(),
-                    "account recovery received"
-                );
-                recovered.0 = true;
-            }
             ServerMessage::ActiveRfqs(snapshot) => {
                 tracing::info!(rfqs = snapshot.rfqs.len(), "RFQ recovery received");
-                recovered.1 = true;
+                recovered.0 = true;
             }
             ServerMessage::MyQuotes(snapshot) => {
                 tracing::info!(quotes = snapshot.quotes.len(), "quote recovery received");
-                recovered.2 = true;
+                recovered.1 = true;
             }
-            ServerMessage::RfqBroadcast(rfq)
-                if recovered == (true, true, true)
-                    && matches!(client.raw().state(), ManagedWsState::Ready { connection_epoch } if connection_epoch == recovery_epoch) =>
-            {
-                let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
+            ServerMessage::RfqBroadcast(rfq) if recovered == (true, true) => {
+                let min_valid_until = QuoteExpiry::after(min_validity)
                     .ok_or("system clock is before the Unix epoch")?;
-                if valid_until
-                    .to_system_time()
-                    .ok_or("quote expiry exceeds SystemTime")?
-                    > rfq.market.expiry_ts
-                {
-                    continue;
-                }
-
-                let quote = RfqBinding::from_broadcast(rfq)?
+                let valid_until =
+                    QuoteExpiry::after(min_validity + std::time::Duration::from_secs(60))
+                        .ok_or("system clock is before the Unix epoch")?;
+                let quote = match RfqBinding::from_broadcast(rfq)?
                     .quote()
                     .maker_owner(maker_owner)
-                    .price(Price::new(1_000_000_000)) // your pricing logic
+                    .price(Price::new(1_000_000_000))
                     .valid_until(valid_until)
+                    .min_valid_until(min_valid_until)
                     .nonce(Nonce::new(NONCE_GEN.next_u64()?))
-                    .sign(signer_for_quotes.as_ref())?;
+                    .sign(signer_for_quotes.as_ref())
+                {
+                    Ok(quote) => quote,
+                    Err(QuoteBuildError::ValidUntilAfterMarketExpiry { .. }) => continue,
+                    Err(error) => return Err(error.into()),
+                };
 
                 tracing::info!(rfq = %quote.rfq_id, strike = %quote.strike, "submitting quote");
-                client
-                    .raw()
-                    .send_in_epoch(ClientMessage::Quote(quote), recovery_epoch)
-                    .await?;
+                match client.quote_in_epoch(quote, recovery_epoch).await {
+                    Ok(()) | Err(ManagedWsError::NotReady) => {}
+                    Err(error) => return Err(error.into()),
+                }
             }
             ServerMessage::QuoteAcknowledged(ack) => {
                 tracing::info!(rfq = %ack.rfq_id, order = ?ack.order_id, "ack");

@@ -18,7 +18,6 @@ const BOOL_LEN: usize = 1;
 const U64_LEN: usize = 8;
 const HEADER_LEN: usize = TAG_LEN + CHAIN_ID_LEN + PUBKEY_LEN;
 
-// Body field offsets (relative to HEADER_LEN).
 const OFF_IS_TAKER_BUY: usize = 0;
 const OFF_POSITION_TYPE: usize = OFF_IS_TAKER_BUY + BOOL_LEN;
 const OFF_MARKET: usize = OFF_POSITION_TYPE + BOOL_LEN;
@@ -184,8 +183,8 @@ pub fn order_preimage_hex(preimage: &[u8; ORDER_PREIMAGE_LEN]) -> String {
 
 /// Sign an order id from raw secret bytes.
 ///
-/// Derives the public key on each call. Reuse [`BytesSigner`] with
-/// [`sign_order_id_with_signer`] when signing repeatedly.
+/// Repeated signing should reuse a [`BytesSigner`] with [`sign_order_id_with_signer`]
+/// to avoid expanding the key on each call.
 pub fn sign_order_id_bytes(
     order_id: &[u8; ORDER_ID_LEN],
     signing_key_bytes: &[u8; 32],
@@ -204,7 +203,7 @@ pub fn sign_order_id_base58(
     Ok(encode_base58(&sig))
 }
 
-pub fn sign_order_id_with_signer<S: SignerLike>(
+pub fn sign_order_id_with_signer<S: SignerLike + ?Sized>(
     order_id: &[u8; ORDER_ID_LEN],
     signer: &S,
 ) -> [u8; 64] {

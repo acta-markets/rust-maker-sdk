@@ -1,9 +1,10 @@
-use acta_maker_sdk::{BytesSigner, SignerLike, decode_base58_32};
+use acta_maker_sdk::{BytesSigner, decode_base58_32};
 use zeroize::Zeroizing;
 
 pub struct Config {
     pub signer: BytesSigner,
-    pub owner: String,
+    /// `ACTA_MAKER_OWNER`: the registered maker owner, required for maker sessions.
+    pub owner: Option<String>,
     pub url: String,
 }
 
@@ -18,11 +19,13 @@ pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
         .map_err(|_| "expected a Solana keypair JSON array of 64 bytes")?;
     let signer = BytesSigner::from_keypair(keypair)?;
     let owner = match std::env::var("ACTA_MAKER_OWNER") {
-        Ok(owner) => owner,
-        Err(std::env::VarError::NotPresent) => signer.pubkey_base58(),
+        Ok(owner) => {
+            decode_base58_32(&owner)?;
+            Some(owner)
+        }
+        Err(std::env::VarError::NotPresent) => None,
         Err(error) => return Err(error.into()),
     };
-    decode_base58_32(&owner)?;
     let url = match std::env::var("ACTA_WS_URL") {
         Ok(url) => url,
         Err(std::env::VarError::NotPresent) => "wss://devnet-api.acta.markets".into(),

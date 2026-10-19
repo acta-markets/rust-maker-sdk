@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc};
 
-use crate::ws::types::ServerMessage;
+use crate::ws::types::{ReferenceChangedData, ServerMessage};
 
 #[derive(Debug, Clone)]
 pub struct ManagedInbound {
@@ -55,6 +55,25 @@ impl ManagedMessageReceiver {
                     let _ = gap_tx.send(());
                 }
                 Err(ManagedReceiveError::Gap { skipped })
+            }
+        }
+    }
+}
+
+pub struct ReferenceChangeReceiver {
+    inner: ManagedMessageReceiver,
+}
+
+impl ReferenceChangeReceiver {
+    pub(crate) const fn new(inner: ManagedMessageReceiver) -> Self {
+        Self { inner }
+    }
+
+    pub async fn recv(&mut self) -> Result<ReferenceChangedData, ManagedReceiveError> {
+        loop {
+            let inbound = self.inner.recv().await?;
+            if let ServerMessage::ReferenceChanged(data) = inbound.message() {
+                return Ok(data.clone());
             }
         }
     }

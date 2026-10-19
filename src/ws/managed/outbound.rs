@@ -6,10 +6,8 @@ use super::ManagedWsError;
 
 /// Receipt for a message queued with `try_send`.
 ///
-/// Dropping the ticket before the session task dequeues the command cancels
-/// the send: the message never reaches the wire. Fire-and-forget loses quotes
-/// whenever the queue is ahead of the writer — hold every ticket until
-/// [`wait()`](Self::wait) reports the socket-write result.
+/// Dropping before dequeue cancels the send. Retain the ticket until
+/// [`wait()`](Self::wait) reports the socket-write result, not a server ACK.
 #[must_use = "dropping a SendTicket cancels the send if it has not been written yet"]
 pub struct SendTicket {
     pub(super) rx: oneshot::Receiver<Result<(), ManagedWsError>>,

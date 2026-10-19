@@ -1,10 +1,13 @@
 //! Subscribe to RFQs and submit signed quotes.
 
 mod common;
+#[path = "common/venue.rs"]
+mod venue;
 
 use acta_maker_sdk::ws::{client::WsClient, managed::normalize_maker_ws_url, types::*};
 use acta_maker_sdk::{
-    AtomicNonceGenerator, Nonce, Price, QuoteExpiry, RfqBinding, SignerLike, WS_PROTOCOL_VERSION,
+    AtomicNonceGenerator, Nonce, Price, QuoteBuildError, QuoteExpiry, RfqBinding, SignerLike,
+    WS_PROTOCOL_VERSION,
 };
 use uuid::Uuid;
 
@@ -13,7 +16,9 @@ static NONCE_GEN: AtomicNonceGenerator = AtomicNonceGenerator::new();
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let common::Config { signer, owner, url } = common::load()?;
+    let owner = owner.ok_or("set ACTA_MAKER_OWNER to the registered maker owner")?;
     let maker_owner = acta_maker_sdk::decode_base58_32(&owner)?;
+    let min_validity = venue::min_quote_validity(&url).await?;
     let mut client = WsClient::connect(&normalize_maker_ws_url(&url)).await?;
 
     client
@@ -49,24 +54,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             }
             ServerMessage::RfqBroadcast(rfq) => {
-                // Quotes need 310 seconds of validity; 300 seconds are reserved for settlement.
-                let valid_until = QuoteExpiry::after(std::time::Duration::from_secs(350))
+                let min_valid_until = QuoteExpiry::after(min_validity)
                     .ok_or("system clock is before the Unix epoch")?;
-                if valid_until
-                    .to_system_time()
-                    .ok_or("quote expiry exceeds SystemTime")?
-                    > rfq.market.expiry_ts
-                {
-                    continue;
-                }
-
-                let quote = RfqBinding::from_broadcast(&rfq)?
+                let valid_until =
+                    QuoteExpiry::after(min_validity + std::time::Duration::from_secs(60))
+                        .ok_or("system clock is before the Unix epoch")?;
+                let quote = match RfqBinding::from_broadcast(&rfq)?
                     .quote()
                     .maker_owner(maker_owner)
-                    .price(Price::new(1_000_000_000)) // your pricing logic here
+                    .price(Price::new(1_000_000_000))
                     .valid_until(valid_until)
+                    .min_valid_until(min_valid_until)
                     .nonce(Nonce::new(NONCE_GEN.next_u64()?))
-                    .sign(&signer)?;
+                    .sign(&signer)
+                {
+                    Ok(quote) => quote,
+                    Err(QuoteBuildError::ValidUntilAfterMarketExpiry { .. }) => continue,
+                    Err(error) => return Err(error.into()),
+                };
 
                 println!(
                     "submitting quote rfq={} strike={}",

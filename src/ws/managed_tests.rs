@@ -8,13 +8,16 @@ use super::{
     tracker::AwaitTracker, transition_state,
 };
 use crate::types::RfqCloseReason;
-use crate::types::ids::{Nonce, OrderId, Price, Strike};
+use crate::types::ids::{
+    MarketId, Nonce, OrderId, PositionType, Price, Quantity, Strike, TimeoutSeconds,
+};
 use crate::ws::types::common::WsChannel;
 use crate::ws::types::{
-    AuthRequestData, AuthSuccessData, BatchQuoteResult, BatchQuotesAckMessage, BatchQuotesMessage,
-    CancelQuoteData, CancelRfqData, ClientMessage, GetMmSummaryMessage, QuoteAcknowledgedMessage,
-    QuoteMessage, QuoteRejectReason, QuoteRejectedMessage, RequestErrorEnvelope, RfqClosedMessage,
-    ServerError, ServerMessage, SubscribeData, WelcomeData,
+    AcceptQuoteMessage, AuthRequestData, AuthSuccessData, BatchQuoteResult, BatchQuotesAckMessage,
+    BatchQuotesMessage, CancelQuoteData, CancelRfqData, ClientMessage, CommandAcceptedData,
+    Delivery, GetMmSummaryMessage, QuoteAcknowledgedMessage, QuoteMessage, QuoteRejectReason,
+    QuoteRejectedMessage, RequestErrorEnvelope, RfqClosedMessage, RfqRequestMessage, ServerError,
+    ServerMessage, SubmitSignedSponsoredTxData, SubscribeData, WelcomeData, WsErrorCode,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::time::{Duration, UNIX_EPOCH};
@@ -110,8 +113,8 @@ fn managed_config() -> ManagedWsConfig {
             client_version: None,
         },
         Arc::new(crate::orders::BytesSigner::from_secret([1u8; 32])),
+        "maker",
     )
-    .with_auth_pubkey("maker")
 }
 
 #[test]
@@ -144,7 +147,7 @@ fn quote_defaults_enable_disconnect_cancellation_and_gap_recovery() {
 }
 
 #[test]
-fn auth_pubkey_override_wins_over_the_signer_key() {
+fn auth_pubkey_is_the_owner_not_the_signer_key() {
     use crate::orders::SignerLike;
 
     struct Remote(crate::orders::BytesSigner);
@@ -158,7 +161,7 @@ fn auth_pubkey_override_wins_over_the_signer_key() {
     }
 
     let signer = crate::orders::BytesSigner::from_secret([3u8; 32]);
-    let expected = signer.pubkey_base58();
+    let signer_key = signer.pubkey_base58();
     let config = ManagedWsConfig::new_async(
         "ws://localhost",
         crate::ws::types::HelloData {
@@ -168,9 +171,10 @@ fn auth_pubkey_override_wins_over_the_signer_key() {
             client_version: None,
         },
         Arc::new(Remote(signer)),
+        "owner",
     );
-    assert_eq!(config.auth_pubkey, expected);
-    assert_eq!(config.with_auth_pubkey("owner").auth_pubkey, "owner");
+    assert_eq!(config.auth_pubkey, "owner");
+    assert_ne!(config.auth_pubkey, signer_key);
 }
 
 #[test]
@@ -540,7 +544,6 @@ async fn close_interrupts_a_stalled_authentication() {
         let mut socket = tokio_tungstenite::accept_async(stream)
             .await
             .expect("websocket handshake");
-        // Consume Hello but never answer, so authentication cannot progress.
         let _ = socket.next().await;
         let _ = accepted_tx.send(());
         std::future::pending::<()>().await;
@@ -586,7 +589,6 @@ async fn close_interrupts_a_stalled_readiness_barrier() {
             .await
             .expect("websocket handshake");
         authenticate_test_peer(&mut socket).await;
-        // Authentication succeeded; never acknowledge the initial subscribe.
         let _ = socket.next().await;
         let _ = authenticated_tx.send(());
         std::future::pending::<()>().await;
@@ -931,7 +933,7 @@ async fn backend_session_replaced_frame_terminates_without_reconnect() {
             .expect("hello frame")
             .expect("valid hello frame");
         let frame = ServerMessage::Error(ServerError::Generic {
-            code: "session_replaced".to_string(),
+            code: WsErrorCode::SessionReplaced,
             message: "This session was replaced by a newer connection".to_string(),
         });
         socket
@@ -1005,8 +1007,103 @@ fn request_error_is_routed_by_request_id() {
     let error = ServerMessage::RequestError(RequestErrorEnvelope {
         request_id,
         error: ServerError::InternalError,
+        delivery: None,
     });
     assert!(tracker.take_for_message(&error).is_some());
+}
+
+fn correlated_commands() -> [(Uuid, ClientMessage); 3] {
+    let rfq = Uuid::new_v4();
+    let accept = Uuid::new_v4();
+    let submit = Uuid::new_v4();
+    [
+        (
+            rfq,
+            ClientMessage::RfqRequest(RfqRequestMessage {
+                request_id: rfq,
+                market: MarketId::new("market"),
+                position_type: PositionType::CoveredCall,
+                strike: Strike::new(1),
+                quantity: Quantity::new(1),
+                timeout_seconds: TimeoutSeconds::new(30),
+            }),
+        ),
+        (
+            accept,
+            ClientMessage::AcceptQuote(AcceptQuoteMessage {
+                request_id: accept,
+                rfq_id: Uuid::new_v4(),
+                maker: "maker".to_string(),
+                order_id: OrderId::new([7; 32]),
+            }),
+        ),
+        (
+            submit,
+            ClientMessage::SubmitSignedSponsoredTx(SubmitSignedSponsoredTxData {
+                request_id: submit,
+                order_id: OrderId::new([8; 32]),
+                tx_base64: "tx".to_string(),
+            }),
+        ),
+    ]
+}
+
+#[test]
+fn command_receipts_resolve_by_request_id() {
+    for (request_id, message) in correlated_commands() {
+        let mut tracker = AwaitTracker::new(2);
+        let _rx = register(&mut tracker, 1, &message);
+        let accepted = ServerMessage::CommandAccepted(CommandAcceptedData { request_id });
+        assert!(tracker.take_for_message(&accepted).is_some(), "{message:?}");
+        assert_eq!(tracker.len(), 0);
+    }
+}
+
+#[test]
+fn command_rejections_resolve_by_request_id_with_delivery() {
+    for delivery in [None, Some(Delivery::NotForwarded), Some(Delivery::Unknown)] {
+        for (request_id, message) in correlated_commands() {
+            let mut tracker = AwaitTracker::new(2);
+            let mut rx = register(&mut tracker, 1, &message);
+            let rejected = ServerMessage::RequestError(RequestErrorEnvelope {
+                request_id,
+                error: ServerError::InternalError,
+                delivery,
+            });
+            let tx = tracker.take_for_message(&rejected).expect("correlated");
+            tx.send(Ok(Arc::new(rejected))).expect("send");
+            let Ok(Ok(response)) = rx.try_recv() else {
+                panic!("rejection not delivered for {message:?}");
+            };
+            let ServerMessage::RequestError(envelope) = &*response else {
+                panic!("expected RequestError");
+            };
+            assert_eq!(envelope.delivery, delivery);
+        }
+    }
+}
+
+#[test]
+fn rfq_created_push_does_not_resolve_the_rfq_request() {
+    let (request_id, message) = correlated_commands()[0].clone();
+    let mut tracker = AwaitTracker::new(2);
+    let _rx = register(&mut tracker, 1, &message);
+    let created = crate::ws::types::parse_server_message(
+        &serde_json::json!({
+            "type": "RfqCreated",
+            "data": {
+                "rfq_id": Uuid::new_v4(),
+                "rfq_version": 1,
+                "request_id": request_id,
+                "expires_at": 1,
+                "created_at": 1,
+            },
+        })
+        .to_string(),
+    )
+    .expect("RfqCreated");
+    assert!(tracker.take_for_message(&created).is_none());
+    assert_eq!(tracker.len(), 1);
 }
 
 #[test]
@@ -1022,6 +1119,7 @@ fn cancel_quote_request_error_resolves_without_timeout() {
     let error = ServerMessage::RequestError(RequestErrorEnvelope {
         request_id,
         error: ServerError::InternalError,
+        delivery: None,
     });
     assert!(tracker.take_for_message(&error).is_some());
     assert_eq!(tracker.len(), 0);
@@ -1525,7 +1623,7 @@ async fn recover_test_peer(
 ) {
     use crate::ws::types::*;
     let mut reads = 0;
-    while reads < 3 {
+    while reads < 2 {
         let request = receive_client_message(socket).await;
         let reply = match request {
             ClientMessage::GetSubscriptions(m) => {
@@ -1553,29 +1651,6 @@ async fn recover_test_peer(
                     subscribed: m.channels,
                 })
             }
-            ClientMessage::GetMmSummary(m) => {
-                reads += 1;
-                ServerMessage::MmSummary(MmSummaryData {
-                    request_id: m.request_id,
-                    maker_pda: "maker".to_string(),
-                    caps: MyCapsData {
-                        request_id: m.request_id,
-                        positions: MakerPositionCapInfo {
-                            current: 0,
-                            limit: 0,
-                        },
-                        notional: Vec::new(),
-                        balances: Vec::new(),
-                    },
-                    positions: Vec::new(),
-                    active_quotes: Vec::new(),
-                    markets: Vec::new(),
-                    tokens: Vec::new(),
-                    computed_at: UNIX_EPOCH,
-                    unrenderable_positions: Vec::new(),
-                    positions_has_more: false,
-                })
-            }
             ClientMessage::GetActiveRfqs(m) => {
                 reads += 1;
                 ServerMessage::ActiveRfqs(ActiveRfqsData {
@@ -1595,4 +1670,388 @@ async fn recover_test_peer(
         };
         send_server_message(socket, reply).await;
     }
+}
+
+async fn close_with(
+    socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    code: u16,
+    reason: &str,
+) {
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+    let _ = socket
+        .close(Some(CloseFrame {
+            code: code.into(),
+            reason: reason.into(),
+        }))
+        .await;
+}
+
+#[tokio::test]
+async fn raw_client_exposes_the_server_close_frame() {
+    use crate::ws::client::{ServerClose, WsClient};
+    use crate::ws::types::CloseCode;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let peer = tokio::spawn(async move {
+        for (code, reason) in [(4003, "rate_limited"), (4999, "custom")] {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut socket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("handshake");
+            close_with(&mut socket, code, reason).await;
+        }
+    });
+
+    for (expected, close_code) in [
+        (
+            ServerClose {
+                code: 4003,
+                reason: "rate_limited".to_string(),
+            },
+            Some(CloseCode::RateLimited),
+        ),
+        (
+            ServerClose {
+                code: 4999,
+                reason: "custom".to_string(),
+            },
+            None,
+        ),
+    ] {
+        let mut client = WsClient::connect(&format!("ws://{address}"))
+            .await
+            .expect("connect");
+        assert!(client.server_close().is_none());
+        assert!(client.next().await.is_none());
+        assert_eq!(client.server_close(), Some(&expected));
+        assert_eq!(expected.close_code(), close_code);
+    }
+    peer.await.expect("peer");
+}
+
+#[tokio::test]
+async fn managed_disconnect_event_carries_the_close_code() {
+    use crate::ws::types::CloseCode;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut socket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("handshake");
+        authenticate_test_peer(&mut socket).await;
+        recover_test_peer(&mut socket, false).await;
+        close_with(&mut socket, 4002, "slow_consumer").await;
+    });
+
+    let mut config = managed_config();
+    config.url = format!("ws://{address}");
+    config.reconnect_delay = Duration::from_secs(5);
+    config.max_reconnect_delay = Duration::from_secs(5);
+    let handle = spawn_managed_ws(config).expect("spawn managed websocket");
+    let mut events = handle.subscribe_events();
+
+    let close = next_disconnect(&mut events).await.expect("close frame");
+    assert_eq!(close.code, 4002);
+    assert_eq!(close.close_code(), Some(CloseCode::SlowConsumer));
+    assert_eq!(close.reason, "slow_consumer");
+    handle.close().await.expect("close managed websocket");
+    peer.await.expect("peer");
+}
+
+async fn next_disconnect(
+    events: &mut broadcast::Receiver<ManagedWsEvent>,
+) -> Option<crate::ws::client::ServerClose> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ManagedWsEvent::Disconnected { close } = events.recv().await.expect("event") {
+                return close;
+            }
+        }
+    })
+    .await
+    .expect("disconnect event")
+}
+
+#[tokio::test]
+async fn auth_error_before_close_keeps_the_close_code() {
+    use crate::ws::types::{AuthErrorData, CloseCode};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut socket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("handshake");
+        assert!(matches!(
+            receive_client_message(&mut socket).await,
+            ClientMessage::Hello(_)
+        ));
+        send_server_message(
+            &mut socket,
+            ServerMessage::Welcome(WelcomeData {
+                protocol_version: "1".to_string(),
+                server_version: "test".to_string(),
+                min_supported_version: "1".to_string(),
+                enabled_features: vec!["cancel_on_disconnect".to_string()],
+                server_time_unix_ms: UNIX_EPOCH,
+            }),
+        )
+        .await;
+        assert!(matches!(
+            receive_client_message(&mut socket).await,
+            ClientMessage::StartAuth(_)
+        ));
+        send_server_message(
+            &mut socket,
+            ServerMessage::AuthError(AuthErrorData {
+                reason: WsErrorCode::AuthTimeout,
+                message: None,
+            }),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        close_with(&mut socket, 4001, "auth_timeout").await;
+    });
+
+    let mut config = managed_config();
+    config.url = format!("ws://{address}");
+    config.reconnect_delay = Duration::from_secs(5);
+    config.max_reconnect_delay = Duration::from_secs(5);
+    let handle = spawn_managed_ws(config).expect("spawn managed websocket");
+    let mut events = handle.subscribe_events();
+
+    let close = next_disconnect(&mut events).await.expect("close frame");
+    assert_eq!(close.close_code(), Some(CloseCode::AuthTimeout));
+    handle.close().await.expect("close managed websocket");
+    peer.await.expect("peer");
+}
+
+#[tokio::test]
+async fn session_replaced_error_before_close_keeps_the_close_code() {
+    use crate::ws::types::CloseCode;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut socket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("handshake");
+        authenticate_test_peer(&mut socket).await;
+        recover_test_peer(&mut socket, false).await;
+        send_server_message(
+            &mut socket,
+            ServerMessage::Error(ServerError::Generic {
+                code: WsErrorCode::SessionReplaced,
+                message: "replaced".to_string(),
+            }),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        close_with(&mut socket, 4004, "session_replaced").await;
+    });
+
+    let mut config = managed_config();
+    config.url = format!("ws://{address}");
+    let handle = spawn_managed_ws(config).expect("spawn managed websocket");
+    let mut events = handle.subscribe_events();
+
+    let close = next_disconnect(&mut events).await.expect("close frame");
+    assert_eq!(close.close_code(), Some(CloseCode::SessionReplaced));
+    assert!(matches!(
+        events.recv().await.expect("terminal event"),
+        ManagedWsEvent::Terminated(ManagedWsTerminationReason::SessionReplaced)
+    ));
+    peer.await.expect("peer");
+}
+
+#[tokio::test]
+async fn readiness_rejection_keeps_its_reason_when_the_close_lands_after_the_deadline() {
+    use crate::ws::types::CloseCode;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut socket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("handshake");
+        authenticate_test_peer(&mut socket).await;
+        assert!(matches!(
+            receive_client_message(&mut socket).await,
+            ClientMessage::GetSubscriptions(_)
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        send_server_message(
+            &mut socket,
+            ServerMessage::Error(ServerError::Generic {
+                code: WsErrorCode::SessionReplaced,
+                message: "replaced".to_string(),
+            }),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        close_with(&mut socket, 4004, "session_replaced").await;
+    });
+
+    let mut config = managed_config();
+    config.url = format!("ws://{address}");
+    config.readiness_timeout = Duration::from_millis(300);
+    let handle = spawn_managed_ws(config).expect("spawn managed websocket");
+    let mut events = handle.subscribe_events();
+
+    let close = next_disconnect(&mut events).await.expect("close frame");
+    assert_eq!(close.close_code(), Some(CloseCode::SessionReplaced));
+    assert!(matches!(
+        events.recv().await.expect("terminal event"),
+        ManagedWsEvent::Terminated(ManagedWsTerminationReason::SessionReplaced)
+    ));
+    peer.await.expect("peer");
+}
+
+#[tokio::test]
+async fn requested_close_emits_disconnected_once_before_terminated() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut socket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("handshake");
+        authenticate_test_peer(&mut socket).await;
+        recover_test_peer(&mut socket, false).await;
+        while let Some(Ok(_)) = socket.next().await {}
+    });
+
+    let mut config = managed_config();
+    config.url = format!("ws://{address}");
+    let handle = spawn_managed_ws(config).expect("spawn managed websocket");
+    let mut events = handle.subscribe_events();
+    handle.wait_until_ready().await.expect("ready session");
+    handle.close().await.expect("close managed websocket");
+
+    let mut disconnects = 0;
+    loop {
+        match events.recv().await.expect("event") {
+            ManagedWsEvent::Disconnected { .. } => disconnects += 1,
+            ManagedWsEvent::Terminated(reason) => {
+                assert_eq!(reason, ManagedWsTerminationReason::Requested);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(disconnects, 1);
+    peer.await.expect("peer");
+}
+
+#[tokio::test]
+async fn session_replacement_lets_the_server_close_first() {
+    use crate::ws::types::CloseCode;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut socket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("handshake");
+        authenticate_test_peer(&mut socket).await;
+        recover_test_peer(&mut socket, false).await;
+        send_server_message(
+            &mut socket,
+            ServerMessage::Error(ServerError::Generic {
+                code: WsErrorCode::SessionReplaced,
+                message: "replaced".to_string(),
+            }),
+        )
+        .await;
+        // Like the backend actor, give up on the coded close once the client closes.
+        let client_closed = tokio::time::timeout(Duration::from_millis(150), async {
+            while let Some(Ok(message)) = socket.next().await {
+                if matches!(message, Message::Close(_)) {
+                    return true;
+                }
+            }
+            true
+        })
+        .await
+        .unwrap_or(false);
+        if !client_closed {
+            close_with(&mut socket, 4004, "session_replaced").await;
+        }
+    });
+
+    let mut config = managed_config();
+    config.url = format!("ws://{address}");
+    let handle = spawn_managed_ws(config).expect("spawn managed websocket");
+    let mut events = handle.subscribe_events();
+
+    let close = next_disconnect(&mut events)
+        .await
+        .expect("server close frame");
+    assert_eq!(close.close_code(), Some(CloseCode::SessionReplaced));
+    peer.await.expect("peer");
+}
+
+#[tokio::test]
+async fn readiness_ends_as_soon_as_the_server_rejects_the_session() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let (reject_tx, reject_rx) = oneshot::channel();
+    let (rejected_tx, rejected_rx) = oneshot::channel();
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut socket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("handshake");
+        authenticate_test_peer(&mut socket).await;
+        recover_test_peer(&mut socket, false).await;
+        reject_rx.await.expect("test is ready");
+        send_server_message(
+            &mut socket,
+            ServerMessage::Error(ServerError::Generic {
+                code: WsErrorCode::SessionReplaced,
+                message: "replaced".to_string(),
+            }),
+        )
+        .await;
+        let _ = rejected_tx.send(());
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        close_with(&mut socket, 4004, "session_replaced").await;
+    });
+
+    let mut config = managed_config();
+    config.url = format!("ws://{address}");
+    let handle = spawn_managed_ws(config).expect("spawn managed websocket");
+    let mut events = handle.subscribe_events();
+    let mut states = handle.subscribe_state();
+    handle.wait_until_ready().await.expect("ready session");
+    reject_tx.send(()).expect("peer waits");
+    rejected_rx.await.expect("server rejected the session");
+
+    tokio::time::timeout(Duration::from_millis(300), async {
+        while matches!(*states.borrow_and_update(), ManagedWsState::Ready { .. }) {
+            states.changed().await.expect("state channel");
+        }
+    })
+    .await
+    .expect("readiness ends before the delayed close");
+    assert!(!handle.is_ready());
+    assert!(matches!(
+        handle.ensure_ready(),
+        Err(ManagedWsError::NotReady)
+    ));
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event, ManagedWsEvent::Disconnected { .. }),
+            "the close is still pending"
+        );
+    }
+    assert!(next_disconnect(&mut events).await.is_some());
+    peer.await.expect("peer");
 }

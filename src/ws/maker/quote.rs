@@ -1,6 +1,7 @@
 use crate::ws::managed::{
     MakerWsEndpoint, ManagedMessageReceiver, ManagedWsConfig, ManagedWsError, ManagedWsEvent,
-    ManagedWsHandle, ManagedWsState, SendTicket, WaitUntilReadyError, spawn_managed_ws,
+    ManagedWsHandle, ManagedWsState, ReferenceChangeReceiver, SendTicket, WaitUntilReadyError,
+    spawn_managed_ws,
 };
 use crate::ws::types::{
     AddChannelsData, AddMintsData, BatchQuotesMessage, CancelAllQuotesMessage, CancelQuoteData,
@@ -34,40 +35,63 @@ impl MakerQuoteClient {
         })
     }
 
-    pub async fn quote(&self, payload: QuoteMessage) -> Result<(), ManagedWsError> {
-        self.inner.ensure_ready()?;
-        self.inner.send(ClientMessage::Quote(payload)).await
+    /// Send only in `connection_epoch`, the epoch whose recovery the strategy
+    /// applied; a reconnect in between rejects the quote with `NotReady`.
+    pub async fn quote_in_epoch(
+        &self,
+        payload: QuoteMessage,
+        connection_epoch: u64,
+    ) -> Result<(), ManagedWsError> {
+        self.inner
+            .send_in_epoch(ClientMessage::Quote(payload), connection_epoch)
+            .await
     }
 
-    pub fn try_quote(&self, payload: QuoteMessage) -> Result<SendTicket, ManagedWsError> {
-        self.inner.ensure_ready()?;
-        self.inner.try_send(ClientMessage::Quote(payload))
+    pub fn try_quote_in_epoch(
+        &self,
+        payload: QuoteMessage,
+        connection_epoch: u64,
+    ) -> Result<SendTicket, ManagedWsError> {
+        self.inner
+            .try_send_in_epoch(ClientMessage::Quote(payload), connection_epoch)
     }
 
-    pub async fn replace_quote(&self, payload: ReplaceQuoteMessage) -> Result<(), ManagedWsError> {
-        self.inner.ensure_ready()?;
-        self.inner.send(ClientMessage::ReplaceQuote(payload)).await
-    }
-
-    pub fn try_replace_quote(
+    pub async fn replace_in_epoch(
         &self,
         payload: ReplaceQuoteMessage,
+        connection_epoch: u64,
+    ) -> Result<(), ManagedWsError> {
+        self.inner
+            .send_in_epoch(ClientMessage::ReplaceQuote(payload), connection_epoch)
+            .await
+    }
+
+    pub fn try_replace_in_epoch(
+        &self,
+        payload: ReplaceQuoteMessage,
+        connection_epoch: u64,
     ) -> Result<SendTicket, ManagedWsError> {
-        self.inner.ensure_ready()?;
-        self.inner.try_send(ClientMessage::ReplaceQuote(payload))
+        self.inner
+            .try_send_in_epoch(ClientMessage::ReplaceQuote(payload), connection_epoch)
     }
 
-    pub async fn batch_quotes(&self, payload: BatchQuotesMessage) -> Result<(), ManagedWsError> {
-        self.inner.ensure_ready()?;
-        self.inner.send(ClientMessage::BatchQuotes(payload)).await
-    }
-
-    pub fn try_batch_quotes(
+    pub async fn batch_quotes_in_epoch(
         &self,
         payload: BatchQuotesMessage,
+        connection_epoch: u64,
+    ) -> Result<(), ManagedWsError> {
+        self.inner
+            .send_in_epoch(ClientMessage::BatchQuotes(payload), connection_epoch)
+            .await
+    }
+
+    pub fn try_batch_quotes_in_epoch(
+        &self,
+        payload: BatchQuotesMessage,
+        connection_epoch: u64,
     ) -> Result<SendTicket, ManagedWsError> {
-        self.inner.ensure_ready()?;
-        self.inner.try_send(ClientMessage::BatchQuotes(payload))
+        self.inner
+            .try_send_in_epoch(ClientMessage::BatchQuotes(payload), connection_epoch)
     }
 
     pub async fn cancel_quote(&self, payload: CancelQuoteData) -> Result<(), ManagedWsError> {
@@ -153,6 +177,10 @@ impl MakerQuoteClient {
         self.inner.subscribe_messages()
     }
 
+    pub fn subscribe_reference_changes(&self) -> ReferenceChangeReceiver {
+        self.inner.subscribe_reference_changes()
+    }
+
     pub fn subscribe_events(&self) -> broadcast::Receiver<ManagedWsEvent> {
         self.inner.subscribe_events()
     }
@@ -199,6 +227,7 @@ mod tests {
                 client_version: None,
             },
             Arc::new(crate::orders::BytesSigner::from_secret([1u8; 32])),
+            "owner",
         )
         .with_endpoint(MakerWsEndpoint::Data);
 

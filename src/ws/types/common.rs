@@ -13,6 +13,51 @@ pub const FEATURE_QUOTE_EXPIRED: &str = "quote_expired";
 /// The engine cancels the session's open quotes when it disconnects.
 pub const FEATURE_CANCEL_ON_DISCONNECT: &str = "cancel_on_disconnect";
 
+/// Code and reason the server puts on the WebSocket close frame it initiates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
+pub enum CloseCode {
+    IdleTimeout,
+    AuthTimeout,
+    SlowConsumer,
+    RateLimited,
+    SessionReplaced,
+    HelloTimeout,
+}
+
+impl CloseCode {
+    #[must_use]
+    pub const fn code(self) -> u16 {
+        match self {
+            Self::IdleTimeout => 4000,
+            Self::AuthTimeout => 4001,
+            Self::SlowConsumer => 4002,
+            Self::RateLimited => 4003,
+            Self::SessionReplaced => 4004,
+            Self::HelloTimeout => 4005,
+        }
+    }
+
+    #[must_use]
+    pub fn reason(self) -> &'static str {
+        self.into()
+    }
+
+    #[must_use]
+    pub const fn from_code(code: u16) -> Option<Self> {
+        match code {
+            4000 => Some(Self::IdleTimeout),
+            4001 => Some(Self::AuthTimeout),
+            4002 => Some(Self::SlowConsumer),
+            4003 => Some(Self::RateLimited),
+            4004 => Some(Self::SessionReplaced),
+            4005 => Some(Self::HelloTimeout),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -21,9 +66,9 @@ pub enum WsChannel {
     Stats,
     Rfqs,
     Trades,
-    Positions,
     ChainEvents,
     Markets,
+    Vaults,
     #[serde(other)]
     Unknown,
 }
@@ -36,6 +81,7 @@ pub enum WsEndpointKind {
     Maker,
     MakerData,
     Taker,
+    Vault,
     #[serde(other)]
     Unknown,
 }
@@ -85,7 +131,7 @@ pub struct RfqOrderOption {
 }
 
 /// Position size constraints expressed in **underlying** token units.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PositionSizeRule {
     pub min_size: Quantity,
     pub max_size: Quantity,
@@ -119,12 +165,19 @@ pub struct MarketDescriptorInfo {
     pub quote_symbol: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenInfo {
     pub mint: String,
-    pub decimals: Decimals,
-    pub size_rule: PositionSizeRule,
     pub symbol: String,
+    pub decimals: Decimals,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oracle_feed_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_rule: Option<PositionSizeRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike_tick: Option<Strike>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quote_mints: Vec<String>,
 }
 
 /// USD totals from prices captured at signed-transaction submission.
@@ -204,11 +257,6 @@ pub struct MarketStats {
     pub trades_24h: TradeCount,
 }
 
-#[must_use]
-pub const fn default_true() -> bool {
-    true
-}
-
 #[cfg(test)]
 mod usd_stats_tests {
     use super::*;
@@ -234,5 +282,26 @@ mod usd_stats_tests {
         let decoded: GlobalStats =
             serde_json::from_str(&serde_json::to_string(&stats).unwrap()).unwrap();
         assert_eq!(decoded.usd, stats.usd);
+    }
+}
+
+#[cfg(test)]
+mod close_code_tests {
+    use super::CloseCode;
+
+    #[test]
+    fn close_codes_round_trip_through_the_wire_number() {
+        for (close, code, reason) in [
+            (CloseCode::IdleTimeout, 4000, "idle_timeout"),
+            (CloseCode::AuthTimeout, 4001, "auth_timeout"),
+            (CloseCode::SlowConsumer, 4002, "slow_consumer"),
+            (CloseCode::RateLimited, 4003, "rate_limited"),
+            (CloseCode::SessionReplaced, 4004, "session_replaced"),
+            (CloseCode::HelloTimeout, 4005, "hello_timeout"),
+        ] {
+            assert_eq!((close.code(), close.reason()), (code, reason));
+            assert_eq!(CloseCode::from_code(code), Some(close));
+        }
+        assert_eq!(CloseCode::from_code(1000), None);
     }
 }

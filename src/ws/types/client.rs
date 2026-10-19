@@ -8,6 +8,7 @@ use strum::IntoStaticStr;
 use uuid::Uuid;
 
 use super::client_query::*;
+use super::client_vault::*;
 use super::common::{MarketDescriptor, WsChannel};
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]
@@ -17,6 +18,7 @@ use super::common::{MarketDescriptor, WsChannel};
 pub enum ClientMessage {
     Hello(HelloData),
     StartAuth(StartAuthData),
+    StartVaultAuth(StartVaultAuthData),
     ResumeAuth(ResumeAuthData),
     Logout,
     AuthChallenge(AuthChallengeData),
@@ -28,6 +30,9 @@ pub enum ClientMessage {
     RfqRequest(RfqRequestMessage),
     AcceptQuote(AcceptQuoteMessage),
     SubmitSignedSponsoredTx(SubmitSignedSponsoredTxData),
+    SwapQuote(SwapQuoteData),
+    SwapSubmit(SwapSubmitData),
+    GetSwapStatus(GetSwapStatusMessage),
     CancelRfq(CancelRfqData),
     GetIndicativePrices(GetIndicativePricesMessage),
     GetPositions(GetPositionsMessage),
@@ -98,6 +103,7 @@ pub struct CancelQuoteData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitSignedSponsoredTxData {
+    pub request_id: Uuid,
     pub order_id: OrderId,
     pub tx_base64: String,
 }
@@ -203,17 +209,18 @@ pub struct BatchQuotesMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqRequestMessage {
+    /// Also the idempotency key: a repeated `request_id` returns the RFQ it created.
+    pub request_id: Uuid,
     pub market: MarketId,
     pub position_type: PositionType,
     pub strike: Strike,
     pub quantity: Quantity,
     pub timeout_seconds: TimeoutSeconds,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_request_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcceptQuoteMessage {
+    pub request_id: Uuid,
     pub rfq_id: Uuid,
     pub maker: String,
     pub order_id: OrderId,
@@ -277,8 +284,16 @@ impl ClientMessage {
             Self::GetMyReferralInfo(m) => Some(m.request_id),
             Self::RedeemInvite(m) => Some(m.request_id),
             Self::ClaimReferralCode(m) => Some(m.request_id),
+            Self::SwapQuote(m) => Some(m.request_id),
+            Self::SwapSubmit(m) => Some(m.request_id),
+            Self::GetSwapStatus(m) => Some(m.request_id),
+            Self::RfqRequest(m) => Some(m.request_id),
+            Self::AcceptQuote(m) => Some(m.request_id),
+            Self::SubmitSignedSponsoredTx(m) => Some(m.request_id),
+
             Self::Hello(_)
             | Self::StartAuth(_)
+            | Self::StartVaultAuth(_)
             | Self::ResumeAuth(_)
             | Self::Logout
             | Self::AuthChallenge(_)
@@ -286,9 +301,6 @@ impl ClientMessage {
             | Self::ReplaceQuote(_)
             | Self::BatchQuotes(_)
             | Self::IndicativePricesResponse(_)
-            | Self::RfqRequest(_)
-            | Self::AcceptQuote(_)
-            | Self::SubmitSignedSponsoredTx(_)
             | Self::Ping => None,
         }
     }
@@ -350,6 +362,13 @@ impl ClientMessage {
                 | Self::IndicativePricesResponse(_)
                 | Self::CancelQuote(_)
                 | Self::CancelAllQuotes(_)
+                | Self::RfqRequest(_)
+                | Self::AcceptQuote(_)
+                | Self::SubmitSignedSponsoredTx(_)
+                | Self::CancelRfq(_)
+                | Self::SwapQuote(_)
+                | Self::SwapSubmit(_)
+                | Self::GetSwapStatus(_)
                 | Self::GetOrderStatus(_)
                 | Self::Subscribe(_)
                 | Self::Unsubscribe(_)
@@ -364,6 +383,7 @@ impl ClientMessage {
         match self {
             Self::Hello(_)
             | Self::StartAuth(_)
+            | Self::StartVaultAuth(_)
             | Self::ResumeAuth(_)
             | Self::AuthChallenge(_)
             | Self::Logout

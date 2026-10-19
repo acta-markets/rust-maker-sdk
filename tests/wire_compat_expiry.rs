@@ -1,14 +1,9 @@
-//! `valid_until` must stay byte-identical to what the backend emits and accepts.
-//!
-//! The backend uses `UnixSecondsU64`: it truncates to whole seconds on
-//! serialize and reads a bare `u64` on deserialize. `QuoteExpiry` must match on
-//! both directions, or quotes are rejected as `order_id preimage mismatch`.
+//! `QuoteExpiry` must match backend `UnixSecondsU64`: truncate on serialization,
+//! read a bare u64. Drift breaks order preimage verification.
 
 use acta_maker_sdk::QuoteExpiry;
 use acta_maker_sdk::ws::types::*;
 
-/// Exactly the shape the backend emits, hand-written rather than round-tripped
-/// through our own serializer, so a change on our side cannot hide itself.
 #[test]
 fn server_frames_parse_with_a_bare_integer_expiry() {
     let quote_received = r#"{"type":"QuoteReceived","data":{

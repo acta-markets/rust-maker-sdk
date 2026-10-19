@@ -46,6 +46,10 @@ impl DesiredSubscriptions {
         }
     }
 
+    pub(super) fn wants_vault_feed(&self) -> bool {
+        self.current.channels.contains(&WsChannel::Vaults)
+    }
+
     #[must_use]
     pub(super) fn has_pending(&self) -> bool {
         self.pending.is_some()
@@ -185,7 +189,7 @@ fn normalized(mints: Option<&[String]>) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ws::types::{RequestErrorEnvelope, ServerError};
+    use crate::ws::types::{RequestErrorEnvelope, ServerError, WsErrorCode};
 
     fn initial() -> SubscribeData {
         SubscribeData {
@@ -209,9 +213,10 @@ mod tests {
         desired.resolve(&ServerMessage::RequestError(RequestErrorEnvelope {
             request_id,
             error: ServerError::Generic {
-                code: "rejected".to_string(),
+                code: WsErrorCode::Unknown("rejected".into()),
                 message: "test".to_string(),
             },
+            delivery: None,
         }));
 
         let recovery = desired.recovery(&SubscriptionsMessage {

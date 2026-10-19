@@ -1,21 +1,61 @@
 use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
-    account::Account, instruction::Instruction, pubkey::Pubkey, signature::Signature,
-    signer::Signer, transaction::Transaction,
+    account::Account, instruction::Instruction, message::AddressLookupTableAccount, pubkey::Pubkey,
+    signature::Signature, signer::Signer, transaction::Transaction,
 };
 
 use crate::chain::ChainError;
-use crate::chain::accounts::{MarketInfo, PositionInfo, parse_market, parse_position};
+use crate::chain::accounts::{MarketInfo, PositionInfo};
 use crate::chain::ix::{
-    DepositPremiumIxArgs, FundPositionIxArgs, WithdrawPremiumIxArgs, build_deposit_premium_ixs,
-    build_fund_position_ixs, build_withdraw_premium_ixs,
+    DepositPremiumIxArgs, FundPositionIxArgs, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    WithdrawPremiumIxArgs, build_deposit_premium_ixs, build_fund_position_ixs,
+    build_withdraw_premium_ixs,
 };
 use crate::chain::settlement::required_settlement;
 use crate::chain::wsol::{
     NativeSolBudget, NativeSolFunding, WrapPlan, WsolWrapRequest, is_native_mint, plan_wsol_wrap,
     token_account_rent_lamports,
 };
+
+const ADDRESS_LOOKUP_TABLE_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("AddressLookupTab1e1111111111111111111111111");
+const LOOKUP_TABLE_META_LEN: usize = 56;
+
+fn parse_lookup_table(
+    key: Pubkey,
+    account: &Account,
+) -> Result<AddressLookupTableAccount, ChainError> {
+    if account.owner != ADDRESS_LOOKUP_TABLE_PROGRAM_ID {
+        return Err(ChainError::AccountOwnerMismatch {
+            expected: ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
+            actual: account.owner,
+        });
+    }
+    let data = &account.data;
+    let (Some(kind), Some(deactivation), Some(addresses)) = (
+        data.get(..4),
+        data.get(4..12),
+        data.get(LOOKUP_TABLE_META_LEN..),
+    ) else {
+        return Err(ChainError::InvalidAccountData);
+    };
+    if kind != 1u32.to_le_bytes() || addresses.len() % 32 != 0 {
+        return Err(ChainError::InvalidAccountData);
+    }
+    if deactivation != u64::MAX.to_le_bytes() {
+        return Err(ChainError::LookupTableDeactivated(key));
+    }
+    Ok(AddressLookupTableAccount {
+        key,
+        addresses: addresses
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .map(|bytes| Pubkey::new_from_array(*bytes))
+            .collect(),
+    })
+}
 
 pub struct ChainClient {
     rpc: RpcClient,
@@ -180,9 +220,9 @@ impl ChainClient {
         fee_payer: Pubkey,
     ) -> Result<PreparedFundPosition, ChainError> {
         let position_data = self.fetch_account(&args.position_pda).await?;
-        let pos = parse_position(&position_data, &self.program_id)?;
+        let pos = PositionInfo::from_account(&position_data, &self.program_id)?;
         let market_data = self.fetch_account(&pos.market_pda).await?;
-        let market = parse_market(&market_data, &self.program_id)?;
+        let market = MarketInfo::from_account(&market_data, &self.program_id)?;
 
         let mut fund_ixs = build_fund_position_ixs(
             &self.program_id,
@@ -311,12 +351,12 @@ impl ChainClient {
         position_pda: &Pubkey,
     ) -> Result<PositionInfo, ChainError> {
         let data = self.fetch_account(position_pda).await?;
-        parse_position(&data, &self.program_id)
+        PositionInfo::from_account(&data, &self.program_id)
     }
 
     pub async fn fetch_market_info(&self, market_pda: &Pubkey) -> Result<MarketInfo, ChainError> {
         let market_data = self.fetch_account(market_pda).await?;
-        parse_market(&market_data, &self.program_id)
+        MarketInfo::from_account(&market_data, &self.program_id)
     }
 
     pub async fn fetch_market_quote_mint(&self, market_pda: &Pubkey) -> Result<Pubkey, ChainError> {
@@ -332,6 +372,25 @@ impl ChainClient {
             .map_err(|_| ChainError::InvalidAccountData)
     }
 
+    /// Active lookup tables by key, for verifying served v0 transactions.
+    pub async fn address_lookup_tables(
+        &self,
+        keys: &[Pubkey],
+    ) -> Result<Vec<AddressLookupTableAccount>, ChainError> {
+        let accounts = self
+            .rpc
+            .get_multiple_accounts_with_commitment(keys, self.commitment)
+            .await?
+            .value;
+        keys.iter()
+            .zip(accounts)
+            .map(|(key, account)| match account {
+                Some(account) => parse_lookup_table(*key, &account),
+                None => Err(ChainError::MissingLookupTable(*key)),
+            })
+            .collect()
+    }
+
     async fn resolve_token_program(
         &self,
         mint: &Pubkey,
@@ -344,8 +403,51 @@ impl ChainClient {
         ensure_supported_token_program(account.owner)
     }
 
-    async fn fetch_account(&self, pubkey: &Pubkey) -> Result<Account, ChainError> {
+    pub(crate) async fn fetch_account(&self, pubkey: &Pubkey) -> Result<Account, ChainError> {
         self.rpc.get_account(pubkey).await.map_err(ChainError::from)
+    }
+
+    /// Program accounts matching `filters`, fetched at the client's commitment.
+    pub(crate) async fn program_accounts(
+        &self,
+        filters: Vec<solana_rpc_client::api::filter::RpcFilterType>,
+    ) -> Result<Vec<(Pubkey, Account)>, ChainError> {
+        use solana_rpc_client::api::config::{
+            RpcAccountInfoConfig, RpcProgramAccountsConfig, UiAccountEncoding,
+        };
+        self.rpc
+            .get_program_ui_accounts_with_config(
+                &self.program_id,
+                RpcProgramAccountsConfig {
+                    filters: Some(filters),
+                    account_config: RpcAccountInfoConfig {
+                        encoding: Some(UiAccountEncoding::Base64),
+                        commitment: Some(self.commitment),
+                        ..RpcAccountInfoConfig::default()
+                    },
+                    ..RpcProgramAccountsConfig::default()
+                },
+            )
+            .await?
+            .into_iter()
+            .map(|(address, account)| {
+                account
+                    .decode::<Account>()
+                    .map(|account| (address, account))
+                    .ok_or(ChainError::InvalidAccountData)
+            })
+            .collect()
+    }
+
+    pub(crate) async fn fetch_optional_account(
+        &self,
+        pubkey: &Pubkey,
+    ) -> Result<Option<Account>, ChainError> {
+        Ok(self
+            .rpc
+            .get_account_with_commitment(pubkey, self.commitment)
+            .await?
+            .value)
     }
 
     pub async fn send_instructions_with_options(
@@ -412,10 +514,6 @@ fn sign_transaction(
     Ok(())
 }
 
-const TOKEN_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const TOKEN_2022_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-
 fn ensure_supported_token_program(program: Pubkey) -> Result<Pubkey, ChainError> {
     if program == TOKEN_PROGRAM_ID || program == TOKEN_2022_PROGRAM_ID {
         Ok(program)
@@ -427,3 +525,7 @@ fn ensure_supported_token_program(program: Pubkey) -> Result<Pubkey, ChainError>
 #[cfg(test)]
 #[path = "rpc_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rpc_mock.rs"]
+mod mock;

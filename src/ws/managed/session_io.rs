@@ -11,8 +11,7 @@ use crate::ws::managed::tracker::AwaitTracker;
 use crate::ws::managed::{ManagedCommand, ManagedWsConfig, ManagedWsError, SendAwaitError};
 use crate::ws::types::ClientMessage;
 
-/// Route a handle command onto the writer lanes. Never blocks: a full lane is
-/// reported to the caller, and the socket itself is the writer task's problem.
+/// Enqueue without blocking; report a full writer lane to the caller.
 pub(super) fn handle_command(
     maybe_cmd: Option<ManagedCommand>,
     lanes: &WriterLanes,
@@ -178,7 +177,6 @@ mod tests {
         });
         let send = handle.send_in_epoch(quote, 1);
         tokio::pin!(send);
-        // Deterministically park at queue capacity, after the Ready check.
         assert!(futures_util::poll!(send.as_mut()).is_pending());
         handle.inject_state(ManagedWsState::Ready {
             connection_epoch: 2,

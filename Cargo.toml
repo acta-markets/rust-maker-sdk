@@ -1,6 +1,6 @@
 [package]
 name = "acta-maker-sdk"
-version = "0.4.3"
+version = "0.5.2"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -10,18 +10,20 @@ documentation = "https://beta.acta.markets/docs"
 keywords = ["rfq", "options", "defi", "solana", "market-maker"]
 categories = ["api-bindings"]
 readme = "README.md"
-exclude = ["scripts/"]
+exclude = ["scripts/", ".github/"]
 
 [package.metadata.docs.rs]
-features = ["ws-client", "chain-rpc"]
+features = ["ws-client", "chain-rpc", "vault", "http"]
 targets = []
 
 [dependencies]
+base64 = { version = "0.22", optional = true }
 bs58 = "0.5"
 ed25519-dalek = { version = "2", features = ["zeroize"] }
 futures-util = { version = "0.3", optional = true }
 hex = "0.4"
 rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = { version = "3.16.1", features = ["macros"] }
@@ -44,13 +46,15 @@ solana-compute-budget-interface = { version = "3.0.0", optional = true }
 default = []
 ws-client = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite"]
 test-helpers = ["ws-client"]
-chain = ["dep:solana-sdk"]
+vault = ["ws-client", "chain"]
+chain = ["dep:solana-sdk", "dep:base64"]
 chain-rpc = [
   "chain",
   "dep:solana-rpc-client",
   "dep:solana-commitment-config",
   "dep:solana-compute-budget-interface",
 ]
+http = ["dep:reqwest"]
 
 [[example]]
 name = "hello_auth"
@@ -58,7 +62,7 @@ required-features = ["ws-client"]
 
 [[example]]
 name = "quote"
-required-features = ["ws-client"]
+required-features = ["ws-client", "http"]
 
 [[example]]
 name = "discovery"
@@ -70,11 +74,19 @@ required-features = ["ws-client"]
 
 [[example]]
 name = "managed_quote"
-required-features = ["ws-client"]
+required-features = ["ws-client", "http"]
 
 [[example]]
 name = "loopback_latency"
 required-features = ["ws-client"]
+
+[[example]]
+name = "vault_operator"
+required-features = ["vault", "http"]
+
+[[example]]
+name = "vault_capital"
+required-features = ["chain-rpc"]
 
 [dev-dependencies]
 async-trait = "0.1"

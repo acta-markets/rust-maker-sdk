@@ -37,12 +37,18 @@ pub use types::invite::{
     REFERRAL_CODE_MAX_LEN, REFERRAL_CODE_MIN_LEN, RESERVED_CODES, ReferralCode,
     ReferralCodeFormatError, TakerStatus, is_reserved,
 };
+pub use types::vault::{
+    VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection, VaultSwapMode,
+};
 
 #[cfg(feature = "chain")]
 pub mod chain;
 
+#[cfg(feature = "http")]
+pub mod http;
+
 #[cfg(feature = "ws-client")]
-pub use ws::client::{PreparedClientMessage, WsClient, WsTransportConfig};
+pub use ws::client::{PreparedClientMessage, ServerClose, WsClient, WsTransportConfig};
 
 #[cfg(feature = "ws-client")]
 pub use ws::error::{WsClientError, WsResult, WsTransportConfigError};
@@ -62,6 +68,15 @@ pub use ws::managed::{
     normalize_maker_ws_url_for_endpoint, spawn_managed_ws,
 };
 pub use ws::types::{ClientMessage, ServerMessage};
+#[cfg(all(feature = "vault", feature = "http"))]
+pub use ws::vault::{FleetListing, VaultFleet, VaultFleetConfig};
+#[cfg(all(feature = "vault", feature = "chain-rpc"))]
+pub use ws::vault::{SaleDesk, SaleError, SaleOutcome, SaleStage, SignedSale, VaultSale};
+#[cfg(feature = "vault")]
+pub use ws::vault::{
+    SendGate, Ungated, VaultClientError, VaultOperatorClient, VaultOperatorConfig, VaultProjection,
+    VaultProjectionReceiver, VaultRequestError, VaultTxError,
+};
 
 pub use nonce::{AtomicNonceGenerator, NonceError, NonceGenerator};
 pub use orders::{

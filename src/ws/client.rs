@@ -1,25 +1,29 @@
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async_with_config,
-    tungstenite::{Bytes, Message, Utf8Bytes, protocol::WebSocketConfig},
+    tungstenite::{
+        Bytes, Message, Utf8Bytes,
+        protocol::{CloseFrame, WebSocketConfig},
+    },
 };
 
 use crate::ws::error::{WsClientError, WsResult, WsTransportConfigError};
 use crate::ws::types::{
     AcceptQuoteMessage, AddChannelsData, AddMintsData, AuthChallengeData, BatchQuotesMessage,
     CancelAllQuotesMessage, CancelQuoteData, CancelRfqData, ClaimReferralCodeData, ClientMessage,
-    GetActiveRfqsMessage, GetExpiriesMessage, GetIndicativePricesMessage, GetMakerPositionsMessage,
-    GetMarketDescriptorsMessage, GetMarketsForMakerMessage, GetMarketsMessage, GetMmSummaryMessage,
-    GetMyActiveRfqsMessage, GetMyQuotesMessage, GetMyReferralInfoData, GetOrderStatusMessage,
-    GetPositionsMessage, GetSubscriptionsMessage, GetTokensMessage, HelloData,
-    IndicativePricesResponseMessage, Lane, QuoteMessage, RedeemInviteData, RemoveChannelsData,
-    RemoveMintsData, ReplaceQuoteMessage, ResumeAuthData, RfqRequestMessage, ServerMessage,
-    StartAuthData, SubmitSignedSponsoredTxData, SubscribeData, UnsubscribeData, WsChannel,
-    parse_server_message,
+    CloseCode, GetActiveRfqsMessage, GetExpiriesMessage, GetIndicativePricesMessage,
+    GetMakerPositionsMessage, GetMarketDescriptorsMessage, GetMarketsForMakerMessage,
+    GetMarketsMessage, GetMmSummaryMessage, GetMyActiveRfqsMessage, GetMyQuotesMessage,
+    GetMyReferralInfoData, GetOrderStatusMessage, GetPositionsMessage, GetSubscriptionsMessage,
+    GetTokensMessage, HelloData, IndicativePricesResponseMessage, Lane, QuoteMessage,
+    RedeemInviteData, RemoveChannelsData, RemoveMintsData, ReplaceQuoteMessage, ResumeAuthData,
+    RfqRequestMessage, ServerMessage, StartAuthData, SubmitSignedSponsoredTxData, SubscribeData,
+    UnsubscribeData, WsChannel, parse_server_message,
 };
 use uuid::Uuid;
 
@@ -47,15 +51,40 @@ macro_rules! ws_method_request_id {
 
 pub struct WsClient {
     stream: Socket,
+    server_close: Arc<OnceLock<ServerClose>>,
 }
 
 /// Read half of a split [`WsClient`]. Liveness frames are returned, not
 /// answered, so the owner decides which lane the reply takes.
 pub(crate) struct WsReader {
     stream: SplitStream<Socket>,
+    server_close: Arc<OnceLock<ServerClose>>,
 }
 
-// Avoid a per-frame allocation.
+/// The close frame the server sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerClose {
+    pub code: u16,
+    pub reason: String,
+}
+
+impl ServerClose {
+    /// `None` for codes outside [`CloseCode`].
+    #[must_use]
+    pub const fn close_code(&self) -> Option<CloseCode> {
+        CloseCode::from_code(self.code)
+    }
+}
+
+fn record_close(slot: &OnceLock<ServerClose>, frame: Option<CloseFrame>) {
+    if let Some(frame) = frame {
+        let _ = slot.set(ServerClose {
+            code: u16::from(frame.code),
+            reason: frame.reason.to_string(),
+        });
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum WsFrame {
     Message(ServerMessage),
@@ -169,7 +198,10 @@ impl WsClient {
         let (stream, _response) = tokio::time::timeout(config.connect_timeout, connect)
             .await
             .map_err(|_| WsClientError::ConnectTimeout)??;
-        Ok(Self { stream })
+        Ok(Self {
+            stream,
+            server_close: Arc::default(),
+        })
     }
 
     pub async fn send(&mut self, msg: &ClientMessage) -> WsResult<()> {
@@ -345,6 +377,24 @@ impl WsClient {
         Ok(())
     }
 
+    /// The server's close frame once [`Self::next`] has returned `None` after one.
+    #[must_use]
+    pub fn server_close(&self) -> Option<&ServerClose> {
+        self.server_close.get()
+    }
+
+    pub(crate) fn server_close_slot(&self) -> Arc<OnceLock<ServerClose>> {
+        Arc::clone(&self.server_close)
+    }
+
+    /// Read until the server's close frame or end of stream, at most `grace`.
+    pub(crate) async fn await_server_close(&mut self, grace: Duration) {
+        let _ = tokio::time::timeout(grace, async {
+            while let Some(Ok(_)) = self.next().await {}
+        })
+        .await;
+    }
+
     pub async fn next(&mut self) -> Option<Result<ServerMessage, WsClientError>> {
         loop {
             let msg = match self.stream.next().await {
@@ -367,7 +417,10 @@ impl WsClient {
                     }
                 }
                 Message::Pong(_) => {}
-                Message::Close(_) => return None,
+                Message::Close(frame) => {
+                    record_close(&self.server_close, frame);
+                    return None;
+                }
                 Message::Frame(_) => {}
             }
         }
@@ -380,11 +433,25 @@ impl WsClient {
 
     pub(crate) fn split(self) -> (WsSink, WsReader) {
         let (sink, stream) = self.stream.split();
-        (sink, WsReader { stream })
+        (
+            sink,
+            WsReader {
+                stream,
+                server_close: self.server_close,
+            },
+        )
     }
 }
 
 impl WsReader {
+    /// Read until the server's close frame or end of stream, at most `grace`.
+    pub(crate) async fn await_server_close(&mut self, grace: Duration) {
+        let _ = tokio::time::timeout(grace, async {
+            while let Some(Ok(_)) = self.next().await {}
+        })
+        .await;
+    }
+
     pub(crate) async fn next(&mut self) -> Option<WsResult<WsFrame>> {
         loop {
             let msg = match self.stream.next().await {
@@ -397,7 +464,10 @@ impl WsReader {
                 Message::Binary(bin) => parse_binary(&bin).map(WsFrame::Message),
                 Message::Ping(payload) => Ok(WsFrame::Ping(payload)),
                 Message::Pong(_) => Ok(WsFrame::Pong),
-                Message::Close(_) => return None,
+                Message::Close(frame) => {
+                    record_close(&self.server_close, frame);
+                    return None;
+                }
                 Message::Frame(_) => continue,
             };
             return Some(frame.map_err(WsClientError::from));
