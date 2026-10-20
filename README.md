@@ -32,7 +32,7 @@ Requires Rust 1.89 or later.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.5.2", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.5.3", features = ["ws-client"] }
 ```
 
 ### 3. Run the examples
@@ -47,8 +47,9 @@ cargo run --locked --features ws-client --example hello_auth           # authent
 cargo run --locked --features ws-client,http --example managed_quote   # recover state, quote RFQs
 ```
 
-`ACTA_WS_URL` defaults to `wss://devnet-api.acta.markets`. The quoting examples
-read `min_quote_validity_seconds` from `GET /api/v1/venue` on the same host. `managed_quote` and
+`ACTA_WS_URL` defaults to `wss://devnet-api.acta.markets` (`DEVNET_WS`; the
+other origins are `MAINNET_WS`, `DEVNET_API` and `MAINNET_API`). The quoting
+examples read `GET /api/v1/venue` on the same host and apply it with `.venue(&venue)`. `managed_quote` and
 `quote` submit real signed quotes at a fixed demonstration price of
 `1_000_000_000` (one quote token per underlying token), so use a test maker on
 devnet. They do not price, hedge or fund.
@@ -70,7 +71,7 @@ let signer = Arc::new(BytesSigner::from_keypair(&keypair)?); // quote-signing ke
 let maker_owner = decode_base58_32(&owner)?;
 
 let config = ManagedWsConfig::new(
-    "wss://devnet-api.acta.markets",
+    DEVNET_WS,
     HelloData {
         protocol_version: WS_PROTOCOL_VERSION.to_string(),
         features: vec![],
@@ -116,7 +117,9 @@ while let Ok(msg) = messages.recv().await {
         ServerMessage::QuoteAcknowledged(ack) => println!("accepted {:?}", ack.order_id),
         ServerMessage::QuoteOutbid(outbid) => println!("outbid on {}", outbid.rfq_id),
         ServerMessage::QuoteRejected(rejected) => println!("rejected {:?}", rejected.reason),
-        ServerMessage::QuoteFilled(fill) => println!("filled, position {}", fill.position_pda),
+        ServerMessage::QuoteFilled(fill) => {
+            println!("filled on {}, position {}", fill.market_pda, fill.position_pda)
+        }
         ServerMessage::RfqClosed(closed) => println!("closed {:?}", closed.reason),
         _ => {}
     }
@@ -153,7 +156,7 @@ owner's ATA directly; no SDK call is needed.
   Read `vault_operator`, `vault_capital` and [Vault operators](#vault-operators).
 - **Chain helpers** (`chain`, `chain-rpc`): premium deposit/withdrawal and
   position funding, account decoders. See [Chain helpers](#chain-helpers).
-- **HTTP** (`http`): `HttpClient` for venue limits, tokens, markets and vaults.
+- **HTTP** (`http`): `HttpClient` for venue limits, tokens, markets, vaults and vault exposure.
   See [HTTP reference data](#http-reference-data).
 
 ## Features and examples
@@ -330,7 +333,17 @@ PDA yourself before using `compute_order_id` and the low-level signing functions
   `.min_valid_until(now + min_quote_validity_seconds)` (from `GET /api/v1/venue`)
   and the market expiry; otherwise signing fails with `ValidUntilTooSoon` or
   `ValidUntilAfterMarketExpiry` instead of a server `quote_expiry_too_short` /
-  `market_expired` rejection.
+  `market_expired` rejection. With the `http` feature, `.venue(&venue)` sets that
+  floor from `HttpClient::venue()` at the current clock and also refuses a
+  `valid_until` whose `valid_until − settlement_buffer_seconds` is not after now
+  (`ValidUntilWithinSettlementBuffer`).
+- Human units: `Price::as_decimal()` / `Strike::as_decimal()` (display `f64`),
+  `Quantity::to_units(underlying_decimals)`, and
+  `total_premium_quote_atoms(price, quantity, underlying_decimals, quote_decimals)`,
+  the premium in quote atoms rounded exactly as the contract does. Decimals come
+  from `GetMarketDescriptors` on `/maker/data`; `MarketDecimals` keeps them by
+  `market_pda` (`observe(&message)`, `get(market_pda)`), which `RfqBroadcast.market`
+  and `QuoteFilled` both name.
 - `.maker_owner(owner)` is required, also when the owner signs; a missing owner,
   floor, price, expiry or nonce is `QuoteBuildError::Missing`.
 

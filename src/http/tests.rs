@@ -5,12 +5,13 @@ use serde_json::Value;
 
 use super::types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 use super::{
-    HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultPerformance, VaultPositionRole,
+    HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultExposure, VaultPositionRole,
     VaultPositionStatus, VaultPositionType, Venue,
 };
 use crate::ws::types::MarketStatus;
 
 const VAULTS: &str = include_str!("../../tests/fixtures/http_vaults.json");
+const EXPOSURE: &str = include_str!("../../tests/fixtures/http_exposure.json");
 const MARKETS: &str = include_str!("../../tests/fixtures/http_markets.json");
 const POSITIONS: &str = include_str!("../../tests/fixtures/http_vault_positions.json");
 const VENUE: &str = include_str!("../../tests/fixtures/http_venue.json");
@@ -26,23 +27,58 @@ fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(json: &str) -> 
 #[test]
 fn vaults_round_trip_the_backend_shape() {
     let response: VaultsResponse = round_trip(VAULTS);
-    let [idle, active] = response.vaults.as_slice() else {
+    let [full, minimal] = response.vaults.as_slice() else {
         panic!("two vaults");
     };
-    assert_eq!(idle.second_token_program, TokenProgramKind::Token2022);
-    assert_eq!(idle.main_balance.as_deref(), Some("900"));
-    assert!(idle.accepting_deposits && !idle.equity_computed);
-    assert!(matches!(
-        idle.performance,
-        VaultPerformance::ShortTrackRecord(_)
-    ));
-    assert_eq!(active.phase, "active");
-    assert_eq!(active.active_expiry, "1767225600");
-    assert!(active.main_balance.is_none());
-    assert!(matches!(
-        active.performance,
-        VaultPerformance::Annualized { annualized_return_pct, .. } if annualized_return_pct > 54.0
-    ));
+    assert_eq!(full.second_token_program, TokenProgramKind::Token2022);
+    assert_eq!(full.phase, "active");
+    assert_eq!(full.capacity.remaining.as_deref(), Some("860"));
+    assert_eq!(full.tvl_usd_1e9.as_deref(), Some("18000"));
+    assert_eq!(full.depositors_in_generation, Some(11));
+    let premium = full.premium.as_deref().unwrap();
+    assert_eq!(premium[0].generation.paid.as_deref(), Some("7"));
+    assert!(premium[1].generation.paid.is_none());
+    assert_eq!(full.fees.as_ref().unwrap().realized_fee_value, "6");
+    let performance = full.performance.as_ref().unwrap();
+    assert!(performance.covered);
+    assert_eq!(performance.capital_generation, full.capital_generation);
+    assert!(performance.returns.d7.is_none());
+    assert_eq!(performance.returns.d30.as_ref().unwrap().return_pct, 1.5);
+    assert_eq!(performance.cycles_completed, Some(4));
+    assert_eq!(
+        full.metadata
+            .as_ref()
+            .map(|m| (m.name.as_str(), m.twitter.as_deref())),
+        Some(("SOL vault", Some("acta_markets")))
+    );
+
+    assert_eq!(minimal.metadata, None);
+    assert!(minimal.main_balance.is_none() && minimal.deposit_window_set_ts.is_none());
+    assert_eq!(minimal.capacity.remaining, None);
+    assert!(minimal.premium.is_none() && minimal.fees.is_none() && minimal.tvl_usd_1e9.is_none());
+    let performance = minimal.performance.as_ref().unwrap();
+    assert!(!performance.covered);
+    assert!(performance.returns.all.is_none() && performance.cycles_completed.is_none());
+}
+
+#[test]
+fn vault_exposure_round_trips_the_backend_shape() {
+    let exposure: VaultExposure = round_trip(EXPOSURE);
+    assert_eq!(exposure.as_of, "1702600005");
+    let [call, put, unpriced] = exposure.positions.as_slice() else {
+        panic!("three positions");
+    };
+    assert_eq!(call.role, VaultPositionRole::Writer);
+    assert_eq!(call.itm, Some(true));
+    assert_eq!(call.intrinsic.as_deref(), Some("-20000000"));
+    assert_eq!(put.position_type, VaultPositionType::CashSecuredPut);
+    assert_eq!(put.status, VaultPositionStatus::Funded);
+    assert!(unpriced.spot.is_none() && unpriced.quote_decimals.is_none());
+    assert_eq!(
+        exposure.totals[0].outstanding_intrinsic.as_deref(),
+        Some("-10000000")
+    );
+    assert!(exposure.totals[1].notional_at_strike.is_none());
 }
 
 #[test]
@@ -100,13 +136,12 @@ fn vault_positions_round_trip_the_backend_shape() {
 fn unknown_enum_values_decode() {
     let mut value: Value = serde_json::from_str(VAULTS).unwrap();
     value["vaults"][0]["main_token_program"] = "token_2099".into();
-    value["vaults"][0]["performance"] = serde_json::json!({"status": "new_kind"});
+    value["vaults"][0]["performance"]["new_metric"] = 1.into();
     let response: VaultsResponse = serde_json::from_value(value).unwrap();
     assert_eq!(
         response.vaults[0].main_token_program,
         TokenProgramKind::Unknown
     );
-    assert_eq!(response.vaults[0].performance, VaultPerformance::Unknown);
 }
 
 fn serve(responses: Vec<(&'static str, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
@@ -141,6 +176,7 @@ async fn client_reads_public_routes() {
         ("200 OK", MARKETS.to_string()),
         ("200 OK", TOKENS.to_string()),
         ("200 OK", VENUE.to_string()),
+        ("200 OK", EXPOSURE.to_string()),
         (
             "404 Not Found",
             r#"{"error":"Vault not found"}"#.to_string(),
@@ -152,7 +188,7 @@ async fn client_reads_public_routes() {
         .vault("11111111111111111111111111111111")
         .await
         .unwrap();
-    assert_eq!(vault.open_positions, "2");
+    assert!(vault.metadata.is_none());
     assert_eq!(
         client
             .markets(&MarketFilter::default())
@@ -168,6 +204,15 @@ async fn client_reads_public_routes() {
     );
     assert_eq!(tokens.len(), 2);
     assert_eq!(client.venue().await.unwrap().settlement_buffer_seconds, 90);
+    let exposure = client
+        .vault_exposure("11111111111111111111111111111111")
+        .await
+        .unwrap();
+    assert_eq!(exposure.positions.len(), 3);
+    assert!(matches!(
+        client.vault_exposure("../markets").await,
+        Err(HttpError::Address(_))
+    ));
     let missing = client.vault("11111111111111111111111111111111").await;
     assert!(matches!(
         missing,
@@ -185,6 +230,7 @@ async fn client_reads_public_routes() {
             "/api/v1/markets",
             "/api/v1/tokens",
             "/api/v1/venue",
+            "/api/v1/vaults/11111111111111111111111111111111/exposure",
             "/api/v1/vaults/11111111111111111111111111111111",
         ]
     );

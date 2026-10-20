@@ -1,8 +1,8 @@
 use crate::types::unix_time::UnixSeconds;
 use std::time::SystemTime;
 
-use crate::types::QuoteExpiry;
 use crate::types::ids::{Nonce, OrderId, Price, Quantity, Strike};
+use crate::types::{PositionType, QuoteExpiry};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use strum::IntoStaticStr;
@@ -51,6 +51,12 @@ pub struct QuoteOutbidMessage {
 pub struct QuoteFilledMessage {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
+    pub market_pda: String,
+    /// `None` when the server no longer knows the market; resolve it from `market_pda`.
+    #[serde(default)]
+    #[serde_as(as = "Option<UnixSeconds>")]
+    pub expiry_ts: Option<SystemTime>,
+    pub position_type: PositionType,
     pub taker: String,
     pub price: Price,
     pub quantity: Quantity,

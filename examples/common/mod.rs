@@ -28,7 +28,7 @@ pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
     };
     let url = match std::env::var("ACTA_WS_URL") {
         Ok(url) => url,
-        Err(std::env::VarError::NotPresent) => "wss://devnet-api.acta.markets".into(),
+        Err(std::env::VarError::NotPresent) => acta_maker_sdk::DEVNET_WS.into(),
         Err(error) => return Err(error.into()),
     };
     Ok(Config { signer, owner, url })

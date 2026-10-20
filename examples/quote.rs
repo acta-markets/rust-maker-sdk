@@ -18,7 +18,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let common::Config { signer, owner, url } = common::load()?;
     let owner = owner.ok_or("set ACTA_MAKER_OWNER to the registered maker owner")?;
     let maker_owner = acta_maker_sdk::decode_base58_32(&owner)?;
-    let min_validity = venue::min_quote_validity(&url).await?;
+    let venue = venue::load(&url).await?;
+    let lifetime = std::time::Duration::from_secs(u64::from(venue.min_quote_validity_seconds) + 60);
     let mut client = WsClient::connect(&normalize_maker_ws_url(&url)).await?;
 
     client
@@ -54,17 +55,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             }
             ServerMessage::RfqBroadcast(rfq) => {
-                let min_valid_until = QuoteExpiry::after(min_validity)
-                    .ok_or("system clock is before the Unix epoch")?;
                 let valid_until =
-                    QuoteExpiry::after(min_validity + std::time::Duration::from_secs(60))
-                        .ok_or("system clock is before the Unix epoch")?;
+                    QuoteExpiry::after(lifetime).ok_or("system clock is before the Unix epoch")?;
                 let quote = match RfqBinding::from_broadcast(&rfq)?
                     .quote()
                     .maker_owner(maker_owner)
                     .price(Price::new(1_000_000_000))
                     .valid_until(valid_until)
-                    .min_valid_until(min_valid_until)
+                    .venue(&venue)
                     .nonce(Nonce::new(NONCE_GEN.next_u64()?))
                     .sign(&signer)
                 {

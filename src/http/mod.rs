@@ -12,8 +12,10 @@ use serde::de::DeserializeOwned;
 
 use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 pub use types::{
-    ProjectionCursor, TokenProgramKind, TrackRecord, Vault, VaultPerformance, VaultPolicy,
-    VaultPosition, VaultPositionRole, VaultPositionStatus, VaultPositionType, Venue,
+    PremiumFlow, ProjectionCursor, TokenProgramKind, Vault, VaultCapacity, VaultExposure,
+    VaultExposurePosition, VaultExposureTotal, VaultFees, VaultMetadata, VaultPerformance,
+    VaultPolicy, VaultPosition, VaultPositionRole, VaultPositionStatus, VaultPositionType,
+    VaultPremium, VaultReturns, Venue, WindowReturn,
 };
 
 use crate::ws::types::{MarketInfo, TokenInfo};
@@ -143,6 +145,12 @@ impl HttpClient {
                 None => return Ok(positions),
             }
         }
+    }
+
+    /// Open and funded positions with indicative spot, moneyness and intrinsic value.
+    pub async fn vault_exposure(&self, pda: &str) -> Result<VaultExposure, HttpError> {
+        let _ = decode_base58_32(pda)?;
+        self.get(&format!("/api/v1/vaults/{pda}/exposure")).await
     }
 
     pub async fn markets(&self, filter: &MarketFilter) -> Result<Vec<MarketInfo>, HttpError> {

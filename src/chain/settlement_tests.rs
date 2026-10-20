@@ -1,4 +1,5 @@
 use super::*;
+use crate::PRICE_SCALE;
 
 #[test]
 fn covered_call_matches_contract_decimal_scaling() {

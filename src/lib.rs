@@ -9,6 +9,7 @@
 )]
 
 pub mod error;
+pub mod network;
 pub mod nonce;
 pub mod orders;
 pub mod quote;
@@ -18,6 +19,7 @@ pub mod wire;
 pub mod ws;
 
 pub use error::ActaSdkError;
+pub use network::{DEVNET_API, DEVNET_WS, MAINNET_API, MAINNET_WS};
 
 pub const WS_PROTOCOL_VERSION: &str = "1.0.0";
 
@@ -37,6 +39,7 @@ pub use types::invite::{
     REFERRAL_CODE_MAX_LEN, REFERRAL_CODE_MIN_LEN, RESERVED_CODES, ReferralCode,
     ReferralCodeFormatError, TakerStatus, is_reserved,
 };
+pub use types::total_premium_quote_atoms;
 pub use types::vault::{
     VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection, VaultSwapMode,
 };
@@ -67,6 +70,7 @@ pub use ws::managed::{
     WaitUntilReadyError, normalize_maker_data_ws_url, normalize_maker_ws_url,
     normalize_maker_ws_url_for_endpoint, spawn_managed_ws,
 };
+pub use ws::market_decimals::{MarketDecimals, TokenDecimals};
 pub use ws::types::{ClientMessage, ServerMessage};
 #[cfg(all(feature = "vault", feature = "http"))]
 pub use ws::vault::{FleetListing, VaultFleet, VaultFleetConfig};

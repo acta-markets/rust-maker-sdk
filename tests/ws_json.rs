@@ -463,6 +463,60 @@ fn quote_acknowledged_roundtrip() {
 }
 
 #[test]
+fn quote_filled_names_its_market() {
+    let frame = json!({
+        "type": "QuoteFilled",
+        "data": {
+            "rfq_id": "00000000-0000-0000-0000-000000000001",
+            "order_id": "01".repeat(32),
+            "market_pda": "market",
+            "expiry_ts": 1_700_000_000,
+            "position_type": "cash_secured_put",
+            "taker": "taker",
+            "price": 50_000_000,
+            "quantity": 3_500_000_000_u64,
+            "strike": 86_000_000_000_u64,
+            "position_pda": "position",
+            "tx_signature": "sig",
+            "filled_at": 1_699_999_000,
+        },
+    });
+    let ServerMessage::QuoteFilled(filled) = serde_json::from_value(frame.clone()).unwrap() else {
+        panic!("expected QuoteFilled");
+    };
+    assert_eq!(filled.market_pda, "market");
+    assert_eq!(
+        filled.expiry_ts,
+        Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+    );
+    assert_eq!(filled.position_type, PositionType::CashSecuredPut);
+    assert_eq!(
+        serde_json::to_value(ServerMessage::QuoteFilled(filled)).unwrap(),
+        frame
+    );
+    for field in ["market_pda", "position_type"] {
+        let mut missing = frame.clone();
+        missing["data"].as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<ServerMessage>(missing).is_err(),
+            "{field}"
+        );
+    }
+    let mut unknown_expiry = frame.clone();
+    unknown_expiry["data"]["expiry_ts"] = serde_json::Value::Null;
+    let ServerMessage::QuoteFilled(filled) =
+        serde_json::from_value(unknown_expiry.clone()).unwrap()
+    else {
+        panic!("expected QuoteFilled");
+    };
+    assert_eq!(filled.expiry_ts, None);
+    assert_eq!(
+        serde_json::to_value(ServerMessage::QuoteFilled(filled)).unwrap(),
+        unknown_expiry
+    );
+}
+
+#[test]
 fn rfq_broadcast_roundtrip() {
     use acta_maker_sdk::{PositionType, Quantity};
 

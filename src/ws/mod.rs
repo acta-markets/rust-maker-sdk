@@ -9,6 +9,7 @@ pub mod error;
 pub mod maker;
 #[cfg(feature = "ws-client")]
 pub mod managed;
+pub mod market_decimals;
 pub mod reconnect;
 pub mod types;
 #[cfg(feature = "vault")]

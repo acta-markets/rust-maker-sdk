@@ -1,4 +1,5 @@
-use crate::{PRICE_SCALE, PositionType};
+use crate::PositionType;
+use crate::types::amounts::scaled_quote_amount;
 
 use super::ChainError;
 
@@ -12,39 +13,11 @@ pub(super) fn required_settlement(
     match PositionType::try_from(position_type) {
         Ok(PositionType::CoveredCall) => {
             scaled_quote_amount(strike, quantity, quote_decimals, underlying_decimals)
+                .ok_or(ChainError::SettlementAmountOverflow)
         }
         Ok(PositionType::CashSecuredPut) => Ok(quantity),
         Err(_) => Err(ChainError::InvalidPositionType(position_type)),
     }
-}
-
-fn scaled_quote_amount(
-    strike: u64,
-    quantity: u64,
-    quote_decimals: u8,
-    underlying_decimals: u8,
-) -> Result<u64, ChainError> {
-    if quote_decimals > 18 || underlying_decimals > 18 {
-        return Err(ChainError::SettlementAmountOverflow);
-    }
-    let quote_scale = 10u128
-        .checked_pow(u32::from(quote_decimals))
-        .ok_or(ChainError::SettlementAmountOverflow)?;
-    let underlying_scale = 10u128
-        .checked_pow(u32::from(underlying_decimals))
-        .ok_or(ChainError::SettlementAmountOverflow)?;
-    let denominator = u128::from(PRICE_SCALE)
-        .checked_mul(underlying_scale)
-        .ok_or(ChainError::SettlementAmountOverflow)?;
-    let numerator = u128::from(strike) * u128::from(quantity);
-    let amount = if quote_scale <= denominator {
-        numerator / (denominator / quote_scale)
-    } else {
-        numerator
-            .checked_mul(quote_scale / denominator)
-            .ok_or(ChainError::SettlementAmountOverflow)?
-    };
-    u64::try_from(amount).map_err(|_| ChainError::SettlementAmountOverflow)
 }
 
 #[cfg(test)]

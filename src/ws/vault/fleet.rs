@@ -353,8 +353,8 @@ mod tests {
     };
 
     const VAULTS: &str = include_str!("../../../tests/fixtures/http_vaults.json");
-    const FIRST: &str = "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T";
-    const SECOND: &str = "11111111111111111111111111111111";
+    const FIRST: &str = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi";
+    const SECOND: &str = "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL";
 
     type Socket = WebSocketStream<TcpStream>;
 

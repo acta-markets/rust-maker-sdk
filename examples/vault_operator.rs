@@ -29,7 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let common::Config { signer, url, .. } = common::load()?;
     let operator = Arc::new(signer);
-    let min_validity = venue::min_quote_validity(&url).await?;
+    let venue = venue::load(&url).await?;
+    let lifetime = std::time::Duration::from_secs(u64::from(venue.min_quote_validity_seconds) + 60);
     let vault_pda = std::env::var("ACTA_VAULT_PDA")
         .map_err(|_| "set ACTA_VAULT_PDA to the vault this operator key is delegated for")?;
 
@@ -95,18 +96,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         match msg.message() {
             ServerMessage::RfqBroadcast(rfq) if client.can_maker() => {
-                let min_valid_until = QuoteExpiry::after(min_validity)
-                    .ok_or("system clock is before the Unix epoch")?;
                 let valid_until =
-                    QuoteExpiry::after(min_validity + std::time::Duration::from_secs(60))
-                        .ok_or("system clock is before the Unix epoch")?;
+                    QuoteExpiry::after(lifetime).ok_or("system clock is before the Unix epoch")?;
                 let binding = RfqBinding::from_broadcast(rfq)?;
                 let quote = match client.sign_quote(
                     &binding
                         .quote()
                         .price(Price::new(1_000_000_000))
                         .valid_until(valid_until)
-                        .min_valid_until(min_valid_until)
+                        .venue(&venue)
                         .nonce(Nonce::new(NONCE_GEN.next_u64()?)),
                 ) {
                     Ok(quote) => quote,

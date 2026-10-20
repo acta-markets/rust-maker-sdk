@@ -274,6 +274,54 @@ fn valid_until_must_sit_between_the_venue_floor_and_market_expiry() {
     ));
 }
 
+#[cfg(feature = "http")]
+#[test]
+fn venue_sets_the_floor_and_checks_the_settlement_buffer() {
+    let venue = crate::http::Venue {
+        program_id: encode_base58(&PROGRAM),
+        min_quote_validity_seconds: 5,
+        settlement_buffer_seconds: 30,
+        quote_refresh_lead_seconds: 3,
+        min_rfq_timeout_seconds: 1,
+        max_rfq_timeout_seconds: 60,
+        signature_timeout_seconds: 10,
+        max_quotes_per_rfq: None,
+        max_active_rfqs_per_taker: None,
+        pre_expiry_cutoff_seconds: 0,
+    };
+    let now = QuoteExpiry::after(Duration::ZERO)
+        .expect("clock after epoch")
+        .as_unix_seconds();
+    let bind = binding(100, &[]);
+    let builder = bind
+        .quote()
+        .maker_owner(signer().pubkey_bytes())
+        .price(Price::new(1))
+        .nonce(Nonce::new(1))
+        .venue(&venue);
+
+    assert!(matches!(
+        builder
+            .clone()
+            .valid_until(QuoteExpiry::from_unix_seconds(now + 4))
+            .preimage_args(),
+        Err(QuoteBuildError::ValidUntilTooSoon { .. })
+    ));
+    assert!(matches!(
+        builder
+            .clone()
+            .valid_until(QuoteExpiry::from_unix_seconds(now + 20))
+            .preimage_args(),
+        Err(QuoteBuildError::ValidUntilWithinSettlementBuffer { .. })
+    ));
+    assert!(
+        builder
+            .valid_until(QuoteExpiry::from_unix_seconds(now + 60))
+            .sign(&signer())
+            .is_ok()
+    );
+}
+
 #[test]
 fn a_malformed_identity_names_its_field() {
     let mut rfq = broadcast(100, &[]);

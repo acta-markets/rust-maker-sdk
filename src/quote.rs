@@ -8,6 +8,8 @@ use crate::types::ids::{Nonce, OrderId, Price, Quantity, Strike};
 use crate::types::{PositionType, QuoteExpiry};
 use crate::wire::{WireError, decode_base58_32, encode_base58};
 use crate::ws::types::{QuoteMessage, ReplaceQuoteMessage, RfqBroadcastMessage};
+#[cfg(feature = "http")]
+use std::time::Duration;
 use uuid::Uuid;
 
 /// A quote could not be assembled from the RFQ and the supplied values.
@@ -44,6 +46,14 @@ pub enum QuoteBuildError {
     ValidUntilTooSoon {
         valid_until: QuoteExpiry,
         min_valid_until: QuoteExpiry,
+    },
+
+    /// `valid_until − settlement_buffer_seconds` is not after now, so the
+    /// quote could never be accepted.
+    #[error("valid_until {valid_until} is within the settlement buffer ending at {buffer_end}")]
+    ValidUntilWithinSettlementBuffer {
+        valid_until: QuoteExpiry,
+        buffer_end: QuoteExpiry,
     },
 
     #[error("signing failed: {0}")]
@@ -149,6 +159,7 @@ impl RfqBinding {
             price: None,
             valid_until: None,
             min_valid_until: None,
+            buffer_end: None,
             nonce: None,
             maker: None,
         }
@@ -244,6 +255,7 @@ pub struct QuoteBuilder<'a> {
     price: Option<Price>,
     valid_until: Option<QuoteExpiry>,
     min_valid_until: Option<QuoteExpiry>,
+    buffer_end: Option<QuoteExpiry>,
     nonce: Option<Nonce>,
     maker: Option<[u8; 32]>,
 }
@@ -269,6 +281,17 @@ impl QuoteBuilder<'_> {
     /// from `GET /api/v1/venue`.
     pub const fn min_valid_until(mut self, min_valid_until: QuoteExpiry) -> Self {
         self.min_valid_until = Some(min_valid_until);
+        self
+    }
+
+    /// Apply the venue's quote window at the current clock: the floor
+    /// `now + min_quote_validity_seconds`, and `valid_until − settlement_buffer_seconds`
+    /// must be after now.
+    #[cfg(feature = "http")]
+    pub fn venue(mut self, venue: &crate::http::Venue) -> Self {
+        let after = |seconds: u32| QuoteExpiry::after(Duration::from_secs(u64::from(seconds)));
+        self.min_valid_until = after(venue.min_quote_validity_seconds);
+        self.buffer_end = after(venue.settlement_buffer_seconds);
         self
     }
 
@@ -306,6 +329,14 @@ impl QuoteBuilder<'_> {
             return Err(QuoteBuildError::ValidUntilTooSoon {
                 valid_until,
                 min_valid_until,
+            });
+        }
+        if let Some(buffer_end) = self.buffer_end
+            && valid_until <= buffer_end
+        {
+            return Err(QuoteBuildError::ValidUntilWithinSettlementBuffer {
+                valid_until,
+                buffer_end,
             });
         }
         Ok(Resolved {

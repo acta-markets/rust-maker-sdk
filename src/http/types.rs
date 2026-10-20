@@ -43,6 +43,7 @@ pub struct Vault {
     pub last_hwm_reset_ts: String,
     pub last_settlement_ts: String,
     pub cap_limit: String,
+    pub capacity: VaultCapacity,
     pub capital_fallback_delay_secs: String,
     pub deposit_window_set_ts: Option<String>,
     pub main_balance: Option<String>,
@@ -53,7 +54,45 @@ pub struct Vault {
     pub balance_chain_slot: Option<String>,
     pub policy: VaultPolicy,
     pub projection: ProjectionCursor,
-    pub performance: VaultPerformance,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub generation_started_at: Option<String>,
+    /// Indicative: booked equity at the main mint's USD price, 1e9 scale.
+    #[serde(default)]
+    pub tvl_usd_1e9: Option<String>,
+    #[serde(default)]
+    pub price_time: Option<String>,
+    #[serde(default)]
+    pub premium: Option<Vec<VaultPremium>>,
+    #[serde(default)]
+    pub fees: Option<VaultFees>,
+    #[serde(default)]
+    pub depositors_in_generation: Option<u64>,
+    #[serde(default)]
+    pub performance: Option<VaultPerformance>,
+    /// Display only; `governance` is the authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<VaultMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VaultMetadata {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub website: Option<String>,
+    /// X handle without `@`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twitter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,29 +124,84 @@ pub struct ProjectionCursor {
     pub event_index: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
+/// `remaining` is `None` when uncapped (`cap_limit` is 0).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub enum VaultPerformance {
-    Unavailable,
-    NoTrackRecord,
-    ShortTrackRecord(TrackRecord),
-    Annualized {
-        #[serde(flatten)]
-        track_record: TrackRecord,
-        annualized_return_pct: f64,
-    },
-    #[serde(other)]
-    Unknown,
+pub struct VaultCapacity {
+    pub cap_limit: String,
+    #[serde(default)]
+    pub remaining: Option<String>,
 }
 
+/// Net premium per quote mint, in quote atoms, for the current cycle and generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VaultPremium {
+    pub quote_mint: String,
+    pub cycle: PremiumFlow,
+    pub generation: PremiumFlow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PremiumFlow {
+    pub received: String,
+    /// `None` when a holder leg's market lacks decimals or its open price.
+    pub paid: Option<String>,
+}
+
+/// Generation totals in main atoms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VaultFees {
+    pub management_fee_assessed: String,
+    pub performance_fee_assessed: String,
+    pub realized_fee_value: String,
+}
+
+/// Metrics of `capital_generation` as of `computed_at`; all `None` unless `covered`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct TrackRecord {
-    pub cycles_completed: u32,
-    pub last_cycle_return_pct: f64,
-    pub cumulative_return_pct: f64,
-    pub track_record_secs: String,
+pub struct VaultPerformance {
+    pub capital_generation: String,
+    pub computed_at: String,
+    pub covered: bool,
+    #[serde(default)]
+    pub returns: VaultReturns,
+    #[serde(default)]
+    pub apy_30d: Option<f64>,
+    #[serde(default)]
+    pub apy_90d: Option<f64>,
+    #[serde(default)]
+    pub max_drawdown_pct: Option<f64>,
+    #[serde(default)]
+    pub worst_cycle_return_pct: Option<f64>,
+    #[serde(default)]
+    pub losing_cycles: Option<u64>,
+    #[serde(default)]
+    pub cycles_completed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VaultReturns {
+    #[serde(rename = "7d", default)]
+    pub d7: Option<WindowReturn>,
+    #[serde(rename = "30d", default)]
+    pub d30: Option<WindowReturn>,
+    #[serde(rename = "90d", default)]
+    pub d90: Option<WindowReturn>,
+    #[serde(default)]
+    pub all: Option<WindowReturn>,
+}
+
+/// Net-of-fee booked share price return between two checkpoint times.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct WindowReturn {
+    pub return_pct: f64,
+    pub from_time: String,
+    pub to_time: String,
 }
 
 /// Public `/api/v1/vaults/{pda}/positions` row.
@@ -163,6 +257,58 @@ pub enum VaultPositionStatus {
     Settled,
     #[serde(other)]
     Unknown,
+}
+
+/// Public `/api/v1/vaults/{pda}/exposure`: outstanding positions at the indicative spot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VaultExposure {
+    pub vault_pda: String,
+    /// Unix seconds the positions were read; never older than 15 s.
+    pub as_of: String,
+    pub positions: Vec<VaultExposurePosition>,
+    pub totals: Vec<VaultExposureTotal>,
+}
+
+/// `intrinsic` is in quote atoms: positive for holder legs, negative for writer legs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VaultExposurePosition {
+    pub position: String,
+    pub market: String,
+    pub position_type: VaultPositionType,
+    pub role: VaultPositionRole,
+    pub status: VaultPositionStatus,
+    pub strike: String,
+    pub quantity: String,
+    pub expiry: String,
+    pub underlying_mint: String,
+    pub quote_mint: String,
+    #[serde(default)]
+    pub underlying_decimals: Option<u8>,
+    #[serde(default)]
+    pub quote_decimals: Option<u8>,
+    #[serde(default)]
+    pub spot: Option<String>,
+    #[serde(default)]
+    pub spot_time: Option<String>,
+    #[serde(default)]
+    pub distance_pct: Option<f64>,
+    #[serde(default)]
+    pub itm: Option<bool>,
+    #[serde(default)]
+    pub intrinsic: Option<String>,
+}
+
+/// `None` when any position of the quote mint lacks the value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VaultExposureTotal {
+    pub quote_mint: String,
+    #[serde(default)]
+    pub notional_at_strike: Option<String>,
+    #[serde(default)]
+    pub outstanding_intrinsic: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

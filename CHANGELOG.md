@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.3
+
+- `http`: `Vault.metadata: Option<VaultMetadata>` (`name`; optional `curator`, `strategy`, `description`, `website`, `twitter` handle and `logo_url`) carries the operator-curated display fields `/api/v1/vaults` now serves. They are display only; `governance` stays the authority.
+- Breaking, `http`: `Vault.performance` is `Option<VaultPerformance>`, a struct (`capital_generation`, `computed_at`, `covered`, `returns` 7d/30d/90d/all as `WindowReturn`, `apy_30d`/`apy_90d`, drawdown, cycle stats) replacing the `status`-tagged enum; `TrackRecord` is removed. `Vault` gains `capacity`, `created_at`, `generation_started_at`, `tvl_usd_1e9` + `price_time`, `premium`, `fees`, `depositors_in_generation`; `HttpClient::vault_exposure(pda)` reads `/api/v1/vaults/{pda}/exposure` (`VaultExposure`). HTTP fixtures are the backend's golden files.
+
+- Breaking, wire: `QuoteFilledMessage` carries `market_pda`, `position_type` and `expiry_ts: Option<SystemTime>` (Unix seconds; `None` when the server no longer knows the market, then resolve it from `market_pda`), so a fill is attributable without the RFQ.
+- `QuoteBuilder::venue(&Venue)` (`http`) sets `min_valid_until = now + min_quote_validity_seconds` and refuses a `valid_until` inside the settlement buffer (`QuoteBuildError::ValidUntilWithinSettlementBuffer`); `.min_valid_until(...)` stays for callers without HTTP. The quoting examples use it.
+- `Price::as_decimal()`, `Strike::as_decimal()`, `Quantity::to_units(decimals)` and `total_premium_quote_atoms(price, quantity, underlying_decimals, quote_decimals)` (the contract's `scaled_quote_amount`, same floor rounding).
+- `MarketDecimals` / `TokenDecimals`: underlying and quote decimals by `market_pda`, filled from `MarketDescriptors` responses.
+- `DEVNET_API`, `DEVNET_WS`, `MAINNET_API`, `MAINNET_WS` (`network` module): the public origins; examples default to `DEVNET_WS`.
+
 ## 0.5.2
 
 - Breaking: `ManagedWsConfig::new(url, hello, signer, auth_pubkey)` and `new_async(url, hello, signer, auth_pubkey)` take the maker owner explicitly; `with_auth_pubkey` is removed. The signer must be the owner's registered quote-signing key (which may equal the owner key).
