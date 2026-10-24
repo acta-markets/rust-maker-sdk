@@ -67,6 +67,8 @@ async fn authenticate_peer(socket: &mut Socket) {
             min_supported_version: WS_PROTOCOL_VERSION.to_string(),
             enabled_features: vec![FEATURE_CANCEL_ON_DISCONNECT.to_string()],
             server_time_unix_ms: std::time::UNIX_EPOCH,
+            min_quote_validity_seconds: 100,
+            settlement_buffer_seconds: 90,
         }),
     )
     .await;

@@ -5,7 +5,7 @@ use crate::types::{Decimals, OrderId, PositionType, Quantity, Strike};
 
 const ACCOUNT_OFFSET_DISCRIMINATOR: usize = 0;
 const ACCOUNT_OFFSET_VERSION: usize = 1;
-const POSITION_DISCRIMINATOR: u8 = 1;
+pub(crate) const POSITION_DISCRIMINATOR: u8 = 1;
 const MAKER_DISCRIMINATOR: u8 = 2;
 const MARKET_DISCRIMINATOR: u8 = 4;
 const ACCOUNT_VERSION: u8 = 1;
@@ -66,12 +66,12 @@ pub struct MarketInfo {
 const POSITION_OFFSET_POSITION_TYPE: usize = 3;
 const POSITION_OFFSET_STATUS: usize = 4;
 const POSITION_OFFSET_TAKER_OWNER: usize = 8;
-const POSITION_OFFSET_MAKER_OWNER: usize = 40;
+pub(crate) const POSITION_OFFSET_MAKER_OWNER: usize = 40;
 const POSITION_OFFSET_MARKET: usize = 72;
 const POSITION_OFFSET_STRIKE: usize = 104;
 const POSITION_OFFSET_QUANTITY: usize = 112;
 const POSITION_OFFSET_ORDER_ID: usize = 128;
-const POSITION_LEN: usize = 424;
+pub(crate) const POSITION_LEN: usize = 424;
 const POSITION_VERSION: u8 = 2;
 
 impl PositionInfo {

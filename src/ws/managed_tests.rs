@@ -698,6 +698,8 @@ async fn authenticate_test_peer(
             min_supported_version: "1".to_string(),
             enabled_features: vec!["cancel_on_disconnect".to_string()],
             server_time_unix_ms: std::time::UNIX_EPOCH,
+            min_quote_validity_seconds: 100,
+            settlement_buffer_seconds: 90,
         }),
     )
     .await;
@@ -841,6 +843,8 @@ async fn gap_policy_reconnect_reconnects_after_a_subscriber_lags() {
                 min_supported_version: "1".to_string(),
                 enabled_features: vec!["cancel_on_disconnect".to_string()],
                 server_time_unix_ms: std::time::UNIX_EPOCH,
+                min_quote_validity_seconds: 100,
+                settlement_buffer_seconds: 90,
             }),
         )
         .await;
@@ -1798,6 +1802,8 @@ async fn auth_error_before_close_keeps_the_close_code() {
                 min_supported_version: "1".to_string(),
                 enabled_features: vec!["cancel_on_disconnect".to_string()],
                 server_time_unix_ms: UNIX_EPOCH,
+                min_quote_validity_seconds: 100,
+                settlement_buffer_seconds: 90,
             }),
         )
         .await;

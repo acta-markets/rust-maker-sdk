@@ -425,6 +425,8 @@ fn welcome_roundtrip() {
         min_supported_version: "1.0.0".to_string(),
         enabled_features: vec!["quote_expired".to_string()],
         server_time_unix_ms: UNIX_EPOCH + Duration::from_millis(1_700_000_000_000),
+        min_quote_validity_seconds: 100,
+        settlement_buffer_seconds: 90,
     });
     let json = serde_json::to_string(&msg).unwrap();
     let parsed: ServerMessage = serde_json::from_str(&json).unwrap();

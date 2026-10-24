@@ -445,6 +445,8 @@ mod tests {
                 min_supported_version: "1.0.0".into(),
                 enabled_features: Vec::new(),
                 server_time_unix_ms: std::time::UNIX_EPOCH,
+                min_quote_validity_seconds: 100,
+                settlement_buffer_seconds: 90,
             }),
         )
         .await;

@@ -1,75 +1,65 @@
 # acta-maker-sdk
 
-Rust SDK for the Acta options RFQ venue on Solana. It is for two kinds of users:
-**makers**, who receive RFQs over WebSocket and answer with signed quotes, and
-**vault operators**, who quote, sign server-built transactions and crank the
-capital cycle for an Acta vault. It covers authentication, managed WebSocket
-sessions with reconnect and recovery, order signing, Solana instruction builders
-and a read-only HTTP client. All features are opt-in; defaults are empty.
+Rust SDK for Acta's Solana options RFQ venue. It supports makers that receive
+RFQs and send signed quotes, plus vault operators that quote, check served
+transactions, and run capital operations. Features are opt-in; the default set is
+empty.
 
-## Quickstart (maker)
+## Install and credentials
 
-### 1. Get registered
+Registration is not self-service. Acta must register the maker owner and its
+quote-signing key on chain. Until then the connection fails with
+`maker_not_registered`.
 
-There is no self-service registration. Request access through the
-[integration documentation](https://beta.acta.markets/docs); Acta registers your
-maker on chain with the admin-gated, timelocked `RegisterMaker` instruction.
-Until then every connection ends with `maker_not_registered`.
+- The owner holds funds and signs maker transactions such as `DepositPremium`,
+  `WithdrawPremium`, and `DepositFundsToPosition`.
+- The registered quote-signing key authenticates and signs quotes. It can be the
+  owner key.
 
-You need two keys (they may be the same key):
+Deposit a premium balance with `DepositPremium` before quoting. A fill debits its
+premium from that balance.
 
-- **Owner**: the registered maker identity. It holds funds and signs on-chain
-  maker transactions (`DepositPremium`, `WithdrawPremium`, `DepositFundsToPosition`).
-- **Quote-signing key**: registered together with the owner. It signs the
-  authentication challenge and every quote; both name the owner as the maker.
-
-Before quoting, deposit a premium balance with `DepositPremium`: the premium of
-a fill is debited from it.
-
-### 2. Install
-
-Requires Rust 1.89 or later.
+Rust 1.89 or later is required.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.5.3", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.5.4", features = ["ws-client"] }
 ```
 
-### 3. Run the examples
+For registration and environment setup, use the
+[Rust maker guide](https://beta.acta.markets/docs/quickstart/maker-rust-sdk).
 
-From a checkout of this repository, point the examples at the quote-signing key
-as a standard 64-byte Solana keypair JSON file:
+## Quick start: managed maker
+
+From this checkout, point the examples at a 64-byte Solana keypair JSON file:
 
 ```sh
 export ACTA_KEYPAIR_PATH=/absolute/path/to/quote-signing-key.json
-export ACTA_MAKER_OWNER=<owner base58>   # required, also when the signing key is the owner
-cargo run --locked --features ws-client --example hello_auth           # authenticate, then exit
-cargo run --locked --features ws-client,http --example managed_quote   # recover state, quote RFQs
+export ACTA_MAKER_OWNER=<owner base58>
+cargo run --locked --features ws-client --example hello_auth
+cargo run --locked --features ws-client,http --example managed_quote
 ```
 
-`ACTA_WS_URL` defaults to `wss://devnet-api.acta.markets` (`DEVNET_WS`; the
-other origins are `MAINNET_WS`, `DEVNET_API` and `MAINNET_API`). The quoting
-examples read `GET /api/v1/venue` on the same host and apply it with `.venue(&venue)`. `managed_quote` and
-`quote` submit real signed quotes at a fixed demonstration price of
-`1_000_000_000` (one quote token per underlying token), so use a test maker on
-devnet. They do not price, hedge or fund.
+`ACTA_WS_URL` defaults to wss://devnet-api.acta.markets. `DEVNET_WS`, `MAINNET_WS`,
+`DEVNET_API`, and `MAINNET_API` name the public origins.
 
-### 4. The quote loop
+The quote examples fetch `GET /api/v1/venue` and call `.venue(&venue)`. Without
+`http`, call `.welcome(&welcome)` after the session welcome. The examples send real
+signed quotes at a fixed 1_000_000_000 price, so use a test maker on devnet.
+They do not price, hedge, or fund.
 
-This is the core of `examples/managed_quote.rs`: connect, authenticate, subscribe
-to RFQs, sign a quote for each `RfqBroadcast`, and watch for fills and rejections.
+The managed quote loop connects, authenticates, recovers state, subscribes to
+RFQs, signs a quote, and sends it in the recovered epoch:
 
 ```rust,no_run
 use acta_maker_sdk::*;
 use acta_maker_sdk::ws::{maker::MakerQuoteClient, managed::*, types::*};
 use std::{sync::Arc, time::Duration};
 # async fn run(keypair: [u8; 64], owner: String, min_validity: Duration) -> Result<(), Box<dyn std::error::Error>> {
-// min_validity: `min_quote_validity_seconds` from `GET /api/v1/venue`.
 static NONCES: AtomicNonceGenerator = AtomicNonceGenerator::new();
 
-let signer = Arc::new(BytesSigner::from_keypair(&keypair)?); // quote-signing key
+let signer = Arc::new(BytesSigner::from_keypair(&keypair)?);
 let maker_owner = decode_base58_32(&owner)?;
-
 let config = ManagedWsConfig::new(
     DEVNET_WS,
     HelloData {
@@ -79,7 +69,7 @@ let config = ManagedWsConfig::new(
         client_version: None,
     },
     signer.clone(),
-    owner, // maker owner; the signer may be its quote-signing key
+    owner,
 )
 .low_latency()
 .with_initial_subscribe(SubscribeData {
@@ -128,82 +118,59 @@ while let Ok(msg) = messages.recv().await {
 # }
 ```
 
-The sketch quotes only in its first connection epoch; after a reconnect
-`quote_in_epoch` returns `NotReady`. `managed_quote` shows the full pattern: wait
-for the new epoch's recovery reads, then quote in it (see
-[Readiness and reconnect](#readiness-and-reconnect)). A socket write is not an
-acceptance; never replay old signed quotes after a reconnect.
+This sketch quotes only in its first epoch. `managed_quote` waits for each new
+epoch and applies recovery before it quotes again. A socket write is not an
+accepted quote; never replay an old signed quote after a reconnect.
 
-### 5. After a fill
-
-`QuoteFilled` means the position is open on chain. Optionally fund the
-settlement leg with `DepositFundsToPosition` (`fund_position`, [Chain helpers](#chain-helpers)); a position
-that expires in the money without it is closed by a permissionless liquidator
-instead of settling with you. Settlement is run by Acta's keeper and pays the
-owner's ATA directly; no SDK call is needed.
-
-## Choose your path
-
-- **Maker, managed session** (`ws-client`): `MakerQuoteClient` on `/maker` for
-  quotes, cancellations and subscriptions, `MakerDataClient` on `/maker/data` for
-  private reads; both reconnect and re-read state. Read `managed_quote`, then
-  [Maker sessions](#maker-sessions) and [Quotes and signing](#quotes-and-signing).
-- **Maker, own event loop** (`ws-client`): `WsClient` is a plain socket; you own
-  auth, reconnect and recovery. Read `hello_auth`, `quote`, `discovery`.
-- **Vault operator** (`vault`): `VaultOperatorClient` on `/vault` quotes for the
-  vault, verifies and signs served opens and swaps, streams projection cursors;
-  `VaultManager` builds the capital-cycle crank.
-  Read `vault_operator`, `vault_capital` and [Vault operators](#vault-operators).
-- **Chain helpers** (`chain`, `chain-rpc`): premium deposit/withdrawal and
-  position funding, account decoders. See [Chain helpers](#chain-helpers).
-- **HTTP** (`http`): `HttpClient` for venue limits, tokens, markets, vaults and vault exposure.
-  See [HTTP reference data](#http-reference-data).
+`QuoteFilled` means the position opened on chain. Fund its settlement leg with
+`DepositFundsToPosition` (or fund_position) if required. Acta's keeper settles an
+in-the-money funded position to the owner's ATA; no SDK settlement call is needed.
 
 ## Features and examples
 
 | Feature | Enables |
 |---|---|
-| `ws-client` | `MakerQuoteClient`, `MakerDataClient`, `ManagedWsHandle`, raw `WsClient` (Tokio) |
-| `vault` | `VaultOperatorClient`, checked vault transaction signing, projection feed; includes `ws-client` and `chain` |
-| `chain` | Instruction builders (maker premium and funding, `VaultManager`), derived addresses, account decoders, crank decision, Pyth price accounts, served-transaction verification; no WebSocket stack |
+| `ws-client` | `MakerQuoteClient`, `MakerDataClient`, `ManagedWsHandle`, and raw Tokio `WsClient` |
+| `vault` | `VaultOperatorClient`, checked vault transaction signing, and projection feed; includes `ws-client` and `chain` |
+| `chain` | Builders, derived addresses, checked account decoders, `VaultManager`, price routes, and served-transaction verification |
 | `chain-rpc` | `ChainClient` over Solana RPC; extends `chain` |
-| `http` | Read-only `HttpClient` (reqwest, rustls with native roots) |
-| `test-helpers` | `ManagedWsHandle::test_handle`, message injection |
+| `http` | Read-only `HttpClient` using `reqwest` 0.13 and `rustls` with the platform verifier |
+| `decimal` | Exact `rust_decimal` views for `Price`, `Strike`, and `Quantity` |
+| `test-helpers` | `ManagedWsHandle::test_handle` and message injection |
 
-| Example | Feature | What it does |
+| Example | Features | Purpose |
 |---|---|---|
-| `hello_auth` | `ws-client` | Authenticates, prints success, closes |
-| `managed_quote` | `ws-client`, `http` | Recovers maker state, submits epoch-bound quotes |
-| `quote` | `ws-client`, `http` | Raw `/maker` handshake, RFQ subscription, signed quote |
-| `discovery` | `ws-client` | Live quotes, positions, eligible markets and summary on `/maker/data` |
-| `indicative` | `ws-client` | Answers unsigned indicative-price requests |
-| `loopback_latency` | `ws-client` | Managed client against a local mock server; no keys or chain |
-| `vault_operator` | `vault`, `http` | `/vault` session: quotes, verified fill and swap signing, projection cursor |
-| `vault_capital` | `chain-rpc` | Capital-cycle crank: deposit window, equity, deposits, withdrawals, finalize |
+| `hello_auth` | `ws-client` | Authenticate, print success, close |
+| `managed_quote` | `ws-client`, `http` | Recover state and send epoch-bound quotes |
+| `quote` | `ws-client`, `http` | Raw `/maker` handshake and signed quote |
+| `discovery` | `ws-client` | Read quotes, positions, markets, and summary on `/maker/data` |
+| `indicative` | `ws-client` | Answer unsigned indicative-price requests |
+| `loopback_latency` | `ws-client` | Local managed-client latency sample |
+| `vault_operator` | `vault`, `http` | Vault session, checked fill and swap signing |
+| `vault_capital` | `chain-rpc` | Capital-cycle crank |
+| `curator_pt` | `chain-rpc`, `http` | PT route planning and simulation |
 
-Maker examples read `ACTA_KEYPAIR_PATH`, `ACTA_MAKER_OWNER` (required) and `ACTA_WS_URL`;
-`loopback_latency` reads none. `vault_operator` reads the same three (it
-validates `ACTA_MAKER_OWNER` if set) and signs with the operator key in
-`ACTA_KEYPAIR_PATH` for `ACTA_VAULT_PDA`. `vault_capital` reads
-`ACTA_KEYPAIR_PATH`, `ACTA_VAULT_PDA` and `ACTA_RPC_URL` (default: devnet), signs
-with the vault's governance or delegate key and sends one capital step per pass.
+Maker examples read `ACTA_KEYPAIR_PATH`, `ACTA_MAKER_OWNER`, and `ACTA_WS_URL`.
+`vault_operator` also needs `ACTA_VAULT_PDA`. `vault_capital` reads
+`ACTA_KEYPAIR_PATH`, `ACTA_VAULT_PDA`, and `ACTA_RPC_URL` (devnet by default).
 
 ```sh
 ACTA_VAULT_PDA=<vault> cargo run --locked --features vault,http --example vault_operator
-ACTA_VAULT_PDA=<vault> ACTA_RPC_URL=<rpc> cargo run --locked --features chain-rpc --example vault_capital
+ACTA_VAULT_PDA=<vault> ACTA_RPC_URL=<rpc> \
+  cargo run --locked --features chain-rpc --example vault_capital
 ```
 
-## Maker sessions
+## Maker sessions and recovery
 
-### Endpoints
+Use `MakerQuoteClient` on `/maker` for quotes, replacements, cancellations, and
+subscriptions. Use `MakerDataClient` on `/maker/data` for private reads. The data
+endpoint supplies `GetActiveRfqs`, `GetMyQuotes`, `GetOrderStatus`, `GetMakerPositions`,
+`GetMarketsForMaker`, `GetMyTrades`, and `GetMmSummary`.
 
-`/maker` (the default) carries quotes, batches, replacements, cancellations and
-subscriptions. RFQs need a server-side `Rfqs` subscription: `with_initial_subscribe`
-makes it part of readiness; `subscribe_messages()` only attaches a local receiver.
-
-A second connection on `/maker/data` serves private reads: `GetActiveRfqs`,
-`GetMyQuotes`, `GetOrderStatus`, `GetMakerPositions`, `GetMarketsForMaker`,
-`GetMyTrades`, `GetMmSummary`. `request()` returns a validated typed payload.
+`MakerDataClient` also receives the owner's `PositionUpdated`, `TradeExecuted`, and
+`MakerCapsUpdated` pushes after summary recovery. No subscription is needed for
+those pushes. `all_maker_positions(filter, timeout)` pages `GetMakerPositions` when
+`MmSummary.positions_has_more` is set.
 
 ```rust,no_run
 use acta_maker_sdk::*;
@@ -217,376 +184,209 @@ let config = ManagedWsConfig::new("wss://devnet-api.acta.markets", hello, signer
 let data = MakerDataClient::spawn(config)?;
 data.wait_until_ready().await?;
 let summary = data
-    .request(GetMmSummaryMessage { request_id: uuid::Uuid::new_v4() }, std::time::Duration::from_secs(2))
+    .request(
+        GetMmSummaryMessage { request_id: uuid::Uuid::new_v4() },
+        std::time::Duration::from_secs(2),
+    )
     .await?;
 # let _ = summary;
 # Ok(())
 # }
 ```
 
-`GetMyQuotes.scope` is required. `Live` is the complete current set, unpaged.
-`History` is persisted records paged by `limit` and `cursor`/`cursor_id`
-(`created_at`/`order_id`); positions and trades have their own pagination keys.
+Keep a data session for monitoring, funding, or hot standby. On restart, use
+`maker_open_positions(owner)` to recover open and funded positions from chain.
+Open `/maker` only when taking over: a second quote session replaces the first and
+may cancel its quotes if cancel-on-disconnect is enabled. Data pushes are not
+replayed, so reconcile after a gap or reconnect. Up to four data sessions may
+share one owner; a fifth gets `session_limit_exceeded`.
 
-### Authentication
+`Ready` means required SDK recovery reads arrived. It does not mean a strategy
+applied them, and recovery is not one atomic snapshot. Apply recovery and
+lifecycle messages before trading. Commands are tied to the current epoch;
+`quote_in_epoch`, `replace_in_epoch`, and `batch_quotes_in_epoch` return `NotReady` once
+the session advances.
 
-Managed clients validate the canonical Acta challenge before calling any signer,
-also on reconnect. `ManagedWsConfig::new(url, hello, signer, owner)` and
-`new_async` take the maker owner explicitly. The signer must be the owner's current
-registered quote-signing key, which may equal the owner key. An unregistered owner fails
-with `maker_not_registered`; a registered owner with a different signer fails with
-`invalid_signature`. Raw `WsClient` callers must call
-`ws::auth::validate_maker_auth_challenge` before signing.
+Subscriptions survive resume and fresh authentication. The first local receiver
+gets a bounded since-spawn backlog, so subscribe before waiting for traffic.
+See the [maker API](https://beta.acta.markets/docs/reference/maker-api) and
+[WS conventions](https://beta.acta.markets/docs/reference/ws-common) for delivery,
+close codes, subscriptions, rate limits, and error variants.
 
-### Readiness and reconnect
+### Queries, sends, and cancellation
 
-Both endpoints go `Connected → Authenticated → Reconciled → Ready`. Every
-authentication re-reads state for its endpoint: `/maker` restores subscriptions,
-then reads `GetActiveRfqs` and `GetMyQuotes { scope: Live }`; `/maker/data` reads
-`GetMmSummary`. The first local subscriber gets a
-bounded backlog since spawn, so subscribe early.
+`GetMyQuotes` with `Live` returns the complete current owner set without pagination.
+`History` is persisted and paged. `GetOrderStatus` returns `Pending`, `Confirmed` with a
+position address, or `Unknown`. An empty `Live` set, timeout, or `Unknown` does not
+prove an interrupted order has no exposure.
 
-`Ready` means the SDK received the reads, not that your strategy applied them,
-and they are not one atomic snapshot. Apply recovery and lifecycle messages
-before trading. Live quotes are `Active { rank }`, non-selectable `Retained`,
-`AwaitingSignature` and `Executing`; historical records must not overwrite them.
+send confirms a socket write. `send_await` waits for a correlated response, and
+`try_send` returns a `SendTicket` whose drop before dequeue cancels that send. Quote,
+replacement, batch, and cancellation messages share a FIFO lane; a full lane
+returns `QueueFull`. `CancelQuoteAck` and `CancelAllQuotesAck` name the IDs actually
+cancelled; a `QuoteCancelled` lifecycle event is not a cancellation receipt.
 
-Reconnect first tries `ResumeAuth`; only `session_expired` falls back to a full
-challenge. Session replacement, version mismatch, rejected credentials and an
-exhausted retry limit terminate the client (`Closed` / `Terminated`);
-`invalid_signature` terminates after three consecutive rejections.
-`max_reconnect_attempts = 0` retries forever.
+### Quote outcomes
 
-Subscriptions, including removals and empty mint scopes, survive resume and fresh
-auth; recovery re-sends both mint lists with fresh request IDs. Only one
-subscription change may await an ACK at a time (`SubscriptionPending`).
+Subscribe before sending. Create `QuoteOutcomeTracker::new(rfq_id, order_id, epoch, deadline)`.
+Pass each `ManagedInbound` to `observe`, and call `check` with the
+current epoch and monotonic time on transitions and at the deadline.
 
-Each inbound message carries an epoch and a per-connection sequence. A lagging
-receiver gets `Gap` on its next `recv()`. `EndpointDefault` reconnects quote
-sessions and surfaces gaps on data sessions; `Surface` never reconnects;
-`Reconnect` stops sending and recovers. A gap on the quote endpoint therefore
-reconnects, and cancel-on-disconnect removes the session's active and retained
-non-winning quotes (selected and executing orders keep their lifecycle): keep receivers
-draining (the inbound ring holds 4096 messages by default).
+outcome reports `Pending`, `Acked`, `Selected`, terminal rejection, fill, expiry,
+cancellation, loss, or `Unknown`. A selected order can remain unresolved after
+`RfqClosed` until matching status proves a loss. A stream gap, closure, epoch
+change, or deadline makes an unresolved order `Unknown`, never a proven failure.
+Reconcile it through `GetMyQuotes` or `GetOrderStatus`; do not reuse its order ID.
 
-### Sending and cancellation
+## Quote construction and numeric units
 
-Typed clients require `Ready`; so do raw trading commands. Every command is bound
-to the epoch it was submitted in and is never replayed on a later connection.
-`MakerQuoteClient::quote_in_epoch`, `replace_in_epoch` and `batch_quotes_in_epoch`
-(and their `try_` forms) take the epoch whose recovery your strategy applied and
-return `NotReady` once the session has moved on.
-`send()` confirms a socket write, not a server ACK; `try_send()` returns a
-`SendTicket` (dropping it before dequeue cancels the send); `send_await()` waits
-for the correlated response. Quotes, batches, replacements and cancellations
-share one FIFO lane, which the backend preserves; control frames go first. A full
-lane returns `QueueFull`.
+`RfqBinding::from_broadcast` validates the market PDA, mints, expiry, and option
+type under `ACTA_PROGRAM_ID` before signing. For another deployment, use
+`from_broadcast_for_program` with a locally configured program ID. Never let an
+RFQ choose the program ID.
 
-Cancel with `raw().send_await(ClientMessage::CancelQuote(request), timeout)`:
-`CancelQuoteAck` lists the order IDs actually cancelled, `CancelAllQuotesAck` the
-aggregate. `QuoteCancelled` is a lifecycle event, not a receipt. A disconnect
-between write and ACK leaves the outcome unknown.
+`QuoteBuilder` requires `maker_owner`, `price`, validity bounds, and `nonce`. Read the
+minimum validity and settlement buffer from `HttpClient::venue` or `WelcomeData`;
+the builder rejects an impossible local validity window. Quote expiry is whole
+Unix seconds. The full signing, validation, and replacement rules are in the
+[Rust maker guide](https://beta.acta.markets/docs/quickstart/maker-rust-sdk) and
+[maker API](https://beta.acta.markets/docs/reference/maker-api).
 
-Keep each submitted `OrderId` until a cancellation, lifecycle fact or positive
-lookup resolves it. `GetOrderStatus` returns `Pending`, `Confirmed { position_pda }`
-or `Unknown`; neither `Unknown`, a timeout nor an empty `Live` result proves there
-is no exposure.
+`Price` and `Strike` use the 1e9 `PRICE_SCALE` per underlying token, independent of
+mint decimals. `Quantity` is underlying atoms. Without `decimal`, use
+`Price::as_decimal`, `Strike::as_decimal`, `Quantity::to_units`, and
+`total_premium_quote_atoms`. With `decimal`, use `Price::to_decimal`,
+`Strike::to_decimal`, `Price::from_decimal_floor`, `Quantity::to_decimal`, and
+`Quantity::from_decimal_floor`. The floor conversions return None for negative or
+out-of-range values.
 
-### Cancel-on-disconnect
+## Chain helpers and funding batches
 
-Quote connections require `cancel_on_disconnect` in `Welcome` by default and
-terminate with `FeatureUnsupported` otherwise; opt out with
-`with_cancel_on_disconnect(false)`. On disconnect the server removes Active and
-retained quotes (the same set as `CancelAll`); selected and in-flight orders keep
-their lifecycle. A gap-triggered reconnect also triggers it. COD has no bounded
-cancellation time.
+The `chain` feature provides offline builders and checked account decoders.
+With `chain-rpc`, `maker_snapshot` reads requested positions, premium ATAs, and
+unique markets in batches of at most 100 keys. Missing positions and a missing
+premium ATA are observations, not proof of closure or a failed RPC read.
 
-### Low-latency profile
+Use `maker_open_positions(owner)` at startup or manual recovery, not in a tick
+loop. `PositionSnapshot::fund_instructions` and `required_settlement` are pure.
+For native settlement legs, prepend `wsol::build_wrap_sol_ixs` and aggregate the
+deficit across the batch; budget the wallet balance, rent, and fees.
+`NativeSolFunding::with_default_reserve` retains the single-position convenience.
 
-`low_latency()` sets 2 s ping/pong deadlines, 1 s write timeout, a 1024 command
-buffer and gap policy `Reconnect`. Dead-socket detection
-drops from about 40 s to about 4 s. Raw `WsClient` sets TCP_NODELAY; reuse
-serialized bytes with `PreparedClientMessage` and `send_prepared()`.
+`deposit_premium`, `withdraw_premium`, `fund_position`, and
+`send_instructions_with_options` succeed only after confirmation at the client's
+commitment. `send_instructions_with_blockhash` is submit-only and accepts one
+shared blockhash for a batch.
 
-## Quotes and signing
+With `chain-rpc` plus `ws-client`, call `confirm_signatures` once for the batch. It
+uses `signatureSubscribe`, then one chunked status read for unresolved signatures
+on a deadline or WebSocket failure. `signature_statuses` is available with
+`chain-rpc` alone. `ConfirmationStatus::Pending` is unknown, not a reason to send a
+new payment.
 
-`RfqBinding::from_broadcast` checks the market PDA against the mints, expiry and
-option type under `ACTA_PROGRAM_ID` before anything is signed; for another
-deployment use `from_broadcast_for_program` with a locally configured program ID,
-never one from the RFQ. `QuoteBuilder` derives the signed preimage and the
-`QuoteMessage` from the same inputs. Your strategy still owns its mint allowlist,
-pricing and decimals.
+### Capital-cycle reads
 
-`GetActiveRfqs` is discovery data, not a signing binding: it carries the RFQ
-fields but identifies the market only by address. Quote a validated broadcast, or verify the market and derive its
-PDA yourself before using `compute_order_id` and the low-level signing functions.
-
-- Reuse one `RfqBinding` per RFQ. `sign_with_async_signer` takes HSM or remote
-  keys; `into_replacement(old_order_id)` makes a replacement without re-signing.
-- The default strike is the requested one; `offered_strikes()` adds
-  `order_options`, and `.strike(...)` rejects anything else.
-- `Price` and `Strike` are 1e9 fixed-point per underlying unit, independent of
-  mint decimals (`PRICE_SCALE`): `Price::new(2_000_000_000)` is 2 quote tokens per
-  underlying. `Quantity` is underlying atomic units. Wrong scaling is not caught
-  locally.
-- `QuoteExpiry` is whole Unix seconds. `valid_until` must lie between
-  `.min_valid_until(now + min_quote_validity_seconds)` (from `GET /api/v1/venue`)
-  and the market expiry; otherwise signing fails with `ValidUntilTooSoon` or
-  `ValidUntilAfterMarketExpiry` instead of a server `quote_expiry_too_short` /
-  `market_expired` rejection. With the `http` feature, `.venue(&venue)` sets that
-  floor from `HttpClient::venue()` at the current clock and also refuses a
-  `valid_until` whose `valid_until − settlement_buffer_seconds` is not after now
-  (`ValidUntilWithinSettlementBuffer`).
-- Human units: `Price::as_decimal()` / `Strike::as_decimal()` (display `f64`),
-  `Quantity::to_units(underlying_decimals)`, and
-  `total_premium_quote_atoms(price, quantity, underlying_decimals, quote_decimals)`,
-  the premium in quote atoms rounded exactly as the contract does. Decimals come
-  from `GetMarketDescriptors` on `/maker/data`; `MarketDecimals` keeps them by
-  `market_pda` (`observe(&message)`, `get(market_pda)`), which `RfqBroadcast.market`
-  and `QuoteFilled` both name.
-- `.maker_owner(owner)` is required, also when the owner signs; a missing owner,
-  floor, price, expiry or nonce is `QuoteBuildError::Missing`.
-
-A quote signs the 32-byte SHA-256 order ID of a fixed 182-byte preimage.
-`preimage_args()` returns the exact `OrderPreimageArgs` the server
-reconstructs:
-
-```rust,no_run
-use acta_maker_sdk::*;
-use acta_maker_sdk::ws::types::RfqBroadcastMessage;
-# fn run(rfq: &RfqBroadcastMessage, owner: [u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
-let binding = RfqBinding::from_broadcast(rfq)?;
-let builder = binding
-    .quote()
-    .maker_owner(owner)
-    .price(Price::new(2_000_000_000))
-    .valid_until(QuoteExpiry::from_unix_seconds(1_725_000_300))
-    .min_valid_until(QuoteExpiry::from_unix_seconds(1_725_000_000))
-    .nonce(Nonce::new(42));
-let order_id = compute_order_id(&builder.preimage_args()?);
-# let _ = order_id;
-# Ok(()) }
-```
-
-`BytesSigner` zeroizes its key on drop. `SignerLike` is for local keys,
-`AsyncSignerLike` for external processes or devices; every returned signature is
-verified. `ManagedWsConfig::auth_timeout` covers signing, so signer futures must
-be safe to cancel.
-
-Server limits (configurable; defaults): 32 KiB per message, 50 quotes per batch;
-per connection a quote bucket of 50/s (burst 100; a batch costs one per quote) for
-`Quote`, `ReplaceQuote`, `BatchQuotes`, `CancelQuote` and `CancelAllQuotes`, an RFQ
-bucket of 10/s (burst 20), a query bucket of 20/s (burst 40), and a general bucket of
-30 messages/s (burst 60). Quote-plane messages skip the general bucket while the quote
-bucket is configured (an oversized batch does not): over the quote bucket they are
-rejected with `QuoteRejectReason::RateLimited` and the session stays up; prefer
-`BatchQuotes`. Exhausting the general bucket closes the connection with
-`4003 rate_limited`.
-If a session's outbound queue is full when an RFQ, acknowledgement or
-fill is pushed, the server drops it and closes the connection to force recovery.
-
-## Errors and close codes
-
-Request failures arrive as one `#[non_exhaustive]` `ServerError`, in
-`RequestError { request_id, error }` or a bare `Error`; codes without a typed
-variant are `ServerError::Generic { code, message }` with a typed `WsErrorCode`
-(`Unknown(String)` for codes newer than the SDK), so match on `code`, not
-`message`. `RfqRequest`, `AcceptQuote` and `SubmitSignedSponsoredTx` carry a
-`request_id` and get exactly one reply: `CommandAccepted { request_id }` (the
-server took the command; never chain success) or `RequestError`. On `/vault`,
-`rfq_request`, `accept_quote` and `submit_signed_sponsored_tx` resolve on that
-reply; `RfqCreated` still arrives as a push. Submission errors carry
-`delivery`: `NotForwarded` means this attempt never handed the transaction off,
-`Unknown` (or absent) means it may execute. Treat a command as not executed only
-when every attempt for it returned `NotForwarded`. Vault swaps resolve by
-`swap_status(execution_id)` and the `SwapSettled` push. Quote outcomes are `QuoteRejected { reason }`: besides validation
-reasons, `RateLimited` (quote bucket exhausted, retry later), `TradingPaused`
-(venue paused, not a fault of the quote) and `InternalError`; unknown reasons
-decode as `Unknown`.
-
-Server-initiated closes carry a code and reason, decoded by `CloseCode::from_code`:
-`4000 idle_timeout`, `4001 auth_timeout`, `4002 slow_consumer`, `4003 rate_limited`,
-`4004 session_replaced`, `4005 hello_timeout`. After `WsClient::next()` returns
-`None`, `server_close()` gives the frame as `ServerClose { code, reason }`;
-`close_code()` is `None` for codes outside `CloseCode`. `auth_timeout`,
-`rate_limited`, `session_replaced` and `hello_timeout` closes are preceded by an
-`AuthError` or `Error` with the same code. `auth_timeout` and `session_replaced`
-end the session on that frame: the managed client leaves `Ready`, stops writing
-and reads up to one second more for the server's close frame. `rate_limited` and
-`hello_timeout` errors do not end the session by themselves, so the client keeps
-reading until the close arrives. Either way it logs the frame and puts it on
-`ManagedWsEvent::Disconnected { close }`. It reconnects after all of them except
-session replacement, which terminates it. Some server closes carry no code: a
-blacklisted or unregistered maker, an expired session, too many parse errors or
-auth attempts, and server shutdown; then `close` is `None` and the preceding
-`Error` / `AuthError` usually names the cause. Every connection that opened ends
-with exactly one `Disconnected`, before `Terminated` when the client stops (also
-on `close()` and on a session panic). Code 4900 is the TypeScript client's own
-pong timeout and never comes from the server.
+For a vault crank, `ChainClient::unfunded_positions` reads held positions that
+still need their settlement leg. `pending_capital_requests` reads queued deposits
+and withdrawals from program accounts. `VaultManager` builds the capital-cycle
+instructions, and `fund_maker_position` moves the required leg into a position the
+vault holds. These are chain observations and builders; select a cadence and
+authority policy in the operator.
 
 ## Vault operators
 
-`/vault` carries the vault's permitted maker and taker trading, swaps,
-subscriptions and projections on one connection. `examples/vault_operator.rs`
-shows cursor handling and verified fill and swap signing.
+`VaultOperatorClient` authenticates an operator for one vault. The connection grant
+is current-connection state; it disappears on disconnect or invalidation. Check
+permissions and `Ready` before trading. The [vault operator
+guide](https://beta.acta.markets/docs/protocol/vault-integration) owns the
+role, lifecycle, funding, and protocol detail.
 
-- **Authentication:** `StartVaultAuth { operator, vault_pda }` → signed challenge
-  bound to operator and vault → `VaultAuthSuccess { operator_kind, permissions }`.
-  Every reconnect uses a fresh challenge; there is no `ResumeAuth`.
-- **Grant:** `auth()` holds the current connection's grant and emits `None` on
-  disconnect or `vault_session_invalidated`. `can_maker()` / `can_taker()` need
-  `Ready` plus `SIGN_MAKER_QUOTES` / `OPEN_TAKER`. Governance quotes only while
-  the same key holds an active primary-delegate grant with `SIGN_MAKER_QUOTES`.
-- **Readiness:** each auth reads `GetMyActiveRfqs` and `GetPositions`; with maker
-  permission also `GetMmSummary`, `GetActiveRfqs`, `GetMyQuotes { scope: Live }`.
-- **Subscriptions:** only `WsChannel::Vaults`, no mint filters, on by default.
-  RFQs arrive without a subscription to grants with `SIGN_MAKER_QUOTES` while the
-  vault is tradable (`Normal` safety, caps prefilter).
-- **Discovering vaults:** `VaultCatalogChanged { vault_pda }` (a vault was created,
-  re-delegated or closed) is not sent on `/vault`. Add `WsChannel::Vaults` to your
-  existing `/maker` quote session, or hold a taker session; a second `/maker`
-  quote session for the same owner replaces the first (`session_replaced`), and
-  `/maker/data` cannot subscribe. Maker and taker `vaults` subscribers also get
-  `VaultProjectionAdvanced` for every vault. `VaultCatalogChanged` is best-effort
-  (not replayed; on a full queue it is dropped and the connection closed), so re-list
-  vaults over HTTP after every (re)connect as well as on each event.
-  `VaultFleet::discover` (features `vault` + `http`) does exactly this for one
-  operator key: a `/taker` session on `vaults` re-lists
-  `GET /api/v1/vaults?delegate=` (unexpired grants only) on each subscription and
-  catalog change and publishes `FleetListing` on a watch channel; a feed that
-  fails to subscribe or goes silent publishes `Failed` and reconnects.
-- **Quoting:** `sign_quote` puts the vault in `maker_owner`; send with
-  `quote_in_epoch` / `replace_in_epoch` / `batch_quotes_in_epoch` in the epoch whose
-  recovery you applied (`NotReady` once the session moved on). A writer vault with
-  `OPEN_TAKER` can take a holder vault's quote; the order binds both vaults, the
-  writer operator signs and pays, the holder delegate signs the quote.
-- **Checked signing:** `verify_and_sign_sponsored_tx` and `verify_and_sign_swap`
-  rebuild the expected instructions from what the operator agreed to
-  (`VaultOpenIntent::{Sale, BetweenVaults, Fill}` with `VaultTradeTerms`, or
-  `VaultSwapIntent` with request, quote, `PairPriceFeeds` (the pair's Pyth feed
-  ids and your shards; the served `main/second_price_update` must be one of
-  those shard accounts), `router` and the
-  operator's own oracle-based `min_output_floor`) and sign only if the served
-  transaction matches: fee payer and signers, compute budget within
-  `ComputeBudgetBounds`, every instruction's program, accounts and data, ATA
-  creates, the maker's Ed25519 quote signature, and router accounts confined to
-  the swap's route tail. A served minimum output below `min_output_floor` is
-  rejected even within slippage. `router` is the one the program build pins:
-  `JUPITER_V6_PROGRAM_ID`, or `DEVNET_SWAP_ROUTER_ID` on devnet. Deadlines are
-  checked, the blockhash is not. v0 lookup tables come from
-  `ChainClient::address_lookup_tables`. `verify_vault_open` / `verify_vault_swap`
-  do the same for callers outside the operator client.
-- **Taker RFQs:** with `OPEN_TAKER`, `CancelRfq` has no receipt: `send()` it and
-  wait for `RfqClosed`. `sell_rfq` (features `vault` + `chain-rpc`) drives a
-  vault sale end to end: RFQ, your `SaleDesk` picks a quote, accept, checked
-  signing against the counterparty read from chain (`Counterparty::load`), and
-  submit. Every send goes through your `SendGate` in one connection epoch;
-  `SaleError::in_flight()` names the signed sale a failure may have left in flight.
-- **Delivery:** `VaultRequestError::delivery()` is `NotForwarded` for local
-  refusals before the write (gate, wrong epoch, full queue) and server rejections
-  that say so, `Unknown` when the command may be in flight.
-- **Operations:** rebalance needs `REBALANCE`; recovery swaps are governance-only.
-  With `FUND_MAKER`, `VaultManager::fund_maker_position` moves the settlement leg
-  (call: quote, put: underlying) from the vault into a position it holds.
-  `VaultManager` also builds the capital-cycle crank (`examples/vault_capital.rs`).
-  `ChainClient::unfunded_positions` and `pending_capital_requests` (feature
-  `chain-rpc`) read what the crank must fund or process from the program's
-  accounts.
+`verify_and_sign_sponsored_tx` and `verify_and_sign_swap` rebuild the transaction
+from the operator's intent and sign only an exact match. Supply the vault account
+read before the request, bounded compute budget, lookup tables, trade terms or
+`PairPriceRoutes`, accepted staging routes, oracle shards, and an independent
+minimum-output floor. `verify_vault_open` and `verify_vault_swap` expose the same
+checks outside the client.
 
-`swap_submit_in_epoch` sends only in the given epoch and through the gate.
-A swap submit ACK confirms durable enqueue, not execution; after a lost ACK,
-retry the same signed payload while the template is valid.
-`VaultProjectionAdvanced` is a versioned cursor, not an execution result: ignore
-duplicate or older versions and reload the HTTP vault detail on every newer
-version or gap. `VaultProjection::follows(previous)` checks adjacency only.
+Checked signing verifies the fee payer, required signers, program IDs, account
+privileges, instruction data, ATA setup, quote signature, price section, and
+allowed swap hops. It checks deadlines but not the blockhash. A received ACK
+only proves enqueueing; use `swap_status` or `SwapSettled` and refresh the vault for
+execution state.
 
-## Chain helpers
+`VaultProjectionAdvanced` is a versioned projection cursor, not an execution
+result. Ignore duplicates and older versions, then reload HTTP vault detail on a
+newer version or a gap. `VaultProjection::follows` checks adjacency.
 
-With `chain-rpc`, `ChainClient::new(rpc_url, program_id, commitment)` sends the
-owner's maker transactions (`deposit_premium`, `withdraw_premium`,
-`fund_position`) or returns them via the `build_*_ixs` methods. `chain` alone has
-the offline builders. `FundPositionArgs` can wrap native SOL for wSOL positions:
+For a staged swap, request the same swap again only after the stage confirms.
+The unstage must spend the whole staged amount at the open generation. A recovery
+stage has its own `VaultSwapKind::RecoveryStage` shape; the checked signer rebuilds
+it before signing.
 
-```rust,no_run
-# #[cfg(feature = "chain-rpc")]
-# {
-use acta_maker_sdk::chain::{FundPositionArgs, NativeSolFunding};
-# fn args(maker_owner: solana_sdk::pubkey::Pubkey, position_pda: solana_sdk::pubkey::Pubkey) {
-let fund = FundPositionArgs {
-    maker_owner,
-    position_pda,
-    create_atas: true,
-    native_sol: NativeSolFunding::with_default_reserve(),
-};
-# let _ = fund;
-# }
-# }
+## Price routes, venues, and staging
+
+`PriceRoute` is the on-chain valuation source for a mint. For a served swap,
+`PairPriceRoutes` supplies the vault's main and second routes, accepted staging
+routes, and permitted push-oracle shards. The deployment's venue registry
+controls the allowed hop programs. Read the detailed route, brick, and
+checked-signing requirements in the [vault operator
+guide](https://beta.acta.markets/docs/protocol/vault-integration).
+
+For direct PT routing with `chain-rpc` and `http`, call `curator::Config::discover`
+once, then use `Curator::plan` and `curator::execute`. Re-discover after a route
+dependency or second-leg roll. A staged plan must refresh the slot and re-quote
+before its unstage; `Plan::Staged::unstage` is a fit preview, not a transaction to
+cache and send.
+
+The curator_pt example simulates only; it never broadcasts a mainnet transaction:
+
+```sh
+RPC_URL=... JUPITER_API_KEY=... CURATOR_KEYPAIR=/path/to/keypair.json \
+VAULT=... AMOUNT_ATOMS=1000000 \
+cargo +stable run --example curator_pt --features chain-rpc,http -- buy
 ```
 
-The pre-sign budget covers wrap amount, rent and fee (only wrap and reserve with
-another fee payer). It does not lock SOL against concurrent spending, and RPC
-errors are never read as a zero balance. Use `NativeSolFunding::Disabled` to
-wrap externally.
+Use sell for PT input before maturity or redeem after maturity. A staged
+simulation covers only the first half; the second needs confirmed staging state.
 
-### Key rotation
+## HTTP, wire, and upgrades
 
-`chain::ix::build_update_quote_signing_ixs(&program_id, &UpdateQuoteSigningIxArgs
-{ maker_owner, new_quote_signing })` builds `UpdateMakerQuoteSigning`; the owner
-signs it, and the new key needs no SOL. The venue accepts only the key registered
-on chain, so once the transaction lands restart sessions with the new signer; the
-owner passed to `ManagedWsConfig::new` and `.maker_owner` does not change. Rotate
-at once if a quote-signing key may be compromised.
+`HttpClient` reads venue limits, tokens, markets, vaults, and vault positions.
+Venue, token, and market responses use ETag revalidation; vault reads are not
+cached. Read current limits from the service rather than hardcoding them.
 
-## HTTP reference data
+Wire enum values are extensible. Match error codes, not messages, and include
+fallback arms for non_exhaustive enums. *_unix_ms fields are milliseconds;
+signed quote expiry is Unix seconds. Chain events are identified by
+(signature, instruction_index).
 
-`HttpClient` reads `venue()` (program ID, minimum quote validity, settlement
-buffer, refresh lead, pre-expiry cutoff, RFQ and signature timeouts, per-RFQ and
-per-taker limits),
-`tokens()` (by mint; underlyings add size rule, strike tick and quote mints),
-`markets(&MarketFilter)` (by underlying, quote, expiry, side and `active`;
-`Some(false)` adds closed and finalized markets the server has seen since it
-started, not full history) and `vaults()` / `vault(pda)` / `vault_positions(pda)`.
-Read limits from here instead of hardcoding them. Venue, token and market
-responses are revalidated with `If-None-Match`: once an ETag is cached, unchanged
-polls get 304 and changed ones 200; refetch
-when `subscribe_reference_changes()` yields new ETags (on `/maker/data` this
-requires the backend release that delivers `ReferenceChanged` there).
-Vault reads are not cached.
+Use `WS_PROTOCOL_VERSION` instead of hardcoding the protocol version.
 
-## Wire notes
+Version 0.5.4 adds `WelcomeData` validity-window fields, the `decimal` feature,
+maker-data owner pushes, `QuoteOutcomeTracker`, batch confirmation, `PriceRoute`
+swaps, and staged recovery. See [CHANGELOG.md](CHANGELOG.md) for exact 0.5.4
+and earlier migration notes, especially explicit maker owners and epoch-bound
+quote methods.
 
-Known string values and tagged states (`PositionType`, `MakerQuoteState`,
-`OrderExecutionState`, `QuoteCancelReason`, `RfqCloseReason`, ...) are SDK
-enums; see the API reference. Free-form reason text stays a string.
-`Welcome.server_time_unix_ms`, `AuthSuccess.expires_at`,
-`RfqBroadcast.sent_at_unix_ms` and `instruction_index` on chain events are
-required. `*_unix_ms` is milliseconds; credential expiry is Unix seconds and does
-not bound the socket. Chain events are keyed by `(signature, instruction_index)`.
-`GlobalStats.usd` amounts are exact decimal strings; legacy numeric volume fields
-are raw units, not USD.
+## Latency sample
 
-## Latency budget
-
-`examples/loopback_latency.rs`, release build, `low_latency()`, 20 000 outbound and
-5 000 inbound samples, measured on one Apple silicon machine. These are SDK overhead measurements, not a guarantee; network and server time add on top.
+Release loopback sample with `low_latency` on one Apple silicon machine:
 
 | Leg | p50 | p90 | p99 |
-|-----|-----|-----|-----|
-| `try_send` → frame on the peer's socket | 20 µs | 27 µs | 60 µs |
-| peer send → parsed by the session task (paced 1/ms) | 150 µs | 281 µs | 424 µs |
-| session task → subscriber `recv()` | 19 µs | 39 µs | 70 µs |
+|---|---|---|---|
+| `try_send` to peer frame | 20 µs | 27 µs | 60 µs |
+| peer send to session parse | 150 µs | 281 µs | 424 µs |
+| session task to subscriber recv | 19 µs | 39 µs | 70 µs |
 
-## Upgrading and development
-
-Breaking changes per release are in `CHANGELOG.md`, which ships with the crate.
-In a repository checkout, `bash scripts/test.sh` runs the wire-compatibility
-check (needs `../rust-backend` or `ACTA_BACKEND_DIR`), feature combinations,
-tests, examples, Clippy, rustdoc and packaging.
+This measures SDK overhead only; network and server time are additional.
 
 ## Documentation
 
+- [Rust maker guide](https://beta.acta.markets/docs/quickstart/maker-rust-sdk)
+- [Maker API reference](https://beta.acta.markets/docs/reference/maker-api)
+- [WebSocket conventions](https://beta.acta.markets/docs/reference/ws-common)
+- [Vault operator guide](https://beta.acta.markets/docs/protocol/vault-integration)
 - [API reference](https://docs.rs/acta-maker-sdk)
-- [Acta integration documentation](https://beta.acta.markets/docs)
 
 ## License
 

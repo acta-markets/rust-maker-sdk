@@ -8,6 +8,10 @@ pub enum ChainError {
     #[cfg(feature = "chain-rpc")]
     #[error(transparent)]
     Rpc(#[from] solana_rpc_client::api::client_error::Error),
+    #[error("account does not exist: {0}")]
+    MissingAccount(Pubkey),
+    #[error("confirmation transport: {0}")]
+    Confirmation(String),
     #[error("invalid account data")]
     InvalidAccountData,
     #[error("account owner mismatch: expected {expected}, got {actual}")]

@@ -7,7 +7,7 @@ use solana_sdk::{
     pubkey::Pubkey,
 };
 
-use super::{VaultAccount, VaultChainError, VaultRequestKind, pda};
+use super::{PriceRoute, VaultAccount, VaultChainError, VaultRequestKind, pda};
 use crate::chain::ix::{
     ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
     derive_associated_token_address as ata, derive_associated_token_address_with_bump,
@@ -42,6 +42,7 @@ pub(super) enum VaultIx {
     OpenPositionBetweenVaults = 61,
     DisableVaultDelegate = 62,
     ClosingConvertToMain = 68,
+    VaultStagingSwap = 76,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +178,8 @@ pub struct VaultManagerArgs {
     pub share_mint: Pubkey,
     pub main_token_program: Pubkey,
     pub second_token_program: Pubkey,
+    /// `VaultAccount::second_leg_generation` that `second_mint` belongs to.
+    pub second_leg_generation: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,8 +188,9 @@ pub struct VaultAddresses {
     pub policy: Pubkey,
     pub delegate: Pubkey,
     pub global_config: Pubkey,
-    pub main_oracle_source: Pubkey,
-    pub second_oracle_source: Pubkey,
+    pub swap_venues: Pubkey,
+    pub main_price_route: Pubkey,
+    pub second_price_route: Pubkey,
     pub manager_stake_authority: Pubkey,
     pub vault_main_ata: Pubkey,
     pub vault_second_ata: Pubkey,
@@ -215,7 +219,71 @@ impl VaultManager {
             share_mint: vault.share_mint,
             main_token_program: vault.main_token_program,
             second_token_program: vault.second_token_program,
+            second_leg_generation: vault.second_leg_generation,
         })
+    }
+
+    /// Errs when `vault` is another vault or its second leg rolled since this manager was built.
+    pub fn ensure_current(&self, vault: &VaultAccount) -> Result<(), VaultChainError> {
+        let args = &self.args;
+        if vault.vault_id != args.vault_id {
+            return Err(VaultChainError::InvalidInput(
+                "vault account belongs to another vault",
+            ));
+        }
+        if vault.second_leg_generation != args.second_leg_generation
+            || vault.second_mint != args.second_mint
+            || vault.second_token_program != args.second_token_program
+        {
+            return Err(VaultChainError::SecondLegRolled);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_account(&self, staging: super::VaultStagingState) -> VaultAccount {
+        let args = &self.args;
+        VaultAccount {
+            vault_id: args.vault_id,
+            phase: super::VaultPhase::ProcessingCapital,
+            safety: super::VaultSafety::Normal,
+            equity_computed: false,
+            accepting_deposits: false,
+            governance_authority: args.actor,
+            primary_delegate: args.delegate_authority,
+            main_mint: args.main_mint,
+            second_mint: args.second_mint,
+            share_mint: args.share_mint,
+            main_token_program: args.main_token_program,
+            second_token_program: args.second_token_program,
+            active_expiry: 0,
+            open_positions: 0,
+            total_shares: 0,
+            pending_deposit_count: 0,
+            pending_withdraw_count: 0,
+            capital_fallback_delay_secs: 0,
+            closing_started_at: 0,
+            boundary_equity: 0,
+            boundary_shares: 0,
+            staging,
+            second_leg_generation: args.second_leg_generation,
+        }
+    }
+
+    /// Rebuilds the second leg (mint, ATA, price route) from `vault`; returns whether it rolled.
+    pub fn refresh(&mut self, vault: &VaultAccount) -> Result<bool, VaultChainError> {
+        match self.ensure_current(vault) {
+            Err(VaultChainError::SecondLegRolled) => {
+                *self = Self::new(VaultManagerArgs {
+                    second_mint: vault.second_mint,
+                    second_token_program: vault.second_token_program,
+                    second_leg_generation: vault.second_leg_generation,
+                    ..self.args
+                })?;
+                Ok(true)
+            }
+            other => other.map(|()| false),
+        }
     }
 
     pub fn new(args: VaultManagerArgs) -> Result<Self, VaultChainError> {
@@ -250,8 +318,9 @@ impl VaultManager {
             policy: pda::vault_policy(program_id, &vault).0,
             delegate: pda::vault_delegate(program_id, &vault, &args.delegate_authority).0,
             global_config: pda::global_config(program_id).0,
-            main_oracle_source: pda::oracle_source(program_id, &args.main_mint).0,
-            second_oracle_source: pda::oracle_source(program_id, &args.second_mint).0,
+            swap_venues: pda::swap_venues(program_id).0,
+            main_price_route: pda::price_route(program_id, &args.main_mint).0,
+            second_price_route: pda::price_route(program_id, &args.second_mint).0,
             manager_stake_authority,
             vault_main_ata: ata(&vault, &args.main_mint, &args.main_token_program),
             vault_second_ata: ata(&vault, &args.second_mint, &args.second_token_program),
@@ -279,47 +348,53 @@ impl VaultManager {
         )
     }
 
-    #[must_use]
-    pub fn process_equity(
+    /// Each leg's route account, then its bricks' accounts, Pyth read on `shard`.
+    pub fn price_section(
         &self,
-        main_price_update: Pubkey,
-        second_price_update: Pubkey,
-    ) -> Instruction {
+        main: &PriceRoute,
+        second: &PriceRoute,
+        shard: u16,
+    ) -> Result<Vec<AccountMeta>, VaultChainError> {
+        if main.mint != self.args.main_mint || second.mint != self.args.second_mint {
+            return Err(VaultChainError::InvalidInput(
+                "price routes must price the vault's main and second mints",
+            ));
+        }
+        let mut section = main.accounts(self.addresses.main_price_route, shard);
+        section.extend(second.accounts(self.addresses.second_price_route, shard));
+        Ok(section)
+    }
+
+    #[must_use]
+    pub fn process_equity(&self, price_section: &[AccountMeta]) -> Instruction {
         let a = &self.addresses;
-        self.instruction(
-            VaultIx::ProcessVaultEquity,
-            vec![
-                AccountMeta::new_readonly(self.args.actor, true),
-                AccountMeta::new(a.vault, false),
-                AccountMeta::new_readonly(a.policy, false),
-                AccountMeta::new_readonly(a.delegate, false),
-                AccountMeta::new(self.args.share_mint, false),
-                AccountMeta::new(a.vault_main_ata, false),
-                AccountMeta::new(a.vault_second_ata, false),
-                AccountMeta::new(a.manager_stake_ata, false),
-                AccountMeta::new_readonly(self.args.main_mint, false),
-                AccountMeta::new_readonly(a.main_oracle_source, false),
-                AccountMeta::new_readonly(main_price_update, false),
-                AccountMeta::new_readonly(self.args.second_mint, false),
-                AccountMeta::new_readonly(a.second_oracle_source, false),
-                AccountMeta::new_readonly(second_price_update, false),
-                AccountMeta::new_readonly(self.args.main_token_program, false),
-                AccountMeta::new_readonly(self.args.second_token_program, false),
-                AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
-            ],
-            &[],
-        )
+        let mut accounts = vec![
+            AccountMeta::new_readonly(self.args.actor, true),
+            AccountMeta::new(a.vault, false),
+            AccountMeta::new_readonly(a.policy, false),
+            AccountMeta::new_readonly(a.delegate, false),
+            AccountMeta::new(self.args.share_mint, false),
+            AccountMeta::new(a.vault_main_ata, false),
+            AccountMeta::new(a.vault_second_ata, false),
+            AccountMeta::new(a.manager_stake_ata, false),
+            AccountMeta::new_readonly(self.args.main_mint, false),
+            AccountMeta::new_readonly(self.args.second_mint, false),
+            AccountMeta::new_readonly(self.args.main_token_program, false),
+            AccountMeta::new_readonly(self.args.second_token_program, false),
+            AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+        ];
+        accounts.extend_from_slice(price_section);
+        self.instruction(VaultIx::ProcessVaultEquity, accounts, &[])
     }
 
     #[must_use]
     pub fn process_idle_withdrawal(
         &self,
         user: Pubkey,
-        main_price_update: Pubkey,
-        second_price_update: Pubkey,
+        price_section: &[AccountMeta],
     ) -> Instruction {
         let request = pda::withdraw_request(&self.args.program_id, &self.addresses.vault, &user).0;
-        let mut ix = self.process_equity(main_price_update, second_price_update);
+        let mut ix = self.process_equity(price_section);
         ix.accounts.push(AccountMeta::new_readonly(request, false));
         ix
     }

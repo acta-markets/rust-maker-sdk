@@ -1,4 +1,5 @@
 use super::*;
+use crate::chain::ix::{FundPositionIxArgs, build_fund_position_ixs};
 use solana_sdk::{
     hash::Hash, instruction::AccountMeta, signature::Keypair, transaction::Transaction,
 };
@@ -172,6 +173,8 @@ async fn native_funding_batches_only_the_required_accounts() {
             ),
             program_id: program,
             commitment,
+            #[cfg(feature = "ws-client")]
+            confirmation_ws_url: None,
         };
         let result = client
             .prepare_fund_position(
@@ -276,4 +279,92 @@ fn lookup_table_parses_active_tables_only() {
         parse_lookup_table(key, &account),
         Err(ChainError::AccountOwnerMismatch { .. })
     ));
+}
+
+#[tokio::test]
+async fn confirming_conveniences_surface_on_chain_failure() {
+    use serde_json::json;
+    use solana_rpc_client::api::{client_error::ErrorKind, request::RpcRequest};
+    let owner = solana_sdk::signature::Keypair::new();
+    for deposit in [false, true] {
+        let (client, calls) = ChainClient::with_submission_status(json!({
+            "slot":1,"confirmations":1,"err":{"InstructionError":[0,{"Custom":42}]},
+            "status":{"Err":{"InstructionError":[0,{"Custom":42}]}},"confirmationStatus":"confirmed"
+        }));
+        let result = if deposit {
+            client
+                .deposit_premium(
+                    DepositPremiumArgs {
+                        maker_owner: owner.pubkey(),
+                        amount: 1,
+                        premium_mint: Pubkey::new_unique(),
+                        token_program: Some(TOKEN_PROGRAM_ID),
+                        create_atas: false,
+                    },
+                    &owner,
+                    None,
+                )
+                .await
+        } else {
+            client
+                .send_instructions_with_options(vec![], &owner, &[], SendOptions::default())
+                .await
+        };
+        assert!(
+            matches!(result, Err(ChainError::Rpc(error)) if matches!(error.kind(), ErrorKind::TransactionError(_)))
+        );
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .contains(&RpcRequest::GetSignatureStatuses)
+        );
+    }
+}
+
+#[tokio::test]
+async fn confirming_call_rejects_expired_unobserved_transaction() {
+    let (client, _) = ChainClient::with_submission_status(serde_json::Value::Null);
+    let owner = solana_sdk::signature::Keypair::new();
+    assert!(
+        client
+            .send_instructions_with_options(vec![], &owner, &[], SendOptions::default())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn shared_blockhash_submission_does_not_confirm_or_fetch_blockhash() {
+    use solana_rpc_client::api::request::RpcRequest;
+    let (client, calls) = ChainClient::with_submission_status(serde_json::Value::Null);
+    let owner = solana_sdk::signature::Keypair::new();
+    client
+        .send_instructions_with_blockhash(
+            vec![],
+            &owner,
+            &[],
+            SendOptions::default(),
+            Hash::new_unique(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(*calls.lock().unwrap(), vec![RpcRequest::SendTransaction]);
+}
+
+#[cfg(feature = "ws-client")]
+#[tokio::test]
+async fn configured_ws_confirmation_propagates_status_fallback_failure() {
+    use serde_json::json;
+    let (client, _) = ChainClient::with_submission_status(json!({
+        "slot":1,"confirmations":1,"err":{"InstructionError":[0,{"Custom":42}]},
+        "status":{"Err":{"InstructionError":[0,{"Custom":42}]}},"confirmationStatus":"confirmed"
+    }));
+    let client = client.with_confirmation_ws_url("invalid://endpoint");
+    let owner = solana_sdk::signature::Keypair::new();
+    let error = client
+        .send_instructions_with_options(vec![], &owner, &[], SendOptions::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ChainError::Confirmation(message) if message.contains("failed")));
 }

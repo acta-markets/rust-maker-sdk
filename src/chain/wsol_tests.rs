@@ -112,3 +112,18 @@ fn wrap_instruction_order_is_transfer_then_sync_native() {
     );
     assert_eq!(sync.data, vec![SPL_TOKEN_SYNC_NATIVE]);
 }
+
+#[test]
+fn public_wrap_creates_before_transfer_and_sync() {
+    let owner = Pubkey::new_unique();
+    let payer = Pubkey::new_unique();
+    let instructions = build_wrap_sol_ixs(owner, payer, 123);
+    assert_eq!(instructions.len(), 3);
+    assert_eq!(instructions[0].accounts[0].pubkey, payer);
+    assert_eq!(instructions[1].data[4..], 123u64.to_le_bytes());
+    assert_eq!(instructions[2].data, vec![17]);
+    assert_eq!(
+        instructions[1].accounts[1].pubkey,
+        instructions[2].accounts[0].pubkey
+    );
+}

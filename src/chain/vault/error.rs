@@ -26,8 +26,14 @@ pub enum VaultChainError {
     UnknownTokenProgramKind(u8),
     #[error("unknown vault accounting flags {0:#x}")]
     UnknownAccountingFlags(u32),
-    #[error("oracle source has no Pyth feed")]
-    MissingPythFeed,
+    #[error("unknown vault staged kind {0}")]
+    UnknownStagedKind(u8),
+    #[error("unknown vault staged leg {0}")]
+    UnknownStagedLeg(u8),
+    #[error("invalid price route: {0}")]
+    PriceRoute(&'static str),
+    #[error("vault second leg rolled since the manager was built; refresh it")]
+    SecondLegRolled,
     #[error("vault batch exceeds {VAULT_CAPITAL_BATCH_USERS} users")]
     BatchTooLarge,
     #[error("invalid vault input: {0}")]

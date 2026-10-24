@@ -7,7 +7,7 @@ mod common;
 mod venue;
 
 use acta_maker_sdk::chain::vault::{
-    ComputeBudgetBounds, DEVNET_SWAP_ROUTER_ID, PairPriceFeeds, VaultManager, VaultOpenIntent,
+    ComputeBudgetBounds, PairPriceRoutes, VaultAccount, VaultManager, VaultOpenIntent,
     VaultSwapIntent, VaultTradeTerms,
 };
 use acta_maker_sdk::ws::managed::*;
@@ -158,15 +158,17 @@ async fn sign_fill(
     Ok(())
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 async fn rebalance(
     client: &VaultOperatorClient,
     vault: &VaultManager,
-    price_feeds: PairPriceFeeds<'_>,
+    price_routes: PairPriceRoutes<'_>,
     lookup_tables: &[AddressLookupTableAccount],
     direction: VaultSwapDirection,
     amount: &str,
     min_output_floor: u64,
+    // Read fresh: the second leg and the staging slot are checked against it.
+    account: &VaultAccount,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let request = SwapQuoteData {
         request_id: Uuid::new_v4(),
@@ -182,9 +184,9 @@ async fn rebalance(
             vault,
             request: &request,
             quote: &quote,
-            price_feeds,
+            price_routes,
             min_output_floor,
-            router: DEVNET_SWAP_ROUTER_ID,
+            account: *account,
         },
         lookup_tables,
         COMPUTE_BOUNDS,

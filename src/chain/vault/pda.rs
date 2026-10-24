@@ -4,8 +4,12 @@ pub(crate) fn global_config(program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"global_config"], program_id)
 }
 
-pub(crate) fn oracle_source(program_id: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"oracle_source", mint.as_ref()], program_id)
+pub(crate) fn price_route(program_id: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"price_route", mint.as_ref()], program_id)
+}
+
+pub(crate) fn swap_venues(program_id: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"swap_venues"], program_id)
 }
 
 pub(crate) fn vault(program_id: &Pubkey, vault_id: &[u8; 32]) -> (Pubkey, u8) {

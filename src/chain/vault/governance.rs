@@ -6,7 +6,9 @@ use solana_sdk::{
 use super::manager::VaultIx;
 use super::{VaultChainError, VaultManager, pda};
 use crate::VaultDelegatePermissions;
-use crate::chain::ix::SYSTEM_PROGRAM_ID;
+use crate::chain::ix::{
+    ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, derive_associated_token_address as ata,
+};
 
 const CAPABILITIES_KNOWN_MASK: u32 = (1 << 3) - 1;
 const MAX_REBALANCE_DRIFT_BPS: u16 = 200;
@@ -33,6 +35,8 @@ pub enum VaultGovernanceUpdate {
     },
     Policy(VaultPolicyUpdate),
     GovernanceAuthority(Pubkey),
+    /// Next term of the second leg; apply with [`VaultManager::apply_second_leg`].
+    SecondLeg(Pubkey),
 }
 
 #[repr(u8)]
@@ -44,6 +48,7 @@ pub enum VaultGovernanceUpdateKind {
     Capabilities = 3,
     Policy = 4,
     GovernanceAuthority = 5,
+    SecondLeg = 6,
 }
 
 impl VaultGovernanceUpdate {
@@ -56,6 +61,7 @@ impl VaultGovernanceUpdate {
             Self::Capabilities { .. } => VaultGovernanceUpdateKind::Capabilities,
             Self::Policy(_) => VaultGovernanceUpdateKind::Policy,
             Self::GovernanceAuthority(_) => VaultGovernanceUpdateKind::GovernanceAuthority,
+            Self::SecondLeg(_) => VaultGovernanceUpdateKind::SecondLeg,
         }
     }
 
@@ -68,9 +74,9 @@ impl VaultGovernanceUpdate {
                 performance_bps,
                 management_bps,
             } => {
-                if performance_bps > 5_000 || management_bps > 1_000 {
+                if performance_bps > 10_000 || management_bps > 1_000 {
                     return Err(VaultChainError::InvalidInput(
-                        "fees exceed 5000 bps performance or 1000 bps management",
+                        "fees exceed 10000 bps performance or 1000 bps management",
                     ));
                 }
                 payload[..2].copy_from_slice(&performance_bps.to_le_bytes());
@@ -99,10 +105,10 @@ impl VaultGovernanceUpdate {
                 payload[2..4].copy_from_slice(&policy.max_rebalance_drift_bps.to_le_bytes());
                 payload[4..6].copy_from_slice(&policy.min_main_liquidity_bps.to_le_bytes());
             }
-            Self::GovernanceAuthority(key) => {
+            Self::GovernanceAuthority(key) | Self::SecondLeg(key) => {
                 if key == Pubkey::default() {
                     return Err(VaultChainError::InvalidInput(
-                        "vault authority update cannot use the zero pubkey",
+                        "vault authority or second-leg update cannot use the zero pubkey",
                     ));
                 }
                 payload.copy_from_slice(key.as_ref());
@@ -138,8 +144,13 @@ impl VaultManager {
         &self,
         kind: VaultGovernanceUpdateKind,
         proposal_payer: Pubkey,
-        prices: Option<(Pubkey, Pubkey)>,
+        price_section: Option<&[AccountMeta]>,
     ) -> Result<Instruction, VaultChainError> {
+        if kind == VaultGovernanceUpdateKind::SecondLeg {
+            return Err(VaultChainError::InvalidInput(
+                "second-leg updates apply through apply_second_leg",
+            ));
+        }
         let mut ix = self.instruction(
             VaultIx::ApplyVaultUpdate,
             vec![
@@ -154,16 +165,60 @@ impl VaultManager {
             kind,
             VaultGovernanceUpdateKind::Fees | VaultGovernanceUpdateKind::HwmReset
         ) {
-            let Some((main, second)) = prices else {
+            let Some(price_section) = price_section else {
                 return Err(VaultChainError::InvalidInput(
-                    "fee and HWM updates require both price updates to settle the old terms",
+                    "fee and HWM updates require the price section to settle the old terms",
                 ));
             };
-            let mut equity = self.process_equity(main, second).accounts;
+            let mut equity = self.process_equity(price_section).accounts;
             equity.drain(1..4);
             ix.accounts.extend(equity);
         }
         Ok(ix)
+    }
+
+    /// Applies an elapsed `SecondLeg`; pass the price section only if the old ATA holds dust.
+    pub fn apply_second_leg(
+        &self,
+        proposal_payer: Pubkey,
+        new_mint: Pubkey,
+        price_section: Option<&[AccountMeta]>,
+    ) -> Result<Instruction, VaultChainError> {
+        let args = &self.args;
+        if [
+            args.main_mint,
+            args.second_mint,
+            args.share_mint,
+            Pubkey::default(),
+        ]
+        .contains(&new_mint)
+        {
+            return Err(VaultChainError::InvalidInput(
+                "new second mint must differ from the vault's mints",
+            ));
+        }
+        let kind = VaultGovernanceUpdateKind::SecondLeg;
+        let a = &self.addresses;
+        let mut accounts = vec![
+            AccountMeta::new(a.vault, false),
+            AccountMeta::new(a.policy, false),
+            AccountMeta::new(self.pending_update(kind), false),
+            AccountMeta::new(proposal_payer, false),
+            AccountMeta::new(args.actor, true),
+            AccountMeta::new(args.second_mint, false),
+            AccountMeta::new(a.vault_second_ata, false),
+            AccountMeta::new_readonly(args.second_token_program, false),
+            AccountMeta::new_readonly(new_mint, false),
+            AccountMeta::new(ata(&a.vault, &new_mint, &args.second_token_program), false),
+            AccountMeta::new_readonly(args.second_token_program, false),
+            AccountMeta::new_readonly(pda::price_route(&args.program_id, &new_mint).0, false),
+            AccountMeta::new_readonly(a.second_price_route, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(a.vault_main_ata, false),
+        ];
+        accounts.extend(price_section.into_iter().flatten().cloned());
+        Ok(self.instruction(VaultIx::ApplyVaultUpdate, accounts, &[kind as u8]))
     }
 
     #[must_use]

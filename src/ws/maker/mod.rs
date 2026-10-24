@@ -1,9 +1,11 @@
 //! Maker quote and data clients.
 
 mod data;
+mod outcome;
 mod quote;
 
 pub use data::{MakerDataClient, MakerDataRequest, MakerDataRequestError, MakerResponse};
+pub use outcome::{QuoteLossReason, QuoteOutcome, QuoteOutcomeTracker, QuoteUnknownReason};
 pub use quote::MakerQuoteClient;
 
 use crate::ws::managed::{MakerWsEndpoint, ManagedWsConfigError};

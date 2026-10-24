@@ -341,6 +341,10 @@ pub struct WelcomeData {
     pub enabled_features: Vec<String>,
     #[serde_as(as = "UnixMillis")]
     pub server_time_unix_ms: SystemTime,
+    /// Earliest accepted quote `valid_until` is now plus this.
+    pub min_quote_validity_seconds: u32,
+    /// A quote stays executable only while `valid_until - settlement_buffer_seconds > now`.
+    pub settlement_buffer_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

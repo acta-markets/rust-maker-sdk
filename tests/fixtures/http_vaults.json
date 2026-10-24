@@ -8,6 +8,7 @@
       "primary_delegate": "GgBaCs3NCBuZN12kCJgAW63ydqohFkHEdfdEXBPzLHq",
       "main_mint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
       "second_mint": "QWmroo4YnnMqYW3cnxWkFdaTxGD3P7vMSzwMHGbUzwF",
+      "second_leg_generation": "0",
       "share_mint": "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx",
       "main_token_program": "legacy_spl",
       "second_token_program": "token_2022",
@@ -48,6 +49,14 @@
       "live_share_supply": "80",
       "observed_manager_stake_shares": "20",
       "balance_chain_slot": "1000",
+      "staging": {
+        "mint": "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN",
+        "from_leg": "second",
+        "amount": "70",
+        "staged_at": "1700000050",
+        "generation": "2"
+      },
+      "staged_generation": "2",
       "policy": {
         "max_open_positions": 12,
         "max_rebalance_drift_bps": 100,
@@ -135,6 +144,7 @@
       "primary_delegate": "GgBaCs3NCBuZN12kCJgAW63ydqohFkHEdfdEXBPzLHq",
       "main_mint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
       "second_mint": "QWmroo4YnnMqYW3cnxWkFdaTxGD3P7vMSzwMHGbUzwF",
+      "second_leg_generation": "0",
       "share_mint": "3NAM1YJMhSPvtAkmGTRABe1hYZN3aE2hZHKy3JZy9fHk",
       "main_token_program": "legacy_spl",
       "second_token_program": "token_2022",
@@ -175,6 +185,8 @@
       "live_share_supply": null,
       "observed_manager_stake_shares": null,
       "balance_chain_slot": null,
+      "staging": null,
+      "staged_generation": "2",
       "policy": {
         "max_open_positions": 12,
         "max_rebalance_drift_bps": 100,

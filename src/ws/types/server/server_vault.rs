@@ -1,5 +1,5 @@
 use crate::types::ids::OrderId;
-use crate::types::{VaultDelegatePermissions, VaultOperatorKind, VaultSwapMode};
+use crate::types::{VaultDelegatePermissions, VaultOperatorKind, VaultStagingStep, VaultSwapMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -38,8 +38,9 @@ pub struct SwapQuoteResultData {
     pub quoted_out_amount: String,
     pub minimum_out_amount: String,
     pub valid_until: String,
-    pub main_price_update: String,
-    pub second_price_update: String,
+    /// Absent for one-transaction swaps; once `stage` confirms, re-request (new id) for `unstage`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staging: Option<VaultStagingStep>,
 }
 
 /// Durable enqueue acknowledgement, not chain confirmation.

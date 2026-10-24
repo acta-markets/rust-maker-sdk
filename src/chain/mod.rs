@@ -1,19 +1,25 @@
 mod accounts;
+pub mod batch;
 mod error;
 pub mod ix;
 
 #[cfg(feature = "chain-rpc")]
+pub mod confirmation;
+#[cfg(feature = "chain-rpc")]
 pub mod rpc;
 
-#[cfg(feature = "chain-rpc")]
 mod settlement;
 
 pub mod vault;
 
-#[cfg(feature = "chain-rpc")]
 pub mod wsol;
 
 pub use accounts::{MakerInfo, MarketInfo, PositionInfo, PositionStatus};
+pub use batch::{
+    MakerSnapshot, PositionSnapshot, PremiumBalance, PremiumToken, decode_premium_balance,
+};
+#[cfg(feature = "chain-rpc")]
+pub use confirmation::ConfirmationStatus;
 pub use error::ChainError;
 pub use ix::{
     ChainIxError, DepositPremiumIxArgs, FundPositionIxArgs, UpdateQuoteSigningIxArgs,
@@ -27,5 +33,4 @@ pub use rpc::{
     ChainClient, DepositPremiumArgs, FundPositionArgs, SendOptions, WithdrawPremiumArgs,
 };
 
-#[cfg(feature = "chain-rpc")]
 pub use wsol::{DEFAULT_SOL_RESERVE_LAMPORTS, NATIVE_MINT, NativeSolFunding};

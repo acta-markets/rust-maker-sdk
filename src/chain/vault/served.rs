@@ -8,13 +8,19 @@ use solana_sdk::{
     pubkey::Pubkey,
 };
 
-use super::VaultChainError;
 use super::manager::VaultManager;
-use super::pyth::pyth_price_feed_account;
-use super::trading::{VaultSwapKind, VaultSwapRoute, VaultTradeTerms};
-use crate::chain::ix::{ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID};
+use super::price_route::PriceRoute;
+use super::trading::{
+    NO_AMOUNT_OFFSET, VaultStagingAsset, VaultSwapAmountOffset, VaultSwapHop, VaultSwapKind,
+    VaultSwapPlan, VaultTradeTerms,
+};
+use super::{VaultAccount, VaultChainError, pda};
+use crate::chain::ix::{
+    ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    derive_associated_token_address as ata,
+};
 use crate::orders::{SignerLike, verify_order_id_signature_bytes};
-use crate::types::{VaultSwapDirection, VaultSwapMode};
+use crate::types::{VaultLeg, VaultStagingStep, VaultSwapDirection, VaultSwapMode};
 use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
 
 const COMPUTE_BUDGET_PROGRAM_ID: Pubkey =
@@ -30,6 +36,13 @@ const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
 const SET_COMPUTE_UNIT_PRICE: u8 = 3;
 const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 const BPS: u128 = 10_000;
+const STAGING_GENERATION_OFFSET: usize = 27;
+/// SPL and Sanctum multi-validator stake-pool programs.
+pub(super) const STAKE_POOL_PROGRAM_IDS: [Pubkey; 2] = [
+    solana_sdk::pubkey!("SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy"),
+    solana_sdk::pubkey!("SPMBzsVUuoHA4Jm6KunbsotaahvVikZs1JyTW6iJvbn"),
+];
+const UPDATE_STAKE_POOL_BALANCE: u8 = 7;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -101,8 +114,10 @@ pub enum VaultIntentError {
     Route(&'static str),
     #[error("swap terms: {0}")]
     Terms(&'static str),
-    #[error("served {0} price update is not a configured shard of the vault's feed")]
-    PriceUpdate(&'static str),
+    #[error("served {0} price section is not the vault's price route on a configured shard")]
+    PriceSection(&'static str),
+    #[error("swap setup: {0}")]
+    Setup(&'static str),
     #[error(transparent)]
     Intent(#[from] VaultChainError),
 }
@@ -138,24 +153,26 @@ pub enum VaultOpenIntent<'a> {
     },
 }
 
-/// Pyth feed ids of a vault pair and the push-oracle shards the deployment posts them to.
+/// The vault pair's price routes and the push-oracle shards the deployment posts Pyth feeds to.
 #[derive(Debug, Clone, Copy)]
-pub struct PairPriceFeeds<'a> {
-    pub main: [u8; 32],
-    pub second: [u8; 32],
+pub struct PairPriceRoutes<'a> {
+    pub main: &'a PriceRoute,
+    pub second: &'a PriceRoute,
+    /// Routes of the mints the operator accepts as a staging mint; empty refuses staged swaps.
+    pub staging: &'a [PriceRoute],
     pub shards: &'a [u16],
 }
 
-/// A swap the operator requested; the served price updates must be shards of `price_feeds`.
+/// A swap the operator requested; the served price section must follow `price_routes`.
 #[derive(Debug, Clone, Copy)]
 pub struct VaultSwapIntent<'a> {
     pub vault: &'a VaultManager,
     pub request: &'a SwapQuoteData,
     pub quote: &'a SwapQuoteResultData,
-    pub price_feeds: PairPriceFeeds<'a>,
+    pub price_routes: PairPriceRoutes<'a>,
     pub min_output_floor: u64,
-    /// Router pinned by the target program build: `JUPITER_V6_PROGRAM_ID` or `DEVNET_SWAP_ROUTER_ID`.
-    pub router: Pubkey,
+    /// The vault before the request; checked against its second leg and staging slot.
+    pub account: VaultAccount,
 }
 
 /// Verifies a served position-open transaction against `intent` and the order id it is served for.
@@ -238,6 +255,8 @@ pub fn verify_vault_swap(
         min_output_floor,
         ..
     } = *intent;
+    vault.ensure_current(&intent.account)?;
+    let slot = intent.account.staging;
     if request.vault_pda != vault.addresses.vault.to_string() {
         return Err(VaultIntentError::Terms("request names a different vault"));
     }
@@ -261,9 +280,27 @@ pub fn verify_vault_swap(
             ));
         }
     };
-    let amount_in = parse_amount(&request.amount, "request amount")?;
-    if parse_amount(&quote.in_amount, "quoted input")? != amount_in {
-        return Err(VaultIntentError::Terms("quoted input differs from request"));
+    let amount_in = parse_amount(&quote.in_amount, "quoted input")?;
+    let open_slot = slot.open;
+    match (quote.staging, open_slot) {
+        (Some(VaultStagingStep::Unstage), Some(slot)) if amount_in != slot.amount => {
+            return Err(VaultIntentError::Terms(
+                "an unstage must spend the whole staged amount",
+            ));
+        }
+        (Some(VaultStagingStep::Unstage), None) => {
+            return Err(VaultIntentError::Terms("nothing is staged to unstage"));
+        }
+        (Some(VaultStagingStep::Stage), Some(_)) => {
+            return Err(VaultIntentError::Terms(
+                "a stage needs an empty staging slot",
+            ));
+        }
+        (Some(VaultStagingStep::Unstage), Some(_)) => {}
+        _ if amount_in != parse_amount(&request.amount, "request amount")? => {
+            return Err(VaultIntentError::Terms("quoted input differs from request"));
+        }
+        _ => {}
     }
     let quoted_out = parse_amount(&quote.quoted_out_amount, "quoted output")?;
     let minimum_out = parse_amount(&quote.minimum_out_amount, "minimum output")?;
@@ -277,7 +314,8 @@ pub fn verify_vault_swap(
             "minimum output exceeds the requested slippage",
         ));
     }
-    if minimum_out < min_output_floor {
+    // A stage fills the staging mint, not the output leg the floor is in.
+    if quote.staging != Some(VaultStagingStep::Stage) && minimum_out < min_output_floor {
         return Err(VaultIntentError::Terms(
             "minimum output is below the operator's floor",
         ));
@@ -287,6 +325,13 @@ pub fn verify_vault_swap(
     let served = ServedMessage::decode(&quote.tx_base64, tables)?;
     let payer = vault.args.actor;
     let mut expected = served.compute_budget(bounds)?;
+    while let Some(setup) = served
+        .instructions
+        .get(expected.len())
+        .filter(|ix| ix.program_id != vault.args.program_id)
+    {
+        expected.push(swap_setup(vault, intent.price_routes, payer, setup)?);
+    }
     let index = expected.len();
     let swap = served
         .instructions
@@ -295,52 +340,250 @@ pub fn verify_vault_swap(
             expected: index + 1,
             found: served.instructions.len(),
         })?;
-    let fixed = kind.fixed_accounts();
-    let header = match kind {
-        VaultSwapKind::Rebalance { .. } => 28,
-        VaultSwapKind::Recovery | VaultSwapKind::Closing => 27,
+    let routes = intent.price_routes;
+    if routes.main.mint != vault.args.main_mint || routes.second.mint != vault.args.second_mint {
+        return Err(VaultIntentError::Intent(VaultChainError::InvalidInput(
+            "price routes must price the vault's main and second mints",
+        )));
+    }
+    let a = &vault.addresses;
+    let mut priced_legs = [
+        ("main", a.main_price_route, routes.main),
+        ("second", a.second_price_route, routes.second),
+    ];
+    let mut kind = match quote.staging {
+        None => kind,
+        Some(step) => {
+            let (Some(mint), Some(token_program)) = (swap.accounts.get(9), swap.accounts.get(10))
+            else {
+                return Err(VaultIntentError::Route(
+                    "swap instruction is shorter than its fixed layout",
+                ));
+            };
+            let route = routes
+                .staging
+                .iter()
+                .find(|route| route.mint == mint.pubkey)
+                .ok_or(VaultIntentError::PriceSection("staging"))?;
+            let expected = match (step, open_slot) {
+                (VaultStagingStep::Unstage, Some(slot)) if slot.mint != mint.pubkey => {
+                    return Err(VaultIntentError::Terms(
+                        "unstage names another staging mint",
+                    ));
+                }
+                (VaultStagingStep::Unstage, _) => Some(slot.generation),
+                _ => slot.generation.checked_add(1),
+            };
+            let served = swap
+                .data
+                .get(STAGING_GENERATION_OFFSET..STAGING_GENERATION_OFFSET + 8)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_le_bytes);
+            let generation = match (expected, served) {
+                (Some(expected), Some(served)) if expected == served => expected,
+                _ => {
+                    return Err(VaultIntentError::Terms(
+                        "staging generation does not name the vault's slot",
+                    ));
+                }
+            };
+            // Stage leaves the input leg, unstage enters the output leg.
+            let leg = match (step, request.direction) {
+                (VaultStagingStep::Stage, VaultSwapDirection::MainToSecond)
+                | (VaultStagingStep::Unstage, VaultSwapDirection::SecondToMain) => VaultLeg::Main,
+                _ => VaultLeg::Second,
+            };
+            priced_legs = [
+                priced_legs[usize::from(leg == VaultLeg::Second)],
+                (
+                    "staging",
+                    pda::price_route(&vault.args.program_id, &route.mint).0,
+                    route,
+                ),
+            ];
+            VaultSwapKind::Staging {
+                step,
+                leg,
+                asset: VaultStagingAsset {
+                    mint: mint.pubkey,
+                    token_program: token_program.pubkey,
+                },
+                generation,
+            }
+        }
     };
-    let (Some(route_accounts), Some(route_data)) =
-        (swap.accounts.get(fixed..), swap.data.get(header..))
+    let (fixed, header) = (kind.fixed_accounts(), kind.header_len());
+    let (Some(priced), Some(hop_data)) = (swap.accounts.get(fixed..), swap.data.get(header..))
     else {
         return Err(VaultIntentError::Route(
             "swap instruction is shorter than its fixed layout",
         ));
     };
-    let feeds = intent.price_feeds;
-    let route = VaultSwapRoute {
-        router: intent.router,
-        main_price_update: price_update(&quote.main_price_update, &feeds.main, feeds.shards)
-            .ok_or(VaultIntentError::PriceUpdate("main"))?,
-        second_price_update: price_update(&quote.second_price_update, &feeds.second, feeds.shards)
-            .ok_or(VaultIntentError::PriceUpdate("second"))?,
+    let price_section = served_price_section(priced_legs, routes.shards, priced)?;
+    let mut hop_accounts = &priced[price_section.len()..];
+    let mut recovery_tail_len = 0;
+    if request.mode == VaultSwapMode::Recovery
+        && let VaultSwapKind::Staging {
+            step: VaultStagingStep::Stage,
+            asset,
+            generation,
+            ..
+        } = kind
+    {
+        let tail = hop_accounts
+            .get(2..)
+            .ok_or(VaultIntentError::Route("recovery tail is truncated"))?;
+        let main_price_section = served_price_section(
+            [("main", a.main_price_route, routes.main)],
+            routes.shards,
+            tail,
+        )?;
+        recovery_tail_len = 2 + main_price_section.len();
+        hop_accounts = &hop_accounts[recovery_tail_len..];
+        kind = VaultSwapKind::RecoveryStage {
+            asset,
+            generation,
+            main_price_section,
+        };
+    }
+    if hop_accounts.iter().any(|meta| meta.pubkey == payer) {
+        return Err(VaultIntentError::Route("route uses the fee payer"));
+    }
+    let share_mint = vault.args.share_mint;
+    let share_ata = ata(&vault.addresses.vault, &share_mint, &TOKEN_PROGRAM_ID);
+    if hop_accounts
+        .iter()
+        .any(|meta| meta.pubkey == share_mint || meta.pubkey == share_ata)
+    {
+        return Err(VaultIntentError::Route(
+            "route touches the vault share mint or its share account",
+        ));
+    }
+    let plan = VaultSwapPlan {
+        price_section,
         amount_in,
         minimum_out,
         valid_until,
-        route_accounts: route_accounts.to_vec(),
-        route_data: route_data.to_vec(),
+        hops: served_hops(swap.data[header - 1], hop_data, hop_accounts)?,
     };
-    let instruction = vault.swap(kind, &route).map_err(|error| match error {
-        VaultChainError::InvalidInput(reason) => VaultIntentError::Route(reason),
-        other => VaultIntentError::Intent(other),
-    })?;
-    let fixed_accounts = &instruction.accounts[..fixed];
-    for meta in route_accounts {
-        if meta.pubkey == payer {
-            return Err(VaultIntentError::Route("route uses the fee payer"));
+    let instruction = vault
+        .swap(kind.clone(), &plan)
+        .map_err(|error| match error {
+            VaultChainError::InvalidInput(reason) => VaultIntentError::Route(reason),
+            other => VaultIntentError::Intent(other),
+        })?;
+    // Hops may write price or mint accounts: prices are read first, the vault is no mint authority.
+    let staging = match kind {
+        VaultSwapKind::Staging { asset, .. } | VaultSwapKind::RecoveryStage { asset, .. } => {
+            Some(asset.mint)
         }
-        if meta.is_writable
-            && fixed_accounts
+        _ => None,
+    };
+    let mint = |key: &Pubkey| {
+        *key == vault.args.main_mint || *key == vault.args.second_mint || Some(*key) == staging
+    };
+    let mut pinned: Vec<&AccountMeta> = instruction.accounts[..fixed]
+        .iter()
+        .filter(|meta| !mint(&meta.pubkey))
+        .collect();
+    let mut position = fixed + plan.price_section.len();
+    pinned.extend(&instruction.accounts[position..position + recovery_tail_len]);
+    position += recovery_tail_len;
+    for hop in &plan.hops {
+        pinned.extend(&instruction.accounts[position..position + 3]);
+        position += 3 + hop.accounts.len();
+    }
+    if hop_accounts.iter().any(|meta| {
+        meta.is_writable
+            && pinned
                 .iter()
                 .any(|fixed| fixed.pubkey == meta.pubkey && !fixed.is_writable)
-        {
-            return Err(VaultIntentError::Route(
-                "route makes a read-only vault account writable",
-            ));
-        }
+    }) {
+        return Err(VaultIntentError::Route(
+            "route makes a read-only account writable",
+        ));
     }
+    require_route_atas(&expected, &plan.hops)?;
     expected.push(instruction);
     served.matches(payer, &expected)
+}
+
+/// Rebuilds served setup: transit/scratch ATAs or `UpdateStakePoolBalance` of a pinned pool.
+fn swap_setup(
+    vault: &VaultManager,
+    routes: PairPriceRoutes<'_>,
+    payer: Pubkey,
+    served: &Instruction,
+) -> Result<Instruction, VaultIntentError> {
+    let key = |position: usize| {
+        served
+            .accounts
+            .get(position)
+            .map(|meta| meta.pubkey)
+            .ok_or(VaultIntentError::Setup("instruction is truncated"))
+    };
+    let token_program = |position: usize| {
+        key(position).and_then(|program| {
+            if program == TOKEN_PROGRAM_ID || program == TOKEN_2022_PROGRAM_ID {
+                Ok(program)
+            } else {
+                Err(VaultIntentError::Setup("token program is not SPL Token"))
+            }
+        })
+    };
+    if served.program_id == ASSOCIATED_TOKEN_PROGRAM_ID {
+        let mint = key(3)?;
+        let args = &vault.args;
+        if [args.main_mint, args.second_mint, args.share_mint].contains(&mint) {
+            return Err(VaultIntentError::Setup(
+                "creates an account for a vault leg or share mint",
+            ));
+        }
+        return Ok(create_ata_idempotent(
+            payer,
+            vault.addresses.vault,
+            mint,
+            token_program(5)?,
+        ));
+    }
+    if !STAKE_POOL_PROGRAM_IDS.contains(&served.program_id) {
+        return Err(VaultIntentError::Setup(
+            "unexpected instruction before the swap",
+        ));
+    }
+    let pool = key(0)?;
+    let pinned = [routes.main, routes.second]
+        .into_iter()
+        .chain(routes.staging)
+        .flat_map(PriceRoute::account_ratios)
+        .any(|ratio| ratio.account == pool);
+    if !pinned {
+        return Err(VaultIntentError::Setup(
+            "updates a stake pool the vault's routes do not pin",
+        ));
+    }
+    Ok(update_stake_pool_balance(
+        served.program_id,
+        [pool, key(2)?, key(3)?, key(4)?, key(5)?, token_program(6)?],
+    ))
+}
+
+pub(super) fn update_stake_pool_balance(program: Pubkey, keys: [Pubkey; 6]) -> Instruction {
+    let [pool, validators, reserve, fee, mint, token_program] = keys;
+    let authority = Pubkey::find_program_address(&[pool.as_ref(), b"withdraw"], &program).0;
+    Instruction {
+        program_id: program,
+        accounts: vec![
+            AccountMeta::new(pool, false),
+            AccountMeta::new_readonly(authority, false),
+            AccountMeta::new(validators, false),
+            AccountMeta::new_readonly(reserve, false),
+            AccountMeta::new(fee, false),
+            AccountMeta::new(mint, false),
+            AccountMeta::new_readonly(token_program, false),
+        ],
+        data: vec![UPDATE_STAKE_POOL_BALANCE],
+    }
 }
 
 /// Lookup tables a served transaction references, to fetch before verification.
@@ -355,12 +598,112 @@ pub fn served_lookup_table_keys(tx_base64: &str) -> Result<Vec<Pubkey>, VaultInt
         .collect())
 }
 
-fn price_update(served: &str, feed: &[u8; 32], shards: &[u16]) -> Option<Pubkey> {
-    let served = served.parse::<Pubkey>().ok()?;
-    shards
+/// Each leg must be its route followed by its edge accounts on one configured shard.
+fn served_price_section<const N: usize>(
+    legs: [(&'static str, Pubkey, &PriceRoute); N],
+    shards: &[u16],
+    served: &[AccountMeta],
+) -> Result<Vec<AccountMeta>, VaultIntentError> {
+    let mut section = Vec::new();
+    for (leg, address, route) in legs {
+        let rest = &served[section.len()..];
+        let found = shards
+            .iter()
+            .map(|shard| route.accounts(address, *shard))
+            .find(|expected| {
+                rest.get(..expected.len()).is_some_and(|served| {
+                    served
+                        .iter()
+                        .zip(expected)
+                        .all(|(served, expected)| served.pubkey == expected.pubkey)
+                })
+            })
+            .ok_or(VaultIntentError::PriceSection(leg))?;
+        section.extend(found);
+    }
+    Ok(section)
+}
+
+/// Splits the served hops back out; the rebuilt instruction must match byte for byte.
+fn require_route_atas(
+    setup: &[Instruction],
+    hops: &[VaultSwapHop],
+) -> Result<(), VaultIntentError> {
+    let transit = hops.split_last().map_or(&[][..], |(_, transit)| transit);
+    let mut created = Vec::new();
+    for ix in setup
         .iter()
-        .any(|shard| pyth_price_feed_account(feed, *shard) == served)
-        .then_some(served)
+        .filter(|ix| ix.program_id == ASSOCIATED_TOKEN_PROGRAM_ID)
+    {
+        let ata = ix.accounts[1].pubkey;
+        let routed = transit.iter().any(|hop| hop.destination == ata)
+            || hops
+                .iter()
+                .any(|hop| hop.accounts.iter().any(|meta| meta.pubkey == ata));
+        if !routed {
+            return Err(VaultIntentError::Setup(
+                "creates an account the route does not use",
+            ));
+        }
+        if created.contains(&ata) {
+            return Err(VaultIntentError::Setup("creates the same account twice"));
+        }
+        created.push(ata);
+    }
+    Ok(())
+}
+
+fn served_hops(
+    count: u8,
+    mut data: &[u8],
+    mut accounts: &[AccountMeta],
+) -> Result<Vec<VaultSwapHop>, VaultIntentError> {
+    let truncated = VaultIntentError::Route("swap hops are truncated");
+    let mut hops = Vec::with_capacity(usize::from(count));
+    for _ in 0..count {
+        let [account_count, lo, hi, offset_lo, offset_hi, rest @ ..] = data else {
+            return Err(truncated);
+        };
+        let (amount_offset, rest) = match u16::from_le_bytes([*offset_lo, *offset_hi]) {
+            NO_AMOUNT_OFFSET => (None, rest),
+            offset => {
+                let Some((num, rest)) = rest.split_first_chunk::<8>() else {
+                    return Err(truncated);
+                };
+                let Some((den, rest)) = rest.split_first_chunk::<8>() else {
+                    return Err(truncated);
+                };
+                let amount = VaultSwapAmountOffset {
+                    offset,
+                    num: u64::from_le_bytes(*num),
+                    den: u64::from_le_bytes(*den),
+                };
+                (Some(amount), rest)
+            }
+        };
+        let Some((hop_data, rest)) =
+            rest.split_at_checked(usize::from(u16::from_le_bytes([*lo, *hi])))
+        else {
+            return Err(truncated);
+        };
+        let [program, source, destination, tail @ ..] = accounts else {
+            return Err(truncated);
+        };
+        let Some((cpi, tail)) = tail.split_at_checked(usize::from(*account_count)) else {
+            return Err(truncated);
+        };
+        hops.push(VaultSwapHop {
+            program: program.pubkey,
+            source: source.pubkey,
+            destination: destination.pubkey,
+            accounts: cpi.to_vec(),
+            data: hop_data.to_vec(),
+            amount_offset,
+        });
+        data = rest;
+        accounts = tail;
+    }
+    Ok(hops)
 }
 
 fn parse_amount(value: &str, field: &'static str) -> Result<u64, VaultIntentError> {
@@ -370,7 +713,7 @@ fn parse_amount(value: &str, field: &'static str) -> Result<u64, VaultIntentErro
         .map_err(|_| VaultIntentError::Terms(field))
 }
 
-fn create_ata_idempotent(
+pub(super) fn create_ata_idempotent(
     payer: Pubkey,
     owner: Pubkey,
     mint: Pubkey,

@@ -3,6 +3,7 @@ use strum::EnumString;
 
 use super::VaultChainError;
 use crate::chain::ix::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
+use crate::types::VaultLeg;
 
 /// Capital-cycle phase; parses the backend listing's snake_case `phase`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
@@ -72,6 +73,7 @@ pub struct VaultAccount {
     pub main_token_program: Pubkey,
     pub second_token_program: Pubkey,
     /// Positions the vault is party to that have not settled or been liquidated.
+    pub active_expiry: u64,
     pub open_positions: u64,
     pub total_shares: u64,
     pub pending_deposit_count: u32,
@@ -80,6 +82,26 @@ pub struct VaultAccount {
     pub closing_started_at: u64,
     pub boundary_equity: u64,
     pub boundary_shares: u64,
+    pub staging: VaultStagingState,
+    /// Second-leg rolls applied; 0 is the mint set at create.
+    pub second_leg_generation: u64,
+}
+
+/// The vault's two-transaction swap slot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VaultStagingState {
+    /// Open or last slot's generation: stage with `generation + 1`, unstage with `generation`.
+    pub generation: u64,
+    pub open: Option<VaultStagedSlot>,
+}
+
+/// An open slot: the vault's canonical ATA of `mint` owes the vault `amount`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultStagedSlot {
+    pub mint: Pubkey,
+    pub from_leg: VaultLeg,
+    pub amount: u64,
+    pub staged_at: u64,
 }
 
 const VAULT_DISCRIMINATOR: u8 = 9;
@@ -117,6 +139,22 @@ impl VaultAccount {
         if flags & !(EQUITY_COMPUTED | ACCEPTING_DEPOSITS) != 0 {
             return Err(VaultChainError::UnknownAccountingFlags(flags));
         }
+        if data[6] != 0 {
+            return Err(VaultChainError::UnknownStagedKind(data[6]));
+        }
+        let open = match u64_at(data, 488) {
+            0 => None,
+            amount => Some(VaultStagedSlot {
+                mint: pubkey(data, 456),
+                from_leg: match data[5] {
+                    0 => VaultLeg::Main,
+                    1 => VaultLeg::Second,
+                    other => return Err(VaultChainError::UnknownStagedLeg(other)),
+                },
+                amount,
+                staged_at: u64_at(data, 496),
+            }),
+        };
         Ok(Self {
             vault_id: bytes32(data, 16),
             phase: VaultPhase::try_from(data[3])?,
@@ -130,6 +168,7 @@ impl VaultAccount {
             share_mint: pubkey(data, 240),
             main_token_program: token_program(data[402])?,
             second_token_program: token_program(data[403])?,
+            active_expiry: u64_at(data, 272),
             open_positions: u64_at(data, 280),
             total_shares: u64_at(data, 288),
             pending_deposit_count: u32_at(data, 320),
@@ -138,6 +177,11 @@ impl VaultAccount {
             closing_started_at: u64_at(data, 432),
             boundary_equity: u64_at(data, 440),
             boundary_shares: u64_at(data, 448),
+            staging: VaultStagingState {
+                generation: u64_at(data, 504),
+                open,
+            },
+            second_leg_generation: u64_at(data, 512),
         })
     }
 }
@@ -203,20 +247,7 @@ impl VaultRequest {
     }
 }
 
-const ORACLE_SOURCE_LEN: usize = 424;
-const ORACLE_SOURCE_FEEDS: usize = 40;
-const PYTH_ORACLE_TYPE: usize = 1;
-
-pub fn oracle_source_pyth_feed(data: &[u8]) -> Result<[u8; 32], VaultChainError> {
-    let data = header(data, ORACLE_SOURCE_LEN, 7, 1)?;
-    let feed = bytes32(data, ORACLE_SOURCE_FEEDS + PYTH_ORACLE_TYPE * 32);
-    if feed == [0; 32] {
-        return Err(VaultChainError::MissingPythFeed);
-    }
-    Ok(feed)
-}
-
-fn header(
+pub(super) fn header(
     data: &[u8],
     len: usize,
     discriminator: u8,
@@ -248,13 +279,13 @@ fn token_program(kind: u8) -> Result<Pubkey, VaultChainError> {
     }
 }
 
-fn bytes32(data: &[u8], offset: usize) -> [u8; 32] {
+pub(super) fn bytes32(data: &[u8], offset: usize) -> [u8; 32] {
     let mut out = [0; 32];
     out.copy_from_slice(&data[offset..offset + 32]);
     out
 }
 
-fn pubkey(data: &[u8], offset: usize) -> Pubkey {
+pub(super) fn pubkey(data: &[u8], offset: usize) -> Pubkey {
     Pubkey::new_from_array(bytes32(data, offset))
 }
 

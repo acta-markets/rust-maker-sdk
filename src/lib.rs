@@ -41,7 +41,8 @@ pub use types::invite::{
 };
 pub use types::total_premium_quote_atoms;
 pub use types::vault::{
-    VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection, VaultSwapMode,
+    VaultDelegatePermissions, VaultLeg, VaultOperatorKind, VaultStagingStep, VaultSwapDirection,
+    VaultSwapMode,
 };
 
 #[cfg(feature = "chain")]

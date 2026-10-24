@@ -52,6 +52,7 @@ fn writer(case: &serde_json::Value) -> VaultManager {
         share_mint: key(&vault["share_mint"]),
         main_token_program: key(&vault["main_token_program"]),
         second_token_program: key(&vault["second_token_program"]),
+        second_leg_generation: 0,
     })
     .unwrap()
 }

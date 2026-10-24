@@ -11,7 +11,10 @@ use solana_sdk::{
 use uuid::Uuid;
 
 use super::*;
-use crate::chain::vault::{MAX_VAULT_SWAP_ROUTE_ACCOUNTS, VaultManager, VaultManagerArgs};
+use crate::chain::vault::{
+    MAX_VAULT_SWAP_ROUTE_ACCOUNTS, PriceRoute, VaultManager, VaultManagerArgs, VaultStagedSlot,
+    VaultStagingState, pyth_price_feed_account,
+};
 use crate::types::OrderId;
 use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
 
@@ -48,6 +51,7 @@ fn manager(case: &Value, field: &str) -> VaultManager {
         share_mint: key(&vault["share_mint"]),
         main_token_program: key(&vault["main_token_program"]),
         second_token_program: key(&vault["second_token_program"]),
+        second_leg_generation: 0,
     })
     .unwrap()
 }
@@ -89,7 +93,7 @@ fn swap_request(case: &Value) -> SwapQuoteData {
     SwapQuoteData {
         request_id: Uuid::from_str(swap["request_id"].as_str().unwrap()).unwrap(),
         vault_pda: manager(case, "swapper").addresses.vault.to_string(),
-        mode: VaultSwapMode::Rebalance,
+        mode: serde_json::from_value(swap["mode"].clone()).unwrap_or(VaultSwapMode::Rebalance),
         direction: serde_json::from_value(swap["direction"].clone()).unwrap(),
         amount: num(&swap["amount"]).to_string(),
         slippage_bps: u16::try_from(num(&swap["slippage_bps"])).unwrap(),
@@ -101,29 +105,123 @@ fn swap_quote(case: &Value, tx_base64: String) -> SwapQuoteResultData {
     SwapQuoteResultData {
         request_id: Uuid::from_str(swap["request_id"].as_str().unwrap()).unwrap(),
         execution_id: OrderId::new([4; 32]),
-        mode: VaultSwapMode::Rebalance,
+        mode: serde_json::from_value(swap["mode"].clone()).unwrap_or(VaultSwapMode::Rebalance),
         tx_base64,
         last_valid_block_height: 1,
-        in_amount: num(&swap["amount"]).to_string(),
+        in_amount: match case["staging"]["amount_in"].as_u64() {
+            Some(staged) => staged,
+            None => num(&swap["amount"]),
+        }
+        .to_string(),
         quoted_out_amount: num(&swap["quoted_out_amount"]).to_string(),
         minimum_out_amount: num(&swap["minimum_out_amount"]).to_string(),
         valid_until: num(&swap["valid_until"]).to_string(),
-        main_price_update: swap["main_price_update"].as_str().unwrap().to_owned(),
-        second_price_update: swap["second_price_update"].as_str().unwrap().to_owned(),
+        staging: serde_json::from_value(case["staging"]["mode"].clone())
+            .ok()
+            .map(|mode: String| match mode.as_str() {
+                "stage" => VaultStagingStep::Stage,
+                _ => VaultStagingStep::Unstage,
+            }),
     }
 }
 
-fn price_feeds(case: &Value) -> PairPriceFeeds<'static> {
-    let feed = |name: &str| {
-        let mut id = [0; 32];
-        hex::decode_to_slice(case["swap"][name].as_str().unwrap(), &mut id).unwrap();
-        id
+const SHARDS: [u16; 2] = [0, 1];
+
+fn is_swap(case: &Value) -> bool {
+    case["kind"] == "swap" || case["kind"] == "staging_swap"
+}
+
+fn header_len(case: &Value) -> usize {
+    if case["staging"].is_object() { 36 } else { 27 }
+}
+
+/// The staging mint's route, if the case is a staging half.
+fn staging_routes(case: &Value) -> Vec<PriceRoute> {
+    case["staging"]["route"]
+        .as_str()
+        .map(|route| PriceRoute::parse(&hex::decode(route).unwrap()).unwrap())
+        .into_iter()
+        .collect()
+}
+
+fn price_routes(case: &Value) -> (PriceRoute, PriceRoute) {
+    let route = |name: &str| {
+        PriceRoute::parse(&hex::decode(case["swap"][name].as_str().unwrap()).unwrap()).unwrap()
     };
-    assert_eq!(case["swap"]["shards"], serde_json::json!([0, 1]));
-    PairPriceFeeds {
-        main: feed("main_feed"),
-        second: feed("second_feed"),
-        shards: &[0, 1],
+    assert_eq!(case["swap"]["shards"], serde_json::json!(SHARDS));
+    (route("main_route"), route("second_route"))
+}
+
+/// Fixed accounts plus the served price section.
+fn swap_prefix(case: &Value) -> usize {
+    let (main, second) = price_routes(case);
+    let Some(staging) = staging_routes(case).pop() else {
+        return 14
+            + manager(case, "swapper")
+                .price_section(&main, &second, 0)
+                .unwrap()
+                .len();
+    };
+    let leg = if case["staging"]["leg"] == "main" {
+        main.clone()
+    } else {
+        second
+    };
+    let recovery_tail = if case["swap"]["mode"] == "recovery" {
+        2 + main.accounts(Pubkey::default(), 1).len()
+    } else {
+        0
+    };
+    14 + leg.accounts(Pubkey::default(), 0).len()
+        + staging.accounts(Pubkey::default(), 1).len()
+        + recovery_tail
+}
+
+/// Slot before the request: empty at `generation - 1` to stage, holding the amount to unstage.
+fn fixture_slot(case: &Value) -> VaultStagingState {
+    let staging = &case["staging"];
+    if !staging.is_object() {
+        return VaultStagingState::default();
+    }
+    let generation = num(&staging["generation"]);
+    if staging["mode"] == "stage" {
+        return VaultStagingState {
+            generation: generation - 1,
+            open: None,
+        };
+    }
+    VaultStagingState {
+        generation,
+        open: Some(VaultStagedSlot {
+            mint: key(&staging["mint"]),
+            from_leg: VaultLeg::Main,
+            amount: num(&staging["amount_in"]),
+            staged_at: 1,
+        }),
+    }
+}
+
+fn swap_intent<'a>(
+    vault: &'a VaultManager,
+    request: &'a SwapQuoteData,
+    quote: &'a SwapQuoteResultData,
+    routes: &'a (PriceRoute, PriceRoute),
+    staging: &'a [PriceRoute],
+    shards: &'a [u16],
+    min_output_floor: u64,
+) -> VaultSwapIntent<'a> {
+    VaultSwapIntent {
+        vault,
+        request,
+        quote,
+        price_routes: PairPriceRoutes {
+            main: &routes.0,
+            second: &routes.1,
+            staging,
+            shards,
+        },
+        min_output_floor,
+        account: vault.test_account(VaultStagingState::default()),
     }
 }
 
@@ -145,14 +243,20 @@ fn verify_swap_with_floor(
     min_output_floor: u64,
 ) -> Result<(), VaultIntentError> {
     let vault = manager(case, "swapper");
+    let routes = price_routes(case);
+    let staging = staging_routes(case);
     verify_vault_swap(
         &VaultSwapIntent {
-            vault: &vault,
-            request,
-            quote,
-            price_feeds: price_feeds(case),
-            min_output_floor,
-            router: crate::chain::vault::JUPITER_V6_PROGRAM_ID,
+            account: vault.test_account(fixture_slot(case)),
+            ..swap_intent(
+                &vault,
+                request,
+                quote,
+                &routes,
+                &staging,
+                &SHARDS,
+                min_output_floor,
+            )
         },
         tables,
         BOUNDS,
@@ -220,7 +324,7 @@ fn verify(
             )
             .map(|_| ())
         }
-        "swap" => verify_swap(
+        "swap" | "staging_swap" => verify_swap(
             case,
             &swap_request(case),
             &swap_quote(case, tx_base64.to_owned()),
@@ -267,9 +371,17 @@ fn compile(payer: Pubkey, ixs: &[Instruction], tables: &[AddressLookupTableAccou
     ))
 }
 
+/// The swap follows the compute budget and any setup.
+fn swap_index(case: &Value) -> usize {
+    2 + usize::try_from(num(&case["swap"]["setup"])).unwrap()
+}
+
+/// Bytes whose change must be rejected; stake-pool accounts are the stake-pool program's to check.
 fn route_start(case: &Value, index: usize, ix: &Instruction) -> (usize, usize) {
-    if case["kind"] == "swap" && index == 2 {
-        (18, 28)
+    if is_swap(case) && index == swap_index(case) {
+        (swap_prefix(case), header_len(case))
+    } else if STAKE_POOL_PROGRAM_IDS.contains(&ix.program_id) {
+        (2, ix.data.len())
     } else {
         (ix.accounts.len(), ix.data.len())
     }
@@ -278,7 +390,7 @@ fn route_start(case: &Value, index: usize, ix: &Instruction) -> (usize, usize) {
 #[test]
 fn every_served_fixture_verifies() {
     let cases = cases();
-    assert_eq!(cases.len(), 16);
+    assert_eq!(cases.len(), 21);
     for case in &cases {
         verify(case, &served_tx(case), &[table(case)])
             .unwrap_or_else(|error| panic!("{} rejected: {error}", case["kind"]));
@@ -325,7 +437,14 @@ fn any_account_flag_or_data_change_is_rejected() {
                 let mut replaced = ixs.clone();
                 replaced[index].accounts[position].pubkey = Pubkey::new_unique();
                 rejects(&replaced, format!("ix {index} account {position} replaced"));
-                if replaced[index].accounts[position].pubkey != payer {
+                // A hop may write a price-section account it carries (prices are read first).
+                let hop_writable = is_swap(case)
+                    && index == swap_index(case)
+                    && position >= 14
+                    && ix.accounts[route_accounts..]
+                        .iter()
+                        .any(|meta| meta.pubkey == ix.accounts[position].pubkey);
+                if replaced[index].accounts[position].pubkey != payer && !hop_writable {
                     let mut writable = ixs.clone();
                     let meta = &mut writable[index].accounts[position];
                     meta.is_writable = !meta.is_writable;
@@ -374,7 +493,11 @@ fn extra_missing_or_reordered_instructions_are_rejected() {
         for index in 0..ixs.len() {
             let mut missing = ixs.clone();
             missing.remove(index);
-            assert!(verify(case, &compile(payer, &missing, &tables), &tables).is_err());
+            let optional_setup = is_swap(case) && (2..swap_index(case)).contains(&index);
+            assert_eq!(
+                verify(case, &compile(payer, &missing, &tables), &tables).is_ok(),
+                optional_setup
+            );
         }
         let mut swapped = ixs.clone();
         swapped.swap(0, 1);
@@ -487,6 +610,32 @@ fn quote_signature_must_verify() {
 }
 
 #[test]
+fn swap_refuses_a_manager_from_before_a_second_leg_roll() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case["kind"] == "swap")
+        .unwrap();
+    let tables = [table(&case)];
+    let request = swap_request(&case);
+    let quote = swap_quote(&case, served_tx(&case));
+    let vault = manager(&case, "swapper");
+    let routes = price_routes(&case);
+    let mut rolled = vault.test_account(VaultStagingState::default());
+    rolled.second_leg_generation = 1;
+    assert!(matches!(
+        verify_vault_swap(
+            &VaultSwapIntent {
+                account: rolled,
+                ..swap_intent(&vault, &request, &quote, &routes, &[], &SHARDS, 1)
+            },
+            &tables,
+            BOUNDS,
+        ),
+        Err(VaultIntentError::Intent(VaultChainError::SecondLegRolled))
+    ));
+}
+
+#[test]
 fn swap_terms_follow_the_request() {
     let tables_of = |case: &Value| [table(case)];
     for case in cases().iter().filter(|case| case["kind"] == "swap") {
@@ -494,24 +643,6 @@ fn swap_terms_follow_the_request() {
         let request = swap_request(case);
         let quote = swap_quote(case, served_tx(case));
         verify_swap(case, &request, &quote, &tables).unwrap();
-        let vault = manager(case, "swapper");
-        assert!(
-            verify_vault_swap(
-                &VaultSwapIntent {
-                    vault: &vault,
-                    request: &request,
-                    quote: &quote,
-                    price_feeds: price_feeds(case),
-                    min_output_floor: 1,
-                    router: crate::chain::vault::DEVNET_SWAP_ROUTER_ID,
-                },
-                &tables,
-                BOUNDS,
-            )
-            .is_err(),
-            "a route served for another router must not verify"
-        );
-
         let mut loose = quote.clone();
         loose.minimum_out_amount = "1".into();
         assert!(matches!(
@@ -543,7 +674,7 @@ fn swap_terms_follow_the_request() {
         };
         assert!(matches!(
             verify_swap(case, &reversed, &quote, &tables),
-            Err(VaultIntentError::Data { .. })
+            Err(VaultIntentError::Route(_))
         ));
         for (field, value) in [("min", "1991"), ("valid", "1000101")] {
             let mut changed = quote.clone();
@@ -556,18 +687,208 @@ fn swap_terms_follow_the_request() {
                 Err(VaultIntentError::Data { .. })
             ));
         }
-        let unconfigured = crate::chain::vault::pyth_price_feed_account(&price_feeds(case).main, 2);
-        let mut other_shard = quote.clone();
-        other_shard.main_price_update = unconfigured.to_string();
+        let vault = manager(case, "swapper");
+        let routes = price_routes(case);
+        let with =
+            |routes: &(PriceRoute, PriceRoute), shards: &[u16], quote: &SwapQuoteResultData| {
+                verify_vault_swap(
+                    &swap_intent(&vault, &request, quote, routes, &[], shards, 1),
+                    &tables,
+                    BOUNDS,
+                )
+                .map(|_| ())
+            };
         assert_eq!(
-            verify_swap(case, &request, &other_shard, &tables),
-            Err(VaultIntentError::PriceUpdate("main"))
+            with(&routes, &[2], &quote),
+            Err(VaultIntentError::PriceSection("main"))
         );
-        let mut crossed = quote.clone();
-        crossed.second_price_update = quote.main_price_update.clone();
+        let crossed = (routes.1.clone(), routes.0.clone());
+        assert!(matches!(
+            with(&crossed, &SHARDS, &quote),
+            Err(VaultIntentError::Intent(VaultChainError::InvalidInput(_)))
+        ));
+
+        let (payer, mut ixs) = decoded(case);
+        let feed = routes
+            .1
+            .bricks
+            .iter()
+            .find_map(|brick| match brick {
+                crate::chain::vault::PriceBrick::Pyth(pyth) => Some(pyth.feed_id),
+                _ => None,
+            })
+            .unwrap();
+        let s = swap_index(case);
+        let second_feed = ixs[s].accounts[..swap_prefix(case)]
+            .iter()
+            .rposition(|meta| meta.pubkey == pyth_price_feed_account(&feed, 1))
+            .unwrap();
+        ixs[s].accounts[second_feed].pubkey = pyth_price_feed_account(&feed, 2);
+        let other_shard = swap_quote(case, compile(payer, &ixs, &tables));
         assert_eq!(
-            verify_swap(case, &request, &crossed, &tables),
-            Err(VaultIntentError::PriceUpdate("second"))
+            with(&routes, &SHARDS, &other_shard),
+            Err(VaultIntentError::PriceSection("second"))
+        );
+        ixs[s].accounts[second_feed].pubkey = pyth_price_feed_account(&feed, 1);
+        let shard_one = swap_quote(case, compile(payer, &ixs, &tables));
+        with(&routes, &SHARDS, &shard_one).unwrap();
+        assert_eq!(
+            with(&routes, &[0], &shard_one),
+            Err(VaultIntentError::PriceSection("second"))
+        );
+    }
+}
+
+#[test]
+fn staging_swaps_bind_step_leg_and_staging_route() {
+    let staged: Vec<Value> = cases()
+        .into_iter()
+        .filter(|case| case["kind"] == "staging_swap")
+        .collect();
+    assert_eq!(staged.len(), 3);
+    for case in &staged {
+        let tables = [table(case)];
+        let request = swap_request(case);
+        let quote = swap_quote(case, served_tx(case));
+        let step = quote.staging.unwrap();
+        verify_swap(case, &request, &quote, &tables).unwrap();
+
+        let mut unstaged = quote.clone();
+        unstaged.staging = None;
+        assert!(verify_swap(case, &request, &unstaged, &tables).is_err());
+        let mut flipped = quote.clone();
+        flipped.staging = Some(match step {
+            VaultStagingStep::Stage => VaultStagingStep::Unstage,
+            _ => VaultStagingStep::Stage,
+        });
+        assert!(verify_swap(case, &request, &flipped, &tables).is_err());
+        let mut reversed = request.clone();
+        reversed.direction = match request.direction {
+            VaultSwapDirection::MainToSecond => VaultSwapDirection::SecondToMain,
+            _ => VaultSwapDirection::MainToSecond,
+        };
+        assert!(verify_swap(case, &reversed, &quote, &tables).is_err());
+
+        let vault = manager(case, "swapper");
+        let routes = price_routes(case);
+        assert_eq!(
+            verify_vault_swap(
+                &VaultSwapIntent {
+                    account: vault.test_account(fixture_slot(case)),
+                    ..swap_intent(&vault, &request, &quote, &routes, &[], &SHARDS, 1)
+                },
+                &tables,
+                BOUNDS,
+            )
+            .map(|_| ()),
+            Err(VaultIntentError::PriceSection("staging"))
+        );
+
+        // Stage fills the staging mint (leg floor moot); unstage spends into the floored leg.
+        let mut other_amount = request.clone();
+        other_amount.amount = "1".into();
+        let floored = verify_swap_with_floor(case, &request, &quote, &tables, u64::MAX);
+        match step {
+            VaultStagingStep::Stage => {
+                assert_eq!(
+                    verify_swap(case, &other_amount, &quote, &tables),
+                    Err(VaultIntentError::Terms("quoted input differs from request"))
+                );
+                floored.unwrap();
+            }
+            _ => {
+                assert_ne!(quote.in_amount, request.amount);
+                verify_swap(case, &other_amount, &quote, &tables).unwrap();
+                assert_eq!(
+                    floored,
+                    Err(VaultIntentError::Terms(
+                        "minimum output is below the operator's floor"
+                    ))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn staging_halves_name_the_vaults_slot() {
+    for case in cases().iter().filter(|case| case["kind"] == "staging_swap") {
+        let tables = [table(case)];
+        let request = swap_request(case);
+        let quote = swap_quote(case, served_tx(case));
+        let vault = manager(case, "swapper");
+        let routes = price_routes(case);
+        let staging = staging_routes(case);
+        let slot = fixture_slot(case);
+        let with = |slot: VaultStagingState| {
+            verify_vault_swap(
+                &VaultSwapIntent {
+                    account: vault.test_account(slot),
+                    ..swap_intent(&vault, &request, &quote, &routes, &staging, &SHARDS, 1)
+                },
+                &tables,
+                BOUNDS,
+            )
+            .map(|_| ())
+        };
+        with(slot).unwrap();
+        let stale = Err(VaultIntentError::Terms(
+            "staging generation does not name the vault's slot",
+        ));
+        for generation in [slot.generation - 1, slot.generation + 1] {
+            assert_eq!(with(VaultStagingState { generation, ..slot }), stale);
+        }
+        let open = VaultStagedSlot {
+            mint: key(&case["staging"]["mint"]),
+            from_leg: VaultLeg::Second,
+            amount: num(&case["staging"]["amount_in"]),
+            staged_at: 1,
+        };
+        if quote.staging == Some(VaultStagingStep::Stage) {
+            assert_eq!(
+                with(VaultStagingState {
+                    open: Some(open),
+                    ..slot
+                }),
+                Err(VaultIntentError::Terms(
+                    "a stage needs an empty staging slot"
+                ))
+            );
+            assert_eq!(
+                with(VaultStagingState {
+                    generation: u64::MAX,
+                    open: None
+                }),
+                stale
+            );
+            continue;
+        }
+        assert_eq!(
+            with(VaultStagingState { open: None, ..slot }),
+            Err(VaultIntentError::Terms("nothing is staged to unstage"))
+        );
+        for amount in [open.amount - 1, open.amount + 1] {
+            assert_eq!(
+                with(VaultStagingState {
+                    open: Some(VaultStagedSlot { amount, ..open }),
+                    ..slot
+                }),
+                Err(VaultIntentError::Terms(
+                    "an unstage must spend the whole staged amount"
+                ))
+            );
+        }
+        assert_eq!(
+            with(VaultStagingState {
+                open: Some(VaultStagedSlot {
+                    mint: Pubkey::new_unique(),
+                    ..open
+                }),
+                ..slot
+            }),
+            Err(VaultIntentError::Terms(
+                "unstage names another staging mint"
+            ))
         );
     }
 }
@@ -607,18 +928,21 @@ fn served_minimum_below_the_operator_floor_is_rejected() {
         let kind = VaultSwapKind::Rebalance {
             second_to_main: request.direction == VaultSwapDirection::SecondToMain,
         };
-        ixs[2] = manager(case, "swapper")
+        let (prefix, s) = (swap_prefix(case), swap_index(case));
+        ixs[s] = manager(case, "swapper")
             .swap(
                 kind,
-                &VaultSwapRoute {
-                    router: crate::chain::vault::JUPITER_V6_PROGRAM_ID,
-                    main_price_update: key(&case["swap"]["main_price_update"]),
-                    second_price_update: key(&case["swap"]["second_price_update"]),
+                &VaultSwapPlan {
+                    price_section: ixs[s].accounts[14..prefix].to_vec(),
                     amount_in: num(&case["swap"]["amount"]),
                     minimum_out: 1,
                     valid_until: num(&case["swap"]["valid_until"]),
-                    route_accounts: ixs[2].accounts[18..].to_vec(),
-                    route_data: ixs[2].data[28..].to_vec(),
+                    hops: served_hops(
+                        ixs[s].data[header_len(case) - 1],
+                        &ixs[s].data[header_len(case)..],
+                        &ixs[s].accounts[prefix..],
+                    )
+                    .unwrap(),
                 },
             )
             .unwrap();
@@ -635,76 +959,390 @@ fn served_minimum_below_the_operator_floor_is_rejected() {
     }
 }
 
+/// Re-encodes the served swap with `hops`, skipping the builder's own checks.
+fn with_hops(case: &Value, swap: &Instruction, hops: &[VaultSwapHop]) -> Instruction {
+    let prefix = swap_prefix(case);
+    let mut ix = swap.clone();
+    ix.accounts.truncate(prefix);
+    let header = header_len(case);
+    ix.data.truncate(header);
+    ix.data[header - 1] = u8::try_from(hops.len()).unwrap();
+    for hop in hops {
+        ix.data.push(u8::try_from(hop.accounts.len()).unwrap());
+        ix.data
+            .extend_from_slice(&u16::try_from(hop.data.len()).unwrap().to_le_bytes());
+        match hop.amount_offset {
+            Some(amount) => {
+                ix.data.extend_from_slice(&amount.offset.to_le_bytes());
+                ix.data.extend_from_slice(&amount.num.to_le_bytes());
+                ix.data.extend_from_slice(&amount.den.to_le_bytes());
+            }
+            None => ix.data.extend_from_slice(&u16::MAX.to_le_bytes()),
+        }
+        ix.data.extend_from_slice(&hop.data);
+        ix.accounts.extend([
+            AccountMeta::new_readonly(hop.program, false),
+            AccountMeta::new(hop.source, false),
+            AccountMeta::new(hop.destination, false),
+        ]);
+        ix.accounts.extend(hop.accounts.iter().cloned());
+    }
+    ix
+}
+
 #[test]
-fn swap_route_is_confined_and_bounded() {
-    for case in cases().iter().filter(|case| case["kind"] == "swap") {
+fn swap_hops_are_confined_and_bounded() {
+    for case in cases().iter().filter(|case| is_swap(case)) {
         let (payer, ixs) = decoded(case);
         let tables = [table(case)];
         let vault = manager(case, "swapper");
-        let check = |mutated: Vec<Instruction>| {
-            let request = swap_request(case);
+        let (prefix, s) = (swap_prefix(case), swap_index(case));
+        let hops = served_hops(
+            ixs[s].data[header_len(case) - 1],
+            &ixs[s].data[header_len(case)..],
+            &ixs[s].accounts[prefix..],
+        )
+        .unwrap();
+        assert_eq!(hops.len() as u64, num(&case["swap"]["hops"]));
+        assert_eq!(with_hops(case, &ixs[s], &hops), ixs[s]);
+        let check = |hops: &[VaultSwapHop]| {
+            let mut mutated = ixs.clone();
+            mutated[s] = with_hops(case, &ixs[s], hops);
             let quote = swap_quote(case, compile(payer, &mutated, &tables));
-            verify_swap(case, &request, &quote, &tables)
+            verify_swap(case, &swap_request(case), &quote, &tables)
+        };
+        let raw = |mutate: &dyn Fn(&mut Instruction)| {
+            let mut mutated = ixs.clone();
+            mutate(&mut mutated[s]);
+            let quote = swap_quote(case, compile(payer, &mutated, &tables));
+            verify_swap(case, &swap_request(case), &quote, &tables)
+        };
+        let last = hops.len() - 1;
+        let edit = |index: usize, change: &dyn Fn(&mut VaultSwapHop)| {
+            let mut hops = hops.clone();
+            change(&mut hops[index]);
+            hops
         };
 
-        let mut extra = ixs.clone();
-        extra[2]
-            .accounts
-            .push(AccountMeta::new(Pubkey::new_unique(), false));
-        check(extra).unwrap();
-
-        let mut too_many = ixs.clone();
-        while too_many[2].accounts.len() <= 18 + MAX_VAULT_SWAP_ROUTE_ACCOUNTS {
-            too_many[2]
-                .accounts
-                .push(AccountMeta::new_readonly(Pubkey::new_unique(), false));
-        }
-        assert!(matches!(check(too_many), Err(VaultIntentError::Route(_))));
-
-        let mut policy = ixs.clone();
-        policy[2]
-            .accounts
-            .push(AccountMeta::new(vault.addresses.policy, false));
-        assert!(matches!(check(policy), Err(VaultIntentError::Route(_))));
-
-        let mut payer_route = ixs.clone();
-        payer_route[2]
-            .accounts
-            .push(AccountMeta::new_readonly(payer, false));
+        check(&edit(last, &|hop| {
+            hop.accounts
+                .push(AccountMeta::new(Pubkey::new_unique(), false));
+            hop.data.push(7);
+        }))
+        .unwrap();
         assert!(matches!(
-            check(payer_route),
+            raw(&|ix| ix
+                .accounts
+                .push(AccountMeta::new(Pubkey::new_unique(), false))),
+            Err(VaultIntentError::AccountCount { .. })
+        ));
+        assert!(matches!(
+            raw(&|ix| ix.data.push(0)),
+            Err(VaultIntentError::Data { .. })
+        ));
+        assert_eq!(
+            raw(&|ix| ix.data[header_len(case) - 1] += 1),
+            Err(VaultIntentError::Route("swap hops are truncated"))
+        );
+        assert!(matches!(
+            raw(&|ix| ix.data[header_len(case) - 1] = 0),
             Err(VaultIntentError::Route(_))
         ));
-
-        let mut signer = ixs.clone();
-        signer[2]
-            .accounts
-            .push(AccountMeta::new_readonly(Pubkey::new_unique(), true));
-        assert!(check(signer).is_err());
-
-        let mut no_custody = ixs.clone();
-        no_custody[2].accounts.truncate(18 + 1);
-        assert!(matches!(check(no_custody), Err(VaultIntentError::Route(_))));
-
-        let mut prices = ixs.clone();
-        prices[2].accounts[12].pubkey = Pubkey::new_unique();
         assert!(matches!(
-            check(prices),
-            Err(VaultIntentError::Account {
-                index: 2,
-                position: 12,
-                ..
-            })
+            raw(&|ix| ix.accounts[13].pubkey = Pubkey::new_unique()),
+            Err(VaultIntentError::Account { index, position: 13, .. }) if index == s
+        ));
+        assert!(matches!(
+            check(&edit(0, &|hop| {
+                while hop.accounts.len() <= MAX_VAULT_SWAP_ROUTE_ACCOUNTS {
+                    hop.accounts
+                        .push(AccountMeta::new_readonly(Pubkey::new_unique(), false));
+                }
+            })),
+            Err(VaultIntentError::Route(_))
+        ));
+        let with_offset = |index: usize, offset: u16, num: u64, den: u64| {
+            check(&edit(index, &|hop| {
+                hop.data.resize(9, 0);
+                hop.amount_offset = Some(VaultSwapAmountOffset { offset, num, den });
+            }))
+        };
+        assert!(matches!(
+            with_offset(0, 0, 1, 1),
+            Err(VaultIntentError::Route(_))
+        ));
+        if hops.len() > 1 {
+            with_offset(1, 1, 1_081_430_937_307, 1_000_000_000_000).unwrap();
+            for (offset, num, den) in [(2, 1, 1), (1, 0, 1), (1, 1, 0)] {
+                assert!(matches!(
+                    with_offset(1, offset, num, den),
+                    Err(VaultIntentError::Route(_))
+                ));
+            }
+        }
+        // Exponent `merge` burns the input leg's PT mint; a Generic SY redeem the staging mint.
+        let burned = if case["staging"].is_object() {
+            ixs[s].accounts[9].pubkey
+        } else if swap_request(case).direction == VaultSwapDirection::MainToSecond {
+            ixs[s].accounts[7].pubkey
+        } else {
+            ixs[s].accounts[8].pubkey
+        };
+        // Setup instructions may share the served hop's accounts, so the shape goes in front.
+        let shaped = edit(0, &|hop| {
+            let shape = [
+                AccountMeta::new(vault.addresses.vault, false),
+                AccountMeta::new(hop.destination, false),
+                AccountMeta::new(Pubkey::new_unique(), false),
+                AccountMeta::new(Pubkey::new_unique(), false),
+                AccountMeta::new(hop.source, false),
+                AccountMeta::new(Pubkey::new_unique(), false),
+                AccountMeta::new(burned, false),
+                AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+            ];
+            hop.accounts.splice(0..0, shape);
+        });
+        check(&shaped).unwrap();
+        let mut policy = shaped.clone();
+        policy[0]
+            .accounts
+            .push(AccountMeta::new(vault.addresses.policy, false));
+        assert_eq!(
+            check(&policy),
+            Err(VaultIntentError::Route(
+                "route makes a read-only account writable"
+            ))
+        );
+        for pinned in [
+            vault.addresses.policy,
+            vault.addresses.global_config,
+            vault.addresses.swap_venues,
+            vault.addresses.manager_stake_ata,
+            hops[0].program,
+        ] {
+            assert_eq!(
+                check(&edit(last, &|hop| hop
+                    .accounts
+                    .push(AccountMeta::new(pinned, false)))),
+                Err(VaultIntentError::Route(
+                    "route makes a read-only account writable"
+                ))
+            );
+        }
+        // The initial pair is read before hops; recovery's MAIN tail stays pinned.
+        let price_end = if case["swap"]["mode"] == "recovery" {
+            prefix - 2 - price_routes(case).0.accounts(Pubkey::default(), 1).len()
+        } else {
+            prefix
+        };
+        for priced in [
+            ixs[s].accounts[14].pubkey,
+            ixs[s].accounts[price_end - 1].pubkey,
+        ] {
+            check(&edit(last, &|hop| {
+                hop.accounts.push(AccountMeta::new(priced, false))
+            }))
+            .unwrap();
+        }
+        assert_eq!(
+            check(&edit(0, &|hop| hop
+                .accounts
+                .push(AccountMeta::new_readonly(payer, false)))),
+            Err(VaultIntentError::Route("route uses the fee payer"))
+        );
+        assert!(
+            check(&edit(0, &|hop| hop
+                .accounts
+                .push(AccountMeta::new_readonly(Pubkey::new_unique(), true))))
+            .is_err()
+        );
+        assert!(matches!(
+            check(&edit(last, &|hop| hop
+                .accounts
+                .retain(|meta| meta.pubkey != hop.destination))),
+            Err(VaultIntentError::Route(_))
+        ));
+        assert!(matches!(
+            check(&edit(last, &|hop| hop.destination = hop.source)),
+            Err(VaultIntentError::Route(_))
+        ));
+        assert!(matches!(
+            check(&edit(0, &|hop| hop.data.clear())),
+            Err(VaultIntentError::Route(_))
+        ));
+        let mut five = hops.clone();
+        while five.len() < 5 {
+            five.insert(0, hops[0].clone());
+        }
+        assert!(matches!(check(&five), Err(VaultIntentError::Route(_))));
+
+        let vault_key = vault.addresses.vault;
+        let scratch = ata(&vault_key, &Pubkey::new_unique(), &TOKEN_PROGRAM_ID);
+        check(&edit(0, &|hop| {
+            hop.accounts.push(AccountMeta::new(scratch, false))
+        }))
+        .unwrap();
+        if last > 0 {
+            assert_eq!(
+                check(&edit(last, &|hop| hop
+                    .accounts
+                    .push(AccountMeta::new(hops[0].source, false)))),
+                Err(VaultIntentError::Route(
+                    "a leg ATA may appear only as its hop's source or destination"
+                ))
+            );
+        }
+        let share_mint = vault.args.share_mint;
+        for share in [share_mint, ata(&vault_key, &share_mint, &TOKEN_PROGRAM_ID)] {
+            assert_eq!(
+                check(&edit(0, &|hop| hop
+                    .accounts
+                    .push(AccountMeta::new_readonly(share, false)))),
+                Err(VaultIntentError::Route(
+                    "route touches the vault share mint or its share account"
+                ))
+            );
+        }
+
+        let first_leg = if case["staging"]["leg"] == "second" {
+            "second"
+        } else {
+            "main"
+        };
+        assert_eq!(
+            raw(&|ix| ix.accounts[14].pubkey = Pubkey::new_unique()),
+            Err(VaultIntentError::PriceSection(first_leg))
+        );
+    }
+}
+
+#[test]
+fn swap_setup_is_vault_scratch_or_a_pinned_pool_update() {
+    let case = cases()
+        .into_iter()
+        .find(|case| {
+            case["swap"]["setup"]
+                .as_u64()
+                .is_some_and(|setup| setup > 0)
+        })
+        .unwrap();
+    let (payer, ixs) = decoded(&case);
+    let tables = [table(&case)];
+    let vault = manager(&case, "swapper");
+    let s = swap_index(&case);
+    let (ata_setup, pool_setup) = (2, s - 1);
+    assert_eq!(ixs[ata_setup].program_id, ASSOCIATED_TOKEN_PROGRAM_ID);
+    assert!(STAKE_POOL_PROGRAM_IDS.contains(&ixs[pool_setup].program_id));
+    let with = |index: usize, ix: Instruction| {
+        let mut mutated = ixs.clone();
+        mutated[index] = ix;
+        verify(&case, &compile(payer, &mutated, &tables), &tables)
+    };
+    let scratch_mint = ixs[ata_setup].accounts[3].pubkey;
+    let vault_key = vault.addresses.vault;
+
+    with(ata_setup, ixs[ata_setup].clone()).unwrap();
+    assert_eq!(
+        with(
+            ata_setup,
+            create_ata_idempotent(
+                payer,
+                vault_key,
+                Pubkey::new_unique(),
+                TOKEN_2022_PROGRAM_ID,
+            ),
+        ),
+        Err(VaultIntentError::Setup(
+            "creates an account the route does not use"
+        ))
+    );
+    let mut twice = ixs.clone();
+    twice.insert(ata_setup, ixs[ata_setup].clone());
+    assert_eq!(
+        verify(&case, &compile(payer, &twice, &tables), &tables),
+        Err(VaultIntentError::Setup("creates the same account twice"))
+    );
+    for leg in [
+        vault.args.main_mint,
+        vault.args.second_mint,
+        vault.args.share_mint,
+    ] {
+        assert_eq!(
+            with(
+                ata_setup,
+                create_ata_idempotent(payer, vault_key, leg, TOKEN_PROGRAM_ID)
+            ),
+            Err(VaultIntentError::Setup(
+                "creates an account for a vault leg or share mint"
+            ))
+        );
+    }
+    for (funder, owner) in [
+        (payer, Pubkey::new_unique()),
+        (Pubkey::new_unique(), vault_key),
+    ] {
+        assert!(matches!(
+            with(
+                ata_setup,
+                create_ata_idempotent(funder, owner, scratch_mint, TOKEN_PROGRAM_ID)
+            ),
+            Err(VaultIntentError::Account { .. })
+        ));
+    }
+    assert_eq!(
+        with(
+            ata_setup,
+            create_ata_idempotent(payer, vault_key, scratch_mint, Pubkey::new_unique())
+        ),
+        Err(VaultIntentError::Setup("token program is not SPL Token"))
+    );
+
+    let pool_update = |program: Pubkey, pool: Pubkey| {
+        let mut ix = ixs[pool_setup].clone();
+        ix.program_id = program;
+        ix.accounts[0].pubkey = pool;
+        ix.accounts[1].pubkey =
+            Pubkey::find_program_address(&[pool.as_ref(), b"withdraw"], &program).0;
+        ix
+    };
+    let pool = ixs[pool_setup].accounts[0].pubkey;
+    with(pool_setup, pool_update(STAKE_POOL_PROGRAM_IDS[0], pool)).unwrap();
+    assert_eq!(
+        with(
+            pool_setup,
+            pool_update(STAKE_POOL_PROGRAM_IDS[1], Pubkey::new_unique())
+        ),
+        Err(VaultIntentError::Setup(
+            "updates a stake pool the vault's routes do not pin"
+        ))
+    );
+    assert_eq!(
+        with(pool_setup, pool_update(Pubkey::new_unique(), pool)),
+        Err(VaultIntentError::Setup(
+            "unexpected instruction before the swap"
+        ))
+    );
+    let mut wrong_authority = ixs[pool_setup].clone();
+    wrong_authority.accounts[1].pubkey = Pubkey::new_unique();
+    assert!(matches!(
+        with(pool_setup, wrong_authority),
+        Err(VaultIntentError::Account { .. })
+    ));
+
+    for setup in [ata_setup, pool_setup] {
+        let mut after = ixs.clone();
+        let moved = after.remove(setup);
+        after.push(moved);
+        assert!(matches!(
+            verify(&case, &compile(payer, &after, &tables), &tables),
+            Err(VaultIntentError::InstructionCount { .. })
         ));
     }
 }
 
 #[test]
 fn key_repeated_in_static_keys_and_lookup_table_is_rejected() {
-    let case = cases()
-        .into_iter()
-        .find(|case| case["kind"] == "swap")
-        .unwrap();
+    let case = cases().into_iter().find(is_swap).unwrap();
     let (payer, ixs) = decoded(&case);
     let mut table = table(&case);
     table.addresses.push(payer);
@@ -831,4 +1469,52 @@ fn signing_rejects_a_transaction_that_does_not_require_the_signer() {
         decoded_transaction(&tx).sign(&signer),
         Err(VaultIntentError::SignerNotRequired(key))
     );
+}
+
+#[test]
+fn recovery_stage_pins_main_valuation_and_hop_program() {
+    let case = cases()
+        .into_iter()
+        .find(|c| c["swap"]["mode"] == "recovery")
+        .unwrap();
+    let (payer, ixs) = decoded(&case);
+    let tables = [table(&case)];
+    let request = swap_request(&case);
+    let s = swap_index(&case);
+    let prefix = swap_prefix(&case);
+    let main = price_routes(&case).0;
+    let tail = prefix - 2 - main.accounts(Pubkey::default(), 1).len();
+    assert_eq!(&ixs[s].data[..3], &[76, 2, 1]);
+    let check = |ixs: &[Instruction]| {
+        verify_swap(
+            &case,
+            &request,
+            &swap_quote(&case, compile(payer, ixs, &tables)),
+            &tables,
+        )
+    };
+    check(&ixs).unwrap();
+    for position in tail..=prefix {
+        let mut changed = ixs.clone();
+        changed[s]
+            .accounts
+            .push(AccountMeta::new(ixs[s].accounts[position].pubkey, false));
+        changed[s].data[header_len(&case)] += 1;
+        if position == tail {
+            check(&changed).unwrap(); // MAIN custody is writable by design.
+        } else {
+            assert_eq!(
+                check(&changed),
+                Err(VaultIntentError::Route(
+                    "route makes a read-only account writable"
+                ))
+            );
+        }
+    }
+    let mut downgraded = ixs.clone();
+    downgraded[s].data[1] = 0;
+    assert!(check(&downgraded).is_err());
+    let mut truncated = ixs.clone();
+    truncated[s].accounts.truncate(tail + 1);
+    assert!(check(&truncated).is_err());
 }

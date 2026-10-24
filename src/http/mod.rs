@@ -13,9 +13,9 @@ use serde::de::DeserializeOwned;
 use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 pub use types::{
     PremiumFlow, ProjectionCursor, TokenProgramKind, Vault, VaultCapacity, VaultExposure,
-    VaultExposurePosition, VaultExposureTotal, VaultFees, VaultMetadata, VaultPerformance,
-    VaultPolicy, VaultPosition, VaultPositionRole, VaultPositionStatus, VaultPositionType,
-    VaultPremium, VaultReturns, Venue, WindowReturn,
+    VaultExposurePosition, VaultExposureTotal, VaultFees, VaultLeg, VaultMetadata,
+    VaultPerformance, VaultPolicy, VaultPosition, VaultPositionRole, VaultPositionStatus,
+    VaultPositionType, VaultPremium, VaultReturns, VaultStaging, Venue, WindowReturn,
 };
 
 use crate::ws::types::{MarketInfo, TokenInfo};

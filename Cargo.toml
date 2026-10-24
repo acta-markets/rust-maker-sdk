@@ -1,6 +1,6 @@
 [package]
 name = "acta-maker-sdk"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -10,7 +10,7 @@ documentation = "https://beta.acta.markets/docs"
 keywords = ["rfq", "options", "defi", "solana", "market-maker"]
 categories = ["api-bindings"]
 readme = "README.md"
-exclude = ["scripts/", ".github/"]
+exclude = ["scripts/", ".github/", "tests/", "src/**/*_tests.rs", "src/**/tests.rs", ".gitignore"]
 
 [package.metadata.docs.rs]
 features = ["ws-client", "chain-rpc", "vault", "http"]
@@ -23,7 +23,8 @@ ed25519-dalek = { version = "2", features = ["zeroize"] }
 futures-util = { version = "0.3", optional = true }
 hex = "0.4"
 rand = "0.9"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"], optional = true }
+rust_decimal = { version = "1", default-features = false, features = ["std"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = { version = "3.16.1", features = ["macros"] }
@@ -55,6 +56,7 @@ chain-rpc = [
   "dep:solana-compute-budget-interface",
 ]
 http = ["dep:reqwest"]
+decimal = ["dep:rust_decimal"]
 
 [[example]]
 name = "hello_auth"
@@ -106,3 +108,7 @@ opt-level = 3
 lto = "thin"
 debug = 1
 strip = false
+
+[[example]]
+name = "curator_pt"
+required-features = ["chain-rpc", "http"]

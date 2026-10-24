@@ -6,19 +6,22 @@ use solana_sdk::{
 use super::manager::{VaultIx, VaultManager};
 use super::{VaultChainError, pda};
 use crate::chain::ix::{
-    SYSTEM_PROGRAM_ID, derive_associated_token_address as ata, maker_pda_with_program_id,
+    SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    derive_associated_token_address as ata, maker_pda_with_program_id,
 };
 use crate::orders::{OrderPreimageArgs, compute_order_id};
 use crate::quote::market_pda;
-use crate::types::PositionType;
+use crate::types::{PositionType, VaultLeg, VaultStagingStep};
 
-pub const JUPITER_V6_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
-/// Pool-backed mock router pinned by the devnet program build (devnet has no Jupiter).
-pub const DEVNET_SWAP_ROUTER_ID: Pubkey =
-    solana_sdk::pubkey!("BtHXpaAvhaKYk9pR4vNpuMZLTR8XeXnZ4iTy2Q1NzuCz");
+/// CPI accounts per hop.
 pub const MAX_VAULT_SWAP_ROUTE_ACCOUNTS: usize = 64;
+/// Instruction account slots across all hops, duplicates included.
+pub const MAX_VAULT_SWAP_PATH_ACCOUNTS: usize = 128;
+/// Hop data bytes across all hops.
 pub const MAX_VAULT_SWAP_ROUTE_DATA: usize = 1_024;
+pub const MAX_VAULT_SWAP_HOPS: usize = 4;
+
+pub(crate) const NO_AMOUNT_OFFSET: u16 = u16::MAX;
 
 pub(crate) const INSTRUCTIONS_SYSVAR_ID: Pubkey =
     solana_sdk::pubkey!("Sysvar1nstructions1111111111111111111111111");
@@ -191,32 +194,92 @@ impl VaultTradeTerms {
     }
 }
 
-/// A router route as the vault's swap instruction carries it.
+/// One CPI into a registered swap venue; transit and scratch accounts must end where they started.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VaultSwapRoute {
-    /// Must equal the router pinned by the target program build.
-    pub router: Pubkey,
-    pub main_price_update: Pubkey,
-    pub second_price_update: Pubkey,
-    pub amount_in: u64,
-    pub minimum_out: u64,
-    pub valid_until: u64,
-    pub route_accounts: Vec<AccountMeta>,
-    pub route_data: Vec<u8>,
+pub struct VaultSwapHop {
+    pub program: Pubkey,
+    /// Vault token account the hop spends: the input leg ATA, then the previous destination.
+    pub source: Pubkey,
+    /// Vault token account the hop fills: a transit vault ATA, the last hop the output leg.
+    pub destination: Pubkey,
+    pub accounts: Vec<AccountMeta>,
+    pub data: Vec<u8>,
+    /// Not on the first hop: spends exactly what its source received earlier in this swap.
+    pub amount_offset: Option<VaultSwapAmountOffset>,
 }
 
+/// Writes the largest `a` with `floor(a * den / num) == received` as u64 LE at `data[offset..]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultSwapAmountOffset {
+    pub offset: u16,
+    pub num: u64,
+    pub den: u64,
+}
+
+/// A vault swap as its instruction carries it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultSwapPlan {
+    /// Main then second route with their accounts; see [`VaultManager::price_section`].
+    pub price_section: Vec<AccountMeta>,
+    /// Most the input leg may spend; the route may spend less and the rest stays in the leg.
+    pub amount_in: u64,
+    /// Least the output leg must gain. Drift is checked on the actual spend and gain.
+    pub minimum_out: u64,
+    pub valid_until: u64,
+    /// Input leg to output leg, 1..=4 hops.
+    pub hops: Vec<VaultSwapHop>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultSwapKind {
-    Rebalance { second_to_main: bool },
+    Rebalance {
+        second_to_main: bool,
+    },
     Recovery,
     Closing,
+    /// Stages SECOND during recovery, with MAIN custody and valuation before the hops.
+    RecoveryStage {
+        asset: VaultStagingAsset,
+        generation: u64,
+        main_price_section: Vec<AccountMeta>,
+    },
+    /// `VaultStagingSwap`; `generation` is `staged_generation + 1` to stage, else the open slot's.
+    Staging {
+        step: VaultStagingStep,
+        leg: VaultLeg,
+        asset: VaultStagingAsset,
+        generation: u64,
+    },
+}
+
+/// A mint with a price route the vault holds on its canonical ATA between staging halves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultStagingAsset {
+    pub mint: Pubkey,
+    pub token_program: Pubkey,
+}
+
+impl VaultStagingAsset {
+    #[must_use]
+    pub fn vault_ata(&self, vault: &Pubkey) -> Pubkey {
+        ata(vault, &self.mint, &self.token_program)
+    }
 }
 
 impl VaultSwapKind {
-    pub(crate) const fn fixed_accounts(self) -> usize {
+    pub(crate) const fn fixed_accounts(&self) -> usize {
         match self {
-            Self::Rebalance { .. } => 18,
-            Self::Recovery | Self::Closing => 15,
+            Self::Rebalance { .. } | Self::Staging { .. } | Self::RecoveryStage { .. } => 14,
+            Self::Recovery | Self::Closing => 11,
+        }
+    }
+
+    /// Instruction data before the hops; it ends with `hop_count`.
+    pub(crate) const fn header_len(&self) -> usize {
+        match self {
+            Self::Rebalance { .. } => 27,
+            Self::Recovery | Self::Closing => 26,
+            Self::Staging { .. } | Self::RecoveryStage { .. } => 36,
         }
     }
 }
@@ -437,37 +500,75 @@ impl VaultManager {
         })
     }
 
-    /// `VaultSpotRebalance`, `RecoveryConvertToMain` or `ClosingConvertToMain` with `route`.
+    /// The swap instruction (rebalance, conversion or staging half) for `plan`.
     pub fn swap(
         &self,
         kind: VaultSwapKind,
-        route: &VaultSwapRoute,
+        plan: &VaultSwapPlan,
     ) -> Result<Instruction, VaultChainError> {
-        self.validate_route(route)?;
-        let route_data_len = u16::try_from(route.route_data.len())
-            .map_err(|_| VaultChainError::InvalidInput("route data exceeds u16"))?;
+        self.validate_swap(&kind, plan)?;
+        if let VaultSwapKind::RecoveryStage {
+            asset,
+            generation,
+            main_price_section,
+        } = &kind
+        {
+            if main_price_section.is_empty()
+                || main_price_section
+                    .iter()
+                    .any(|meta| meta.is_writable || meta.is_signer)
+            {
+                return Err(VaultChainError::InvalidInput(
+                    "recovery main price section must be nonempty and read-only",
+                ));
+            }
+            let mut instruction = self.swap(
+                VaultSwapKind::Staging {
+                    step: VaultStagingStep::Stage,
+                    leg: VaultLeg::Second,
+                    asset: *asset,
+                    generation: *generation,
+                },
+                plan,
+            )?;
+            instruction.data[1] = 2;
+            let tail = [
+                AccountMeta::new(self.addresses.vault_main_ata, false),
+                AccountMeta::new_readonly(self.args.main_token_program, false),
+            ];
+            instruction.accounts.splice(
+                kind.fixed_accounts() + plan.price_section.len()
+                    ..kind.fixed_accounts() + plan.price_section.len(),
+                tail.into_iter().chain(main_price_section.iter().cloned()),
+            );
+            return Ok(instruction);
+        }
         let a = &self.addresses;
         let args = &self.args;
-        let oracle = [
-            AccountMeta::new_readonly(args.main_mint, false),
-            AccountMeta::new_readonly(args.second_mint, false),
-            AccountMeta::new_readonly(a.main_oracle_source, false),
-            AccountMeta::new_readonly(route.main_price_update, false),
-            AccountMeta::new_readonly(a.second_oracle_source, false),
-            AccountMeta::new_readonly(route.second_price_update, false),
-            AccountMeta::new_readonly(args.main_token_program, false),
-            AccountMeta::new_readonly(args.second_token_program, false),
-            AccountMeta::new_readonly(route.router, false),
-        ];
+        let actor = AccountMeta::new_readonly(args.actor, true);
+        let vault = AccountMeta::new(a.vault, false);
+        let policy = AccountMeta::new_readonly(a.policy, false);
         let custody = [
             AccountMeta::new(a.vault_main_ata, false),
             AccountMeta::new(a.vault_second_ata, false),
         ];
-        let actor = AccountMeta::new_readonly(args.actor, true);
-        let vault = AccountMeta::new(a.vault, false);
-        let policy = AccountMeta::new_readonly(a.policy, false);
-        let mut accounts = Vec::with_capacity(kind.fixed_accounts() + route.route_accounts.len());
-        let (ix, direction) = match kind {
+        let pair = [
+            AccountMeta::new_readonly(args.main_mint, false),
+            AccountMeta::new_readonly(args.second_mint, false),
+            AccountMeta::new_readonly(args.main_token_program, false),
+            AccountMeta::new_readonly(args.second_token_program, false),
+        ];
+        let mut accounts = Vec::with_capacity(
+            kind.fixed_accounts()
+                + plan.price_section.len()
+                + plan
+                    .hops
+                    .iter()
+                    .map(|hop| 3 + hop.accounts.len())
+                    .sum::<usize>(),
+        );
+        let (ix, prefix) = match kind {
+            VaultSwapKind::RecoveryStage { .. } => unreachable!("handled above"),
             VaultSwapKind::Rebalance { second_to_main } => {
                 accounts.extend([
                     actor,
@@ -477,82 +578,234 @@ impl VaultManager {
                     AccountMeta::new_readonly(a.global_config, false),
                 ]);
                 accounts.extend(custody);
-                accounts.extend(oracle);
+                accounts.extend(pair);
                 accounts.extend([
                     AccountMeta::new_readonly(args.share_mint, false),
                     AccountMeta::new_readonly(a.manager_stake_ata, false),
                 ]);
-                (VaultIx::VaultSpotRebalance, Some(u8::from(second_to_main)))
+                (
+                    VaultIx::VaultSpotRebalance,
+                    [Some(u8::from(second_to_main)), None],
+                )
             }
             VaultSwapKind::Recovery => {
                 accounts.extend([actor, vault, policy]);
                 accounts.extend(custody);
-                accounts.extend(oracle);
+                accounts.extend(pair);
                 accounts.push(AccountMeta::new_readonly(args.share_mint, false));
-                (VaultIx::RecoveryConvertToMain, None)
+                (VaultIx::RecoveryConvertToMain, [None, None])
             }
             VaultSwapKind::Closing => {
                 accounts.extend([actor, vault, policy]);
                 accounts.extend(custody);
-                accounts.extend(oracle);
+                accounts.extend(pair);
                 accounts.push(AccountMeta::new_readonly(a.global_config, false));
-                (VaultIx::ClosingConvertToMain, None)
+                (VaultIx::ClosingConvertToMain, [None, None])
+            }
+            VaultSwapKind::Staging {
+                step, leg, asset, ..
+            } => {
+                let unknown = || VaultChainError::InvalidInput("unknown staging step or leg");
+                let (leg_ata, leg_mint, leg_program, leg) = match leg {
+                    VaultLeg::Main => {
+                        (a.vault_main_ata, args.main_mint, args.main_token_program, 0)
+                    }
+                    VaultLeg::Second => (
+                        a.vault_second_ata,
+                        args.second_mint,
+                        args.second_token_program,
+                        1,
+                    ),
+                    VaultLeg::Unknown => return Err(unknown()),
+                };
+                let step = match step {
+                    VaultStagingStep::Stage => 0,
+                    VaultStagingStep::Unstage => 1,
+                    VaultStagingStep::Unknown => return Err(unknown()),
+                };
+                accounts.extend([
+                    actor,
+                    vault,
+                    policy,
+                    AccountMeta::new_readonly(a.delegate, false),
+                    AccountMeta::new_readonly(a.global_config, false),
+                    AccountMeta::new(leg_ata, false),
+                    AccountMeta::new_readonly(leg_mint, false),
+                    AccountMeta::new_readonly(leg_program, false),
+                    AccountMeta::new(asset.vault_ata(&a.vault), false),
+                    AccountMeta::new_readonly(asset.mint, false),
+                    AccountMeta::new_readonly(asset.token_program, false),
+                    AccountMeta::new_readonly(args.share_mint, false),
+                    AccountMeta::new_readonly(a.manager_stake_ata, false),
+                ]);
+                (VaultIx::VaultStagingSwap, [Some(step), Some(leg)])
             }
         };
-        accounts.extend(route.route_accounts.iter().map(|meta| {
-            AccountMeta {
-                pubkey: meta.pubkey,
-                is_signer: false,
-                is_writable: route
-                    .route_accounts
+        accounts.push(AccountMeta::new_readonly(a.swap_venues, false));
+        accounts.extend_from_slice(&plan.price_section);
+        let mut data = Vec::with_capacity(
+            kind.header_len()
+                + plan
+                    .hops
                     .iter()
-                    .any(|other| other.pubkey == meta.pubkey && other.is_writable),
-            }
-        }));
-        let mut data = Vec::with_capacity(28 + route.route_data.len());
-        data.extend(direction);
-        for value in [route.amount_in, route.minimum_out, route.valid_until] {
+                    .map(|hop| {
+                        let scale = if hop.amount_offset.is_some() { 16 } else { 0 };
+                        5 + scale + hop.data.len()
+                    })
+                    .sum::<usize>(),
+        );
+        data.extend(prefix.into_iter().flatten());
+        for value in [plan.amount_in, plan.minimum_out, plan.valid_until] {
             data.extend_from_slice(&value.to_le_bytes());
         }
-        data.extend_from_slice(&route_data_len.to_le_bytes());
-        data.extend_from_slice(&route.route_data);
+        if let VaultSwapKind::Staging { generation, .. } = kind {
+            data.extend_from_slice(&generation.to_le_bytes());
+        }
+        // Lengths are bounded by `validate_swap`.
+        data.push(plan.hops.len() as u8);
+        for hop in &plan.hops {
+            data.push(hop.accounts.len() as u8);
+            data.extend_from_slice(&(hop.data.len() as u16).to_le_bytes());
+            match hop.amount_offset {
+                Some(amount) => {
+                    data.extend_from_slice(&amount.offset.to_le_bytes());
+                    data.extend_from_slice(&amount.num.to_le_bytes());
+                    data.extend_from_slice(&amount.den.to_le_bytes());
+                }
+                None => data.extend_from_slice(&NO_AMOUNT_OFFSET.to_le_bytes()),
+            }
+            data.extend_from_slice(&hop.data);
+            accounts.extend([
+                AccountMeta::new_readonly(hop.program, false),
+                AccountMeta::new(hop.source, false),
+                AccountMeta::new(hop.destination, false),
+            ]);
+            accounts.extend(hop.accounts.iter().map(|meta| AccountMeta {
+                is_signer: false,
+                ..meta.clone()
+            }));
+        }
         Ok(self.instruction(ix, accounts, &data))
     }
 
-    fn validate_route(&self, route: &VaultSwapRoute) -> Result<(), VaultChainError> {
-        if route.amount_in == 0 || route.minimum_out == 0 || route.valid_until == 0 {
-            return Err(VaultChainError::InvalidInput(
-                "swap amounts and validity must be non-zero",
-            ));
+    fn validate_swap(
+        &self,
+        kind: &VaultSwapKind,
+        plan: &VaultSwapPlan,
+    ) -> Result<(), VaultChainError> {
+        let invalid = |reason| Err(VaultChainError::InvalidInput(reason));
+        if plan.amount_in == 0 || plan.minimum_out == 0 || plan.valid_until == 0 {
+            return invalid("swap amounts and validity must be non-zero");
         }
-        if route.route_accounts.is_empty()
-            || route.route_accounts.len() > MAX_VAULT_SWAP_ROUTE_ACCOUNTS
-        {
-            return Err(VaultChainError::InvalidInput(
-                "invalid vault swap route account count",
-            ));
+        let hops = &plan.hops;
+        if hops.is_empty() || hops.len() > MAX_VAULT_SWAP_HOPS {
+            return invalid("invalid vault swap hop count");
         }
-        if route.route_data.is_empty() || route.route_data.len() > MAX_VAULT_SWAP_ROUTE_DATA {
-            return Err(VaultChainError::InvalidInput(
-                "invalid vault swap route data length",
-            ));
+        let accounts: usize = hops.iter().map(|hop| hop.accounts.len() + 3).sum();
+        let data: usize = hops.iter().map(|hop| hop.data.len()).sum();
+        if accounts > MAX_VAULT_SWAP_PATH_ACCOUNTS || data > MAX_VAULT_SWAP_ROUTE_DATA {
+            return invalid("vault swap hops exceed the account or data cap");
         }
         let a = &self.addresses;
-        if route
-            .route_accounts
-            .iter()
-            .any(|meta| meta.is_signer && meta.pubkey != a.vault)
-        {
-            return Err(VaultChainError::InvalidInput(
-                "only the vault PDA may sign the router CPI",
-            ));
-        }
-        let contains = |key: &Pubkey| route.route_accounts.iter().any(|meta| meta.pubkey == *key);
-        if !contains(&a.vault) || !contains(&a.vault_main_ata) || !contains(&a.vault_second_ata) {
-            return Err(VaultChainError::InvalidInput(
-                "route must contain vault, main ATA and second ATA",
-            ));
+        let (input, output) = &self.swap_legs(kind)?;
+        let mut source = input;
+        for (index, hop) in hops.iter().enumerate() {
+            let last = index + 1 == hops.len();
+            if hop.accounts.is_empty() || hop.accounts.len() > MAX_VAULT_SWAP_ROUTE_ACCOUNTS {
+                return invalid("invalid vault swap hop account count");
+            }
+            if hop.data.is_empty() {
+                return invalid("vault swap hop needs data");
+            }
+            if let Some(amount) = hop.amount_offset
+                && (index == 0
+                    || amount.offset == NO_AMOUNT_OFFSET
+                    || usize::from(amount.offset) + 8 > hop.data.len()
+                    || amount.num == 0
+                    || amount.den == 0)
+            {
+                return invalid(
+                    "amount_offset needs a transit source, 8 bytes inside the data and a nonzero scale",
+                );
+            }
+            if hop.source != *source
+                || (last && hop.destination != *output)
+                || (!last && (hop.destination == *input || hop.destination == *output))
+            {
+                return invalid("vault swap hops must chain input leg, transit ATAs, output leg");
+            }
+            if hop
+                .accounts
+                .iter()
+                .any(|meta| meta.is_signer && meta.pubkey != a.vault)
+            {
+                return invalid("only the vault PDA may sign a hop CPI");
+            }
+            if hop.accounts.iter().any(|meta| {
+                (meta.pubkey == *input || meta.pubkey == *output)
+                    && meta.pubkey != hop.source
+                    && meta.pubkey != hop.destination
+            }) {
+                return invalid("a leg ATA may appear only as its hop's source or destination");
+            }
+            let contains = |key: &Pubkey| hop.accounts.iter().any(|meta| meta.pubkey == *key);
+            if !contains(&a.vault) || !contains(&hop.source) || !contains(&hop.destination) {
+                return invalid("hop must contain the vault, its source and its destination");
+            }
+            source = &hop.destination;
         }
         Ok(())
+    }
+
+    /// Input and output token accounts of `kind`.
+    fn swap_legs(&self, kind: &VaultSwapKind) -> Result<(Pubkey, Pubkey), VaultChainError> {
+        let a = &self.addresses;
+        let (main, second) = (a.vault_main_ata, a.vault_second_ata);
+        if let VaultSwapKind::RecoveryStage {
+            asset, generation, ..
+        } = kind
+        {
+            return self.swap_legs(&VaultSwapKind::Staging {
+                step: VaultStagingStep::Stage,
+                leg: VaultLeg::Second,
+                asset: *asset,
+                generation: *generation,
+            });
+        }
+        let VaultSwapKind::Staging {
+            step, leg, asset, ..
+        } = kind
+        else {
+            return Ok(match kind {
+                VaultSwapKind::Rebalance {
+                    second_to_main: false,
+                } => (main, second),
+                _ => (second, main),
+            });
+        };
+        let args = &self.args;
+        if [args.main_mint, args.second_mint, args.share_mint].contains(&asset.mint) {
+            return Err(VaultChainError::InvalidInput(
+                "the staging mint must not be a vault mint",
+            ));
+        }
+        if asset.token_program != TOKEN_PROGRAM_ID && asset.token_program != TOKEN_2022_PROGRAM_ID {
+            return Err(VaultChainError::InvalidInput(
+                "staging token program is not SPL Token",
+            ));
+        }
+        let leg = match leg {
+            VaultLeg::Main => main,
+            VaultLeg::Second => second,
+            VaultLeg::Unknown => {
+                return Err(VaultChainError::InvalidInput("unknown staging leg"));
+            }
+        };
+        let staging = asset.vault_ata(&a.vault);
+        match step {
+            VaultStagingStep::Stage => Ok((leg, staging)),
+            VaultStagingStep::Unstage => Ok((staging, leg)),
+            VaultStagingStep::Unknown => Err(VaultChainError::InvalidInput("unknown staging step")),
+        }
     }
 }

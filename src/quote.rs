@@ -8,7 +8,6 @@ use crate::types::ids::{Nonce, OrderId, Price, Quantity, Strike};
 use crate::types::{PositionType, QuoteExpiry};
 use crate::wire::{WireError, decode_base58_32, encode_base58};
 use crate::ws::types::{QuoteMessage, ReplaceQuoteMessage, RfqBroadcastMessage};
-#[cfg(feature = "http")]
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -288,10 +287,29 @@ impl QuoteBuilder<'_> {
     /// `now + min_quote_validity_seconds`, and `valid_until − settlement_buffer_seconds`
     /// must be after now.
     #[cfg(feature = "http")]
-    pub fn venue(mut self, venue: &crate::http::Venue) -> Self {
+    pub fn venue(self, venue: &crate::http::Venue) -> Self {
+        self.quote_window(
+            venue.min_quote_validity_seconds,
+            venue.settlement_buffer_seconds,
+        )
+    }
+
+    /// [`Self::venue`] from the session's `Welcome` instead of HTTP.
+    pub fn welcome(self, welcome: &crate::ws::types::WelcomeData) -> Self {
+        self.quote_window(
+            welcome.min_quote_validity_seconds,
+            welcome.settlement_buffer_seconds,
+        )
+    }
+
+    fn quote_window(
+        mut self,
+        min_quote_validity_seconds: u32,
+        settlement_buffer_seconds: u32,
+    ) -> Self {
         let after = |seconds: u32| QuoteExpiry::after(Duration::from_secs(u64::from(seconds)));
-        self.min_valid_until = after(venue.min_quote_validity_seconds);
-        self.buffer_end = after(venue.settlement_buffer_seconds);
+        self.min_valid_until = after(min_quote_validity_seconds);
+        self.buffer_end = after(settlement_buffer_seconds);
         self
     }
 

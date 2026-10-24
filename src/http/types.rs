@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+pub use crate::types::VaultLeg;
 use crate::ws::types::{MarketInfo, TokenInfo};
 
 /// Public `/api/v1/vaults` row. Integers wider than JSON-safe stay decimal strings.
@@ -29,6 +30,7 @@ pub struct Vault {
     pub share_price: String,
     pub equity: String,
     pub capital_generation: String,
+    pub second_leg_generation: String,
     pub accepting_deposits: bool,
     pub equity_computed: bool,
     pub pending_deposit_count: u32,
@@ -52,6 +54,10 @@ pub struct Vault {
     pub live_share_supply: Option<String>,
     pub observed_manager_stake_shares: Option<String>,
     pub balance_chain_slot: Option<String>,
+    #[serde(default)]
+    pub staging: Option<VaultStaging>,
+    /// The next stage carries `staged_generation + 1`.
+    pub staged_generation: String,
     pub policy: VaultPolicy,
     pub projection: ProjectionCursor,
     #[serde(default)]
@@ -93,6 +99,18 @@ pub struct VaultMetadata {
     pub twitter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logo_url: Option<String>,
+}
+
+/// Leg balance moved into a vault ATA of another mint, pending return to a leg.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VaultStaging {
+    pub mint: String,
+    pub from_leg: VaultLeg,
+    pub amount: String,
+    pub staged_at: String,
+    /// The open slot's generation; an unstage names it.
+    pub generation: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

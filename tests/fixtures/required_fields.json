@@ -8,7 +8,9 @@
         "server_version": "test",
         "min_supported_version": "1.0.0",
         "enabled_features": [],
-        "server_time_unix_ms": 1700000000123
+        "server_time_unix_ms": 1700000000123,
+        "min_quote_validity_seconds": 100,
+        "settlement_buffer_seconds": 90
       }
     }
   },

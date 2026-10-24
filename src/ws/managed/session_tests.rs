@@ -509,6 +509,8 @@ async fn send_welcome(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net
             min_supported_version: "1.0.0".to_string(),
             enabled_features: vec![FEATURE_CANCEL_ON_DISCONNECT.to_string()],
             server_time_unix_ms: std::time::UNIX_EPOCH,
+            min_quote_validity_seconds: 100,
+            settlement_buffer_seconds: 90,
         }),
     )
     .await;
@@ -525,6 +527,8 @@ async fn send_welcome_without_cancel_on_disconnect(
             min_supported_version: "1.0.0".to_string(),
             enabled_features: Vec::new(),
             server_time_unix_ms: std::time::UNIX_EPOCH,
+            min_quote_validity_seconds: 100,
+            settlement_buffer_seconds: 90,
         }),
     )
     .await;
@@ -609,6 +613,8 @@ async fn cancel_on_disconnect_is_requested_and_verified_in_welcome() {
                     min_supported_version: "1.0.0".to_string(),
                     enabled_features: vec![FEATURE_CANCEL_ON_DISCONNECT.to_string()],
                     server_time_unix_ms: std::time::UNIX_EPOCH,
+                    min_quote_validity_seconds: 100,
+                    settlement_buffer_seconds: 90,
                 }),
             )
             .await;

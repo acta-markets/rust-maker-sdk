@@ -147,6 +147,8 @@ async fn vault_handshake_response(socket: &mut Socket, response: ServerMessage) 
             min_supported_version: "1.0.0".to_string(),
             enabled_features: Vec::new(),
             server_time_unix_ms: std::time::UNIX_EPOCH,
+            min_quote_validity_seconds: 100,
+            settlement_buffer_seconds: 90,
         }),
     )
     .await;
@@ -480,8 +482,7 @@ async fn swap_quote_is_correlated_and_times_out_without_a_reply() {
                 quoted_out_amount: "990".to_string(),
                 minimum_out_amount: "985".to_string(),
                 valid_until: "0".to_string(),
-                main_price_update: "main-update".into(),
-                second_price_update: "second-update".into(),
+                staging: None,
             }),
         )
         .await;
@@ -1052,8 +1053,8 @@ async fn checked_signing_verifies_served_intent_before_signing() {
     use solana_sdk::pubkey::Pubkey;
 
     use crate::chain::vault::{
-        ComputeBudgetBounds, PairPriceFeeds, VaultIntentError, VaultManager, VaultManagerArgs,
-        VaultOpenIntent, VaultSwapIntent, VaultTradeTerms,
+        ComputeBudgetBounds, PairPriceRoutes, PriceRoute, VaultIntentError, VaultManager,
+        VaultManagerArgs, VaultOpenIntent, VaultStagingState, VaultSwapIntent, VaultTradeTerms,
     };
 
     let cases: Vec<serde_json::Value> =
@@ -1074,6 +1075,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
             share_mint: key(&vault["share_mint"]),
             main_token_program: key(&vault["main_token_program"]),
             second_token_program: key(&vault["second_token_program"]),
+            second_leg_generation: 0,
         })
         .unwrap()
     };
@@ -1174,25 +1176,24 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         quoted_out_amount: "2000".into(),
         minimum_out_amount: "1990".into(),
         valid_until: "1000100".into(),
-        main_price_update: swap["main_price_update"].as_str().unwrap().to_owned(),
-        second_price_update: swap["second_price_update"].as_str().unwrap().to_owned(),
+        staging: None,
     };
-    let feed = |name: &str| {
-        let mut id = [0; 32];
-        hex::decode_to_slice(swap[name].as_str().unwrap(), &mut id).unwrap();
-        id
+    let route = |name: &str| {
+        PriceRoute::parse(&hex::decode(swap[name].as_str().unwrap()).unwrap()).unwrap()
     };
+    let (main, second) = (route("main_route"), route("second_route"));
     let intent = |quote| VaultSwapIntent {
         vault: &vault,
         request: &request,
         quote,
-        price_feeds: PairPriceFeeds {
-            main: feed("main_feed"),
-            second: feed("second_feed"),
+        price_routes: PairPriceRoutes {
+            main: &main,
+            second: &second,
+            staging: &[],
             shards: &[0, 1],
         },
-        router: crate::chain::vault::JUPITER_V6_PROGRAM_ID,
         min_output_floor: 1990,
+        account: vault.test_account(VaultStagingState::default()),
     };
     assert!(matches!(
         client.verify_and_sign_swap(&intent(&quote), &table(case), bounds),

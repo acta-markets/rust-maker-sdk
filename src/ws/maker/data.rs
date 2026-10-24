@@ -85,6 +85,9 @@ impl MakerDataRequestError {
     }
 }
 
+/// The server's `GetMakerPositions` page cap.
+const MAKER_POSITIONS_PAGE_LIMIT: u32 = 500;
+
 /// Maker data-plane client.
 #[derive(Clone)]
 pub struct MakerDataClient {
@@ -138,6 +141,55 @@ impl MakerDataClient {
         }
     }
 
+    /// Every position matching `filter`, paged at the server maximum; the
+    /// filter's `limit` and cursor are ignored. Use after an `MmSummary` with
+    /// `positions_has_more`.
+    pub async fn all_maker_positions(
+        &self,
+        mut filter: GetMakerPositionsMessage,
+        timeout: Duration,
+    ) -> Result<MakerPositionsMessage, MakerDataRequestError> {
+        let mut all = MakerPositionsMessage {
+            request_id: filter.request_id,
+            positions: Vec::new(),
+            unrenderable: Vec::new(),
+            has_more: false,
+        };
+        filter.limit = Some(MAKER_POSITIONS_PAGE_LIMIT);
+        filter.cursor = None;
+        filter.cursor_id = None;
+        loop {
+            filter.request_id = uuid::Uuid::new_v4();
+            let page = self.request(filter.clone(), timeout).await?.into_payload();
+            // pages run (created_at second, pda) descending, across both lists
+            let last = page
+                .positions
+                .iter()
+                .map(|p| (p.created_at, p.pda.as_str()))
+                .chain(
+                    page.unrenderable
+                        .iter()
+                        .map(|p| (p.created_at, p.pda.as_str())),
+                )
+                .min()
+                .map(|(created_at, pda)| (created_at, pda.to_owned()));
+            all.positions.extend(page.positions);
+            all.unrenderable.extend(page.unrenderable);
+            match (page.has_more, last) {
+                (true, Some((created_at, pda))) => {
+                    filter.cursor = Some(created_at);
+                    filter.cursor_id = Some(pda);
+                }
+                _ => return Ok(all),
+            }
+        }
+    }
+
+    /// Receive owner-direct `PositionUpdated`, `TradeExecuted` and
+    /// `MakerCapsUpdated` pushes alongside query responses. No subscription is
+    /// required. Owner pushes begin after `MmSummary` recovery; quote lifecycle
+    /// messages stay on the quote session. On reconnect or a stream gap, rebuild
+    /// authoritative state (for example with `maker_open_positions`).
     pub fn subscribe_messages(&self) -> ManagedMessageReceiver {
         self.inner.subscribe_messages()
     }
@@ -371,5 +423,36 @@ mod tests {
             Err(MakerDataRequestError::Transport(SendAwaitError::NotReady))
         ));
         assert!(matches!(commands.try_recv(), Err(TryRecvError::Empty)));
+    }
+    #[tokio::test]
+    async fn data_client_exposes_all_owner_pushes() {
+        let (handle, _commands) = ManagedWsHandle::test_handle(1, 8);
+        let client = MakerDataClient {
+            inner: handle.clone(),
+        };
+        let mut messages = client.subscribe_messages();
+        for message in owner_pushes() {
+            let expected = serde_json::to_value(&message).unwrap();
+            handle.inject_message(message);
+            let received = messages.recv().await.unwrap();
+            assert_eq!(serde_json::to_value(received.message()).unwrap(), expected);
+        }
+    }
+
+    fn owner_pushes() -> Vec<ServerMessage> {
+        let caps = serde_json::json!({"positions": {"current": 1, "limit": 10}, "notional": [], "balances": []});
+        [
+        serde_json::json!({"type": "MakerCapsUpdated", "data": {"caps_snapshot": caps, "reason": "lifecycle"}}),
+        serde_json::json!({"type": "PositionUpdated", "data": {
+            "position": {"pda": "p", "market": "m", "underlying_mint": "u", "quote_mint": "q",
+                "position_type": "covered_call", "status": "open", "strike": 1, "quantity": 2,
+                "price": 3, "created_at": 1, "expiry_ts": 2},
+            "update_type": "created", "caps_snapshot": caps
+        }}),
+        serde_json::json!({"type": "TradeExecuted", "data": {"trade": {
+            "id": "00000000-0000-0000-0000-000000000001", "market": "m", "position_type": "covered_call",
+            "strike": 1, "quantity": 2, "price": 3, "taker": "t", "maker": "o", "tx_signature": "s", "executed_at": 1
+        }}}),
+    ].into_iter().map(|value| serde_json::from_value(value).unwrap()).collect()
     }
 }

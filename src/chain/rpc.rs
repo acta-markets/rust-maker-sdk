@@ -8,9 +8,8 @@ use solana_sdk::{
 use crate::chain::ChainError;
 use crate::chain::accounts::{MarketInfo, PositionInfo};
 use crate::chain::ix::{
-    DepositPremiumIxArgs, FundPositionIxArgs, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
-    WithdrawPremiumIxArgs, build_deposit_premium_ixs, build_fund_position_ixs,
-    build_withdraw_premium_ixs,
+    DepositPremiumIxArgs, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WithdrawPremiumIxArgs,
+    build_deposit_premium_ixs, build_withdraw_premium_ixs,
 };
 use crate::chain::settlement::required_settlement;
 use crate::chain::wsol::{
@@ -61,6 +60,8 @@ pub struct ChainClient {
     rpc: RpcClient,
     program_id: Pubkey,
     commitment: CommitmentConfig,
+    #[cfg(feature = "ws-client")]
+    confirmation_ws_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -100,6 +101,29 @@ struct PreparedFundPosition {
 }
 
 impl ChainClient {
+    pub fn rpc(&self) -> &RpcClient {
+        &self.rpc
+    }
+
+    pub fn from_rpc(rpc: RpcClient, program_id: Pubkey) -> Self {
+        let commitment = rpc.commitment();
+        Self {
+            rpc,
+            program_id,
+            commitment,
+            #[cfg(feature = "ws-client")]
+            confirmation_ws_url: None,
+        }
+    }
+
+    /// Use Solana signature subscriptions for confirming conveniences instead of
+    /// the legacy RPC confirmation fallback. Batch submission remains submit-only.
+    #[cfg(feature = "ws-client")]
+    pub fn with_confirmation_ws_url(mut self, url: impl Into<String>) -> Self {
+        self.confirmation_ws_url = Some(url.into());
+        self
+    }
+
     pub fn program_id(&self) -> Pubkey {
         self.program_id
     }
@@ -110,16 +134,19 @@ impl ChainClient {
             rpc,
             program_id,
             commitment,
+            #[cfg(feature = "ws-client")]
+            confirmation_ws_url: None,
         }
     }
 
+    /// Submit and wait for confirmation at the client commitment; execution failure is an error.
     pub async fn deposit_premium(
         &self,
         args: DepositPremiumArgs,
         maker_owner: &(dyn Signer + Sync),
         fee_payer: Option<&(dyn Signer + Sync)>,
     ) -> Result<Signature, ChainError> {
-        let payer = fee_payer.unwrap_or(maker_owner);
+        let payer = fee_payer.map_or(maker_owner, |payer| payer);
         let ixs = self
             .build_deposit_premium_ixs(&args, payer.pubkey())
             .await?;
@@ -127,13 +154,14 @@ impl ChainClient {
             .await
     }
 
+    /// Submit and wait for confirmation at the client commitment; execution failure is an error.
     pub async fn withdraw_premium(
         &self,
         args: WithdrawPremiumArgs,
         maker_owner: &(dyn Signer + Sync),
         fee_payer: Option<&(dyn Signer + Sync)>,
     ) -> Result<Signature, ChainError> {
-        let payer = fee_payer.unwrap_or(maker_owner);
+        let payer = fee_payer.map_or(maker_owner, |payer| payer);
         let ixs = self
             .build_withdraw_premium_ixs(&args, payer.pubkey())
             .await?;
@@ -141,22 +169,26 @@ impl ChainClient {
             .await
     }
 
+    /// Submit and wait for confirmation at the client commitment; execution failure is an error.
     pub async fn fund_position(
         &self,
         args: FundPositionArgs,
         maker_owner: &(dyn Signer + Sync),
         fee_payer: Option<&(dyn Signer + Sync)>,
     ) -> Result<Signature, ChainError> {
-        let payer = fee_payer.unwrap_or(maker_owner);
+        let payer = fee_payer.map_or(maker_owner, |payer| payer);
         let prepared = self.prepare_fund_position(&args, payer.pubkey()).await?;
-        self.send_instructions(
-            prepared.instructions,
-            payer,
-            &[maker_owner],
-            SendOptions::default(),
-            prepared.native_budget,
-        )
-        .await
+        let (signature, blockhash) = self
+            .submit_instructions(
+                prepared.instructions,
+                payer,
+                &[maker_owner],
+                SendOptions::default(),
+                prepared.native_budget,
+                None,
+            )
+            .await?;
+        self.confirm_submitted(signature, blockhash).await
     }
 
     pub async fn build_deposit_premium_ixs(
@@ -224,22 +256,18 @@ impl ChainClient {
         let market_data = self.fetch_account(&pos.market_pda).await?;
         let market = MarketInfo::from_account(&market_data, &self.program_id)?;
 
-        let mut fund_ixs = build_fund_position_ixs(
+        let snapshot = super::batch::PositionSnapshot {
+            address: args.position_pda,
+            market_address: pos.market_pda,
+            position: pos.clone(),
+            market: market.clone(),
+        };
+        let mut fund_ixs = snapshot.fund_instructions(
             &self.program_id,
-            &FundPositionIxArgs {
-                maker_owner: args.maker_owner,
-                position_pda: args.position_pda,
-                market_pda: pos.market_pda,
-                position_type: pos.position_type.into(),
-                underlying_mint: market.underlying_mint,
-                quote_mint: market.quote_mint,
-                underlying_token_program_id: market.underlying_token_program_id,
-                quote_token_program_id: market.quote_token_program_id,
-                create_atas: args.create_atas,
-            },
+            args.maker_owner,
             fee_payer,
-        )
-        .map_err(ChainError::from)?;
+            args.create_atas,
+        )?;
 
         let NativeSolFunding::WrapIfNeeded { reserve_lamports } = args.native_sol else {
             return Ok(PreparedFundPosition {
@@ -450,6 +478,7 @@ impl ChainClient {
             .value)
     }
 
+    /// Submit and wait for confirmation at the client commitment; execution failure is an error.
     pub async fn send_instructions_with_options(
         &self,
         instructions: Vec<Instruction>,
@@ -457,18 +486,42 @@ impl ChainClient {
         extra_signers: &[&(dyn Signer + Sync)],
         options: SendOptions,
     ) -> Result<Signature, ChainError> {
-        self.send_instructions(instructions, fee_payer, extra_signers, options, None)
-            .await
+        let (signature, blockhash) = self
+            .submit_instructions(instructions, fee_payer, extra_signers, options, None, None)
+            .await?;
+        self.confirm_submitted(signature, blockhash).await
     }
 
-    async fn send_instructions(
+    /// Submit without confirmation using a blockhash shared across the caller's batch.
+    pub async fn send_instructions_with_blockhash(
+        &self,
+        instructions: Vec<Instruction>,
+        fee_payer: &(dyn Signer + Sync),
+        extra_signers: &[&(dyn Signer + Sync)],
+        options: SendOptions,
+        blockhash: solana_sdk::hash::Hash,
+    ) -> Result<Signature, ChainError> {
+        self.submit_instructions(
+            instructions,
+            fee_payer,
+            extra_signers,
+            options,
+            None,
+            Some(blockhash),
+        )
+        .await
+        .map(|(signature, _)| signature)
+    }
+
+    async fn submit_instructions(
         &self,
         mut instructions: Vec<Instruction>,
         fee_payer: &(dyn Signer + Sync),
         extra_signers: &[&(dyn Signer + Sync)],
         options: SendOptions,
         native_budget: Option<NativeSolBudget>,
-    ) -> Result<Signature, ChainError> {
+        blockhash: Option<solana_sdk::hash::Hash>,
+    ) -> Result<(Signature, solana_sdk::hash::Hash), ChainError> {
         if let Some(limit) = options.compute_unit_limit {
             instructions.insert(
                 0,
@@ -477,7 +530,10 @@ impl ChainClient {
                 ),
             );
         }
-        let recent = self.rpc.get_latest_blockhash().await?;
+        let recent = match blockhash {
+            Some(hash) => hash,
+            None => self.rpc.get_latest_blockhash().await?,
+        };
 
         let mut tx = Transaction::new_with_payer(&instructions, Some(&fee_payer.pubkey()));
         tx.message.recent_blockhash = recent;
@@ -498,10 +554,33 @@ impl ChainClient {
             }
         }
         sign_transaction(&mut tx, &signers, recent)?;
+        let signature = self.rpc.send_transaction(&tx).await?;
+        Ok((signature, recent))
+    }
+    async fn confirm_submitted(
+        &self,
+        signature: Signature,
+        blockhash: solana_sdk::hash::Hash,
+    ) -> Result<Signature, ChainError> {
+        #[cfg(feature = "ws-client")]
+        if let Some(url) = &self.confirmation_ws_url {
+            let statuses = self
+                .confirm_signatures(url, &[signature], std::time::Duration::from_secs(60))
+                .await?;
+            return match statuses.as_slice() {
+                [super::ConfirmationStatus::Confirmed] => Ok(signature),
+                [super::ConfirmationStatus::Failed(error)] => Err(ChainError::Confirmation(
+                    format!("transaction {signature} failed: {error}"),
+                )),
+                _ => Err(ChainError::Confirmation(format!(
+                    "transaction {signature} confirmation unresolved"
+                ))),
+            };
+        }
         self.rpc
-            .send_and_confirm_transaction_with_spinner_and_commitment(&tx, self.commitment)
-            .await
-            .map_err(ChainError::from)
+            .confirm_transaction_with_spinner(&signature, &blockhash, self.commitment)
+            .await?;
+        Ok(signature)
     }
 }
 

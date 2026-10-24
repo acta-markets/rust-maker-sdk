@@ -3,7 +3,9 @@
 //! `permissions` as a plain integer, enum tags in `snake_case`.
 
 use acta_maker_sdk::ws::types::*;
-use acta_maker_sdk::{OrderId, VaultDelegatePermissions, VaultOperatorKind, VaultSwapMode};
+use acta_maker_sdk::{
+    OrderId, VaultDelegatePermissions, VaultOperatorKind, VaultStagingStep, VaultSwapMode,
+};
 use uuid::Uuid;
 
 const REQUEST_ID: &str = "0f2c7b6e-3f1a-4d3e-9b1e-1c2d3e4f5a6b";
@@ -188,11 +190,10 @@ fn vault_swap_results_roundtrip_without_claiming_chain_confirmation() {
         quoted_out_amount: "41".to_string(),
         minimum_out_amount: "40".to_string(),
         valid_until: "123".to_string(),
-        main_price_update: "MainUpdate".to_string(),
-        second_price_update: "SecondUpdate".to_string(),
+        staging: None,
     });
     let expected = format!(
-        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","last_valid_block_height":77,"in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":"123","main_price_update":"MainUpdate","second_price_update":"SecondUpdate"}}}}"#
+        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","last_valid_block_height":77,"in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":"123"}}}}"#
     );
     let ServerMessage::SwapQuoteResult(data) = assert_server_wire(&quote, &expected) else {
         panic!("expected SwapQuoteResult");
@@ -200,6 +201,19 @@ fn vault_swap_results_roundtrip_without_claiming_chain_confirmation() {
     assert_eq!(data.execution_id, execution_id());
     assert_eq!(data.minimum_out_amount, "40");
     assert_eq!(quote.request_id(), Some(request_id()));
+    let older = expected.replace(
+        r#""valid_until":"123""#,
+        r#""valid_until":"123","main_price_update":"M","second_price_update":"S""#,
+    );
+    assert!(serde_json::from_str::<ServerMessage>(&older).is_ok());
+    let staged = expected.replace(
+        r#""valid_until":"123""#,
+        r#""valid_until":"123","staging":"unstage""#,
+    );
+    let ServerMessage::SwapQuoteResult(data) = serde_json::from_str(&staged).unwrap() else {
+        panic!("expected SwapQuoteResult");
+    };
+    assert_eq!(data.staging, Some(VaultStagingStep::Unstage));
 
     let submit = ServerMessage::SwapSubmitResult(SwapSubmitResultData {
         request_id: request_id(),

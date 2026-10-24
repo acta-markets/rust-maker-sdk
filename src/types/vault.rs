@@ -12,6 +12,29 @@ pub enum VaultOperatorKind {
     Unknown,
 }
 
+/// Staging half: once `Stage` confirms, requesting the same swap again returns the `Unstage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
+pub enum VaultStagingStep {
+    Stage,
+    Unstage,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
+pub enum VaultLeg {
+    Main,
+    Second,
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]

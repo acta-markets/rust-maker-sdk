@@ -1,10 +1,13 @@
+#[cfg(feature = "chain-rpc")]
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+#[cfg(feature = "chain-rpc")]
+use solana_sdk::account::Account;
 use solana_sdk::{
-    account::Account,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
 
+#[cfg(feature = "chain-rpc")]
 use super::ChainError;
 
 /// Default amount left in the maker wallet after wrapping, for fee headroom.
@@ -16,10 +19,15 @@ pub(crate) const TOKEN_PROGRAM_ID: Pubkey =
 const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
 const SPL_TOKEN_SYNC_NATIVE: u8 = 17;
 const SYSTEM_INSTRUCTION_TRANSFER: u32 = 2;
+#[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_MINT_OFFSET: usize = 0;
+#[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_OWNER_OFFSET: usize = 32;
+#[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_AMOUNT_OFFSET: usize = 64;
+#[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_BASE_LEN: usize = 72;
+#[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_RENT_LEN: usize = 165;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -41,6 +49,7 @@ impl NativeSolFunding {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "chain-rpc")]
 pub(crate) enum WrapDecision {
     NotNeeded,
     Wrap {
@@ -52,6 +61,7 @@ pub(crate) enum WrapDecision {
     },
 }
 
+#[cfg(feature = "chain-rpc")]
 pub(crate) enum WrapPlan {
     NotNeeded,
     Wrap {
@@ -60,6 +70,7 @@ pub(crate) enum WrapPlan {
     },
 }
 
+#[cfg(feature = "chain-rpc")]
 pub(crate) struct WsolWrapRequest {
     pub(crate) owner: Pubkey,
     pub(crate) funding_ata: Pubkey,
@@ -72,6 +83,7 @@ pub(crate) struct WsolWrapRequest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "chain-rpc")]
 pub(crate) struct NativeSolBudget {
     pub(crate) owner: Pubkey,
     wrap_lamports: u64,
@@ -79,6 +91,7 @@ pub(crate) struct NativeSolBudget {
     reserve_lamports: u64,
 }
 
+#[cfg(feature = "chain-rpc")]
 impl NativeSolBudget {
     fn required_lamports(self, fee_lamports: u64) -> Result<u64, ChainError> {
         self.wrap_lamports
@@ -104,10 +117,12 @@ impl NativeSolBudget {
     }
 }
 
+#[cfg(feature = "chain-rpc")]
 pub(crate) fn is_native_mint(mint: &Pubkey) -> bool {
     *mint == NATIVE_MINT
 }
 
+#[cfg(feature = "chain-rpc")]
 pub(crate) fn decide_wrap(
     existing_wsol: u64,
     expected_settlement: u64,
@@ -131,6 +146,7 @@ pub(crate) fn decide_wrap(
     WrapDecision::Wrap { wrap_lamports }
 }
 
+#[cfg(feature = "chain-rpc")]
 pub(crate) async fn plan_wsol_wrap(
     rpc: &RpcClient,
     account: Option<Account>,
@@ -196,12 +212,14 @@ pub(crate) async fn plan_wsol_wrap(
     }
 }
 
+#[cfg(feature = "chain-rpc")]
 pub(crate) async fn token_account_rent_lamports(rpc: &RpcClient) -> Result<u64, ChainError> {
     rpc.get_minimum_balance_for_rent_exemption(TOKEN_ACCOUNT_RENT_LEN)
         .await
         .map_err(ChainError::from)
 }
 
+#[cfg(feature = "chain-rpc")]
 fn parse_wsol_balance(
     account: &Account,
     expected_owner: &Pubkey,
@@ -218,6 +236,7 @@ fn parse_wsol_balance(
     read_u64(&account.data, TOKEN_ACCOUNT_AMOUNT_OFFSET)
 }
 
+#[cfg(feature = "chain-rpc")]
 fn read_pubkey(data: &[u8], offset: usize) -> Result<Pubkey, ChainError> {
     let bytes: [u8; 32] = data
         .get(offset..offset + 32)
@@ -227,6 +246,7 @@ fn read_pubkey(data: &[u8], offset: usize) -> Result<Pubkey, ChainError> {
     Ok(Pubkey::new_from_array(bytes))
 }
 
+#[cfg(feature = "chain-rpc")]
 fn read_u64(data: &[u8], offset: usize) -> Result<u64, ChainError> {
     let bytes: [u8; 8] = data
         .get(offset..offset + 8)
@@ -234,6 +254,22 @@ fn read_u64(data: &[u8], offset: usize) -> Result<u64, ChainError> {
         .try_into()
         .map_err(|_| ChainError::InvalidAccountData)?;
     Ok(u64::from_le_bytes(bytes))
+}
+
+/// Builds the explicit SOL-to-wSOL step; callers aggregate batch deficits and budget rent and fees.
+pub fn build_wrap_sol_ixs(owner: Pubkey, fee_payer: Pubkey, lamports: u64) -> Vec<Instruction> {
+    let ata = super::ix::derive_associated_token_address(&owner, &NATIVE_MINT, &TOKEN_PROGRAM_ID);
+    vec![
+        super::ix::create_associated_token_account_idempotent_ix(
+            &fee_payer,
+            &ata,
+            &owner,
+            &NATIVE_MINT,
+            &TOKEN_PROGRAM_ID,
+        ),
+        build_system_transfer_ix(&owner, &ata, lamports),
+        build_sync_native_ix(&TOKEN_PROGRAM_ID, &ata),
+    ]
 }
 
 fn build_system_transfer_ix(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction {
@@ -255,6 +291,6 @@ fn build_sync_native_ix(token_program: &Pubkey, native_account: &Pubkey) -> Inst
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "chain-rpc"))]
 #[path = "wsol_tests.rs"]
 mod tests;

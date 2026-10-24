@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use super::types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 use super::{
-    HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultExposure, VaultPositionRole,
-    VaultPositionStatus, VaultPositionType, Venue,
+    HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultExposure, VaultLeg,
+    VaultPositionRole, VaultPositionStatus, VaultPositionType, Venue,
 };
 use crate::ws::types::MarketStatus;
 
@@ -35,6 +35,16 @@ fn vaults_round_trip_the_backend_shape() {
     assert_eq!(full.capacity.remaining.as_deref(), Some("860"));
     assert_eq!(full.tvl_usd_1e9.as_deref(), Some("18000"));
     assert_eq!(full.depositors_in_generation, Some(11));
+    let staging = full.staging.as_ref().unwrap();
+    assert_eq!(staging.from_leg, VaultLeg::Second);
+    assert_eq!(
+        (
+            staging.amount.as_str(),
+            staging.staged_at.as_str(),
+            staging.generation.as_str()
+        ),
+        ("70", "1700000050", "2")
+    );
     let premium = full.premium.as_deref().unwrap();
     assert_eq!(premium[0].generation.paid.as_deref(), Some("7"));
     assert!(premium[1].generation.paid.is_none());
@@ -53,6 +63,7 @@ fn vaults_round_trip_the_backend_shape() {
     );
 
     assert_eq!(minimal.metadata, None);
+    assert_eq!(minimal.staging, None);
     assert!(minimal.main_balance.is_none() && minimal.deposit_window_set_ts.is_none());
     assert_eq!(minimal.capacity.remaining, None);
     assert!(minimal.premium.is_none() && minimal.fees.is_none() && minimal.tvl_usd_1e9.is_none());

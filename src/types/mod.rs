@@ -7,6 +7,8 @@ pub const PRICE_SCALE: u64 = 1_000_000_000;
 mod macros;
 
 pub mod amounts;
+#[cfg(feature = "decimal")]
+mod decimal;
 pub mod domain;
 pub mod errors;
 pub mod expiry;

@@ -37,6 +37,8 @@ impl MakerQuoteClient {
 
     /// Send only in `connection_epoch`, the epoch whose recovery the strategy
     /// applied; a reconnect in between rejects the quote with `NotReady`.
+    /// Success confirms only the socket write. Subscribe before sending and feed
+    /// messages to [`super::QuoteOutcomeTracker`] to track the server outcome.
     pub async fn quote_in_epoch(
         &self,
         payload: QuoteMessage,

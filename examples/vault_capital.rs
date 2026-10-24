@@ -5,10 +5,9 @@ use std::time::{Duration, Instant};
 
 use acta_maker_sdk::ACTA_PROGRAM_ID;
 use acta_maker_sdk::chain::vault::{
-    CapitalStep, VAULT_CAPITAL_BATCH_USERS, VaultAccount, VaultManager, VaultRequest,
+    CapitalStep, PriceRoute, VAULT_CAPITAL_BATCH_USERS, VaultAccount, VaultManager, VaultRequest,
     VaultRequestKind, VaultSafety, VaultView, WindowPolicy, WindowTracker, next_step,
-    oracle_source_pyth_feed, plan_withdrawals, pyth_price_feed_account,
-    vault_capital_batch_compute_units,
+    plan_withdrawals, vault_capital_batch_compute_units,
 };
 use acta_maker_sdk::chain::{ChainClient, SendOptions};
 use solana_commitment_config::CommitmentConfig;
@@ -17,7 +16,7 @@ use solana_rpc_client::api::config::{
 };
 use solana_rpc_client::api::filter::{Memcmp, RpcFilterType};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_sdk::instruction::Instruction;
+use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer, read_keypair_file};
 
@@ -80,10 +79,7 @@ impl Crank {
         match step {
             CapitalStep::CloseDeposits => {
                 if vault.pending_deposit_count > 0 || vault.pending_withdraw_count > 0 {
-                    self.price_update(manager.addresses.main_oracle_source)
-                        .await?;
-                    self.price_update(manager.addresses.second_oracle_source)
-                        .await?;
+                    self.price_section(&manager).await?;
                 }
                 self.send(manager.set_accepting_deposits(false), None)
                     .await?
@@ -93,14 +89,8 @@ impl Crank {
                     .await?
             }
             CapitalStep::ComputeEquity => {
-                let main = self
-                    .price_update(manager.addresses.main_oracle_source)
-                    .await?;
-                let second = self
-                    .price_update(manager.addresses.second_oracle_source)
-                    .await?;
-                self.send(manager.process_equity(main, second), None)
-                    .await?;
+                let prices = self.price_section(&manager).await?;
+                self.send(manager.process_equity(&prices), None).await?;
             }
             CapitalStep::ProcessDeposits => {
                 let users: Vec<Pubkey> = self
@@ -155,9 +145,17 @@ impl Crank {
         Ok(Some(step))
     }
 
-    async fn price_update(&self, oracle_source: Pubkey) -> Result<Pubkey> {
-        let feed = oracle_source_pyth_feed(&self.rpc.get_account_data(&oracle_source).await?)?;
-        Ok(pyth_price_feed_account(&feed, 0))
+    /// Both legs' price routes, Pyth bricks on push-oracle shard 0.
+    async fn price_section(&self, manager: &VaultManager) -> Result<Vec<AccountMeta>> {
+        let route = async |address| -> Result<PriceRoute> {
+            Ok(PriceRoute::from_account(
+                &self.rpc.get_account(&address).await?,
+                &self.program_id,
+            )?)
+        };
+        let main = route(manager.addresses.main_price_route).await?;
+        let second = route(manager.addresses.second_price_route).await?;
+        Ok(manager.price_section(&main, &second, 0)?)
     }
 
     async fn requests(&self, kind: VaultRequestKind) -> Result<Vec<VaultRequest>> {

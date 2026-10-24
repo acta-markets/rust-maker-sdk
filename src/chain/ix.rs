@@ -240,7 +240,7 @@ pub(crate) fn derive_associated_token_address_with_bump(
     )
 }
 
-fn create_associated_token_account_idempotent_ix(
+pub(crate) fn create_associated_token_account_idempotent_ix(
     payer: &Pubkey,
     ata: &Pubkey,
     owner: &Pubkey,
