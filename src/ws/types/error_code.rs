@@ -17,6 +17,7 @@ pub enum WsErrorCode {
     InternalError,
     TemporarilyUnavailable,
     ClockError,
+    TimeOverflow,
     TradingPaused,
     BatchQuotesTooLarge,
 
@@ -55,6 +56,7 @@ pub enum WsErrorCode {
     InvalidProgramId,
 
     InvalidStrikeNotional,
+    InsufficientCollateral,
     InvalidQuantitySizeRule,
     MissingSizeRuleForUnderlyingMint,
     InvalidUnderlyingMintKey,

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.7
+
+- `WsErrorCode` gains `InsufficientCollateral` (wallet taker cannot fund the RFQ's collateral; rejected before broadcast) and `TimeOverflow` (a deadline outside the representable range).
+
 ## 0.5.6
 
 - Add vault-owner lifecycle builders and RPC resolution for prices, proposals, recipients and second-leg rolls; add own-maker settlement, including vault writers, with TS instruction parity fixtures. Snapshot types now include vault ownership flags, settlement price, fee recipient and governance nominee.
