@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.6
+
+- Add vault-owner lifecycle builders and RPC resolution for prices, proposals, recipients and second-leg rolls; add own-maker settlement, including vault writers, with TS instruction parity fixtures. Snapshot types now include vault ownership flags, settlement price, fee recipient and governance nominee.
+
+- Add settlement/unlock ATA sequences, owner/staging RPC guards and four-way token-program goldens; keep general position decoding tolerant and validate flags only for settlement.
+
 ## 0.5.5
 
 - Allow funding Open positions after market finalization.

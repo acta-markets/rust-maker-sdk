@@ -293,6 +293,30 @@ instructions, and `fund_maker_position` moves the required leg into a position t
 vault holds. These are chain observations and builders; select a cadence and
 authority policy in the operator.
 
+## Vault owners
+
+`chain::vault::VaultManager` builds bootstrap, stake top-up/unlock, governance
+acceptance/revocation, recipient rotation, shutdown and close instructions. It also
+builds typed updates and delegate rotation/disable. With `chain-rpc`,
+`ChainClient::vault_manager(vault, actor)` loads the current configuration;
+`*_from_chain` methods resolve proposal payers, recipients and required prices.
+`close_vault_sequence()` creates governance destination ATAs before closing;
+`unlock_manager_stake_sequence()` creates the recipient's share ATA before unlock.
+The raw builders require those destination ATAs to exist. Rebuild the manager
+after delegate, second-leg or governance transfer changes. Owner RPC paths check
+governance and unconditional staging restrictions; permissionless apply/finalize
+remain available. HWM reset cancellation is excluded from the owner RPC helper.
+
+`build_settle_position_ix` derives settlement accounts from decoded position and
+market snapshots for the wallet maker, including a vault writer; payout ATAs must
+already exist. `settle_position_sequence` creates the used wallet destinations
+for Funded positions, paid by the maker. It creates no ATAs for OTM Open and skips
+vault-writer destinations. `ChainClient::settle_position_sequence` fetches the
+snapshots; `unlock_manager_stake_sequence_from_chain` resolves the recipient.
+These helpers build instructions; they do not submit transactions. See the
+[vault lifecycle guide](https://beta.acta.markets/docs/protocol/vault-integration)
+for contract rules.
+
 ## Vault operators
 
 `VaultOperatorClient` authenticates an operator for one vault. The connection grant

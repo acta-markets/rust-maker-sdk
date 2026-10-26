@@ -424,6 +424,7 @@ fn funding_current_cycle_held_itm_only() {
     vault.active_expiry = 200;
     vault.phase = VaultPhase::Active;
     let market = MarketInfo {
+        settlement_price: 0,
         expiry_ts: 200,
         is_put: false,
         is_finalized: false,
@@ -435,6 +436,9 @@ fn funding_current_cycle_held_itm_only() {
         quote_decimals: Decimals::new(6),
     };
     let mut position = PositionInfo {
+        flags: 0,
+        flags2: 0,
+        flags3: 0,
         position_type: PositionType::CoveredCall,
         status: PositionStatus::Open,
         taker_owner: key(90),

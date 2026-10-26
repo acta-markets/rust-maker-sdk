@@ -5,6 +5,14 @@ use super::manager::VAULT_CAPITAL_BATCH_USERS;
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum VaultChainError {
+    #[error("vault has an open staging slot")]
+    Staged,
+    #[error("caller is not the current vault governance authority")]
+    GovernanceAuthorityRequired,
+    #[error("HWM reset cancellation requires protocol cold authority")]
+    ColdAuthorityRequired,
+    #[error("price section is required")]
+    MissingPriceSection,
     #[error("account owner mismatch: expected {expected}, got {actual}")]
     Owner {
         expected: solana_sdk::pubkey::Pubkey,

@@ -286,7 +286,7 @@ impl VaultManager {
         )
     }
 
-    fn pending_update(&self, kind: VaultGovernanceUpdateKind) -> Pubkey {
+    pub(super) fn pending_update(&self, kind: VaultGovernanceUpdateKind) -> Pubkey {
         pda::pending_vault_update(&self.args.program_id, &self.addresses.vault, kind as u8).0
     }
 }

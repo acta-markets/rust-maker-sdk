@@ -24,6 +24,8 @@ pub enum ChainError {
     UnknownPositionStatus(u8),
     #[error("invalid position type: {0}")]
     InvalidPositionType(u8),
+    #[error("settlement requires a matching finalized market and an OTM Open or Funded position")]
+    InvalidSettlementState,
     #[error("settlement amount overflow")]
     SettlementAmountOverflow,
     #[error("funding token account does not exist: {0}")]

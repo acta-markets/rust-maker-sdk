@@ -41,6 +41,9 @@ impl TryFrom<u8> for PositionStatus {
 #[derive(Debug, Clone)]
 pub struct PositionInfo {
     pub position_type: PositionType,
+    pub flags: u8,
+    pub flags2: u8,
+    pub flags3: u8,
     pub status: PositionStatus,
     pub taker_owner: Pubkey,
     pub maker_owner: Pubkey,
@@ -55,6 +58,7 @@ pub struct MarketInfo {
     pub expiry_ts: u64,
     pub is_put: bool,
     pub is_finalized: bool,
+    pub settlement_price: u64,
     pub underlying_mint: Pubkey,
     pub quote_mint: Pubkey,
     pub underlying_token_program_id: Pubkey,
@@ -90,6 +94,9 @@ impl PositionInfo {
         Ok(Self {
             position_type: PositionType::try_from(account.data[POSITION_OFFSET_POSITION_TYPE])
                 .map_err(|error| ChainError::InvalidPositionType(error.0))?,
+            flags: account.data[5],
+            flags2: account.data[6],
+            flags3: account.data[7],
             status: PositionStatus::try_from(account.data[POSITION_OFFSET_STATUS])?,
             taker_owner: read_pubkey(&account.data, POSITION_OFFSET_TAKER_OWNER)?,
             maker_owner: read_pubkey(&account.data, POSITION_OFFSET_MAKER_OWNER)?,
@@ -131,6 +138,7 @@ impl MarketInfo {
             expiry_ts: read_u64(data, MARKET_OFFSET_EXPIRY)?,
             is_put: flags & MARKET_FLAG_PUT != 0,
             is_finalized: flags & MARKET_FLAG_FINALIZED != 0,
+            settlement_price: read_u64(data, 16)?,
             underlying_decimals: Decimals::new(data[MARKET_OFFSET_UNDERLYING_DECIMALS]),
             quote_decimals: Decimals::new(data[MARKET_OFFSET_QUOTE_DECIMALS]),
             underlying_mint: read_pubkey(data, MARKET_OFFSET_UNDERLYING_MINT)?,

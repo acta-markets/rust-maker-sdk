@@ -24,6 +24,15 @@ const COMPUTE_UNITS_PER_DERIVATION_STEP: u32 = 1_800;
 #[repr(u8)]
 #[derive(Clone, Copy)]
 pub(super) enum VaultIx {
+    Bootstrap = 64,
+    TopUpManagerStake = 65,
+    UnlockManagerStake = 48,
+    AcceptGovernance = 58,
+    RevokeGovernanceNomination = 63,
+    ApplyFeeRecipientUpdate = 66,
+    StartShutdown = 67,
+    FinalizeShutdown = 69,
+    CloseVault = 59,
     ProcessVaultEquity = 37,
     OpenPositionForVaultAsTaker = 41,
     OpenPositionForVaultAsMaker = 42,
@@ -251,6 +260,8 @@ impl VaultManager {
             accepting_deposits: false,
             governance_authority: args.actor,
             primary_delegate: args.delegate_authority,
+            pending_governance_authority: Pubkey::default(),
+            fee_recipient: args.actor,
             main_mint: args.main_mint,
             second_mint: args.second_mint,
             share_mint: args.share_mint,

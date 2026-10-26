@@ -106,6 +106,7 @@ fn sale(case: &serde_json::Value, window: Duration) -> VaultSale {
     VaultSale {
         market_pda: key(&p["market"]),
         market: MarketInfo {
+            settlement_price: 0,
             expiry_ts: num(&p["expiry_ts"]),
             is_put: p["is_put"].as_bool().unwrap(),
             is_finalized: false,
