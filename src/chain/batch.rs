@@ -73,7 +73,6 @@ impl PositionSnapshot {
             return Err(ChainError::Identity("maker owner"));
         }
         if self.position.status != PositionStatus::Open
-            || self.market.is_finalized
             || self.market.is_put
                 != matches!(
                     self.position.position_type,

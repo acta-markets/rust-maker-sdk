@@ -863,6 +863,7 @@ fn vault_account_decodes_golden_fields() {
     data[402] = 1;
     data[403] = 0;
     let v = VaultAccount::parse(&data).unwrap();
+    assert_eq!(super::VaultView::from(&v).staging, v.staging);
     let slot = v.staging.open.unwrap();
     assert_eq!(
         (

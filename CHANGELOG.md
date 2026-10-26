@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.5
+
+- Allow funding Open positions after market finalization.
+- Breaking: `VaultView.staging` preserves the account slot; `next_step` waits for unstaging before equity or cycle finalization.
+
 ## 0.5.4
 
 - `MakerDataClient::subscribe_messages()` receives owner-direct `PositionUpdated`, `TradeExecuted` and `MakerCapsUpdated` after summary recovery, without replacing the quote session. Up to four data sessions per owner.

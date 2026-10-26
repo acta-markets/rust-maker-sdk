@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use solana_sdk::pubkey::Pubkey;
 
-use super::{VaultAccount, VaultPhase, VaultSafety};
+use super::{VaultAccount, VaultPhase, VaultSafety, VaultStagingState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapitalStep {
@@ -64,6 +64,7 @@ pub struct VaultView {
     pub accepting_deposits: bool,
     pub pending_deposits: u32,
     pub pending_withdrawals: u32,
+    pub staging: VaultStagingState,
 }
 
 impl From<&VaultAccount> for VaultView {
@@ -75,6 +76,7 @@ impl From<&VaultAccount> for VaultView {
             accepting_deposits: vault.accepting_deposits,
             pending_deposits: vault.pending_deposit_count,
             pending_withdrawals: vault.pending_withdraw_count,
+            staging: vault.staging,
         }
     }
 }
@@ -89,7 +91,7 @@ pub fn next_step(
     use VaultSafety::{Closing, Frozen, Normal, WithdrawOnly};
 
     let pending = view.pending_deposits > 0 || view.pending_withdrawals > 0;
-    match (view.safety, view.phase) {
+    let step = match (view.safety, view.phase) {
         (WithdrawOnly, Idle) if view.pending_withdrawals > 0 => {
             Some(CapitalStep::ProcessWithdrawals)
         }
@@ -125,6 +127,17 @@ pub fn next_step(
         (Normal, Idle) if view.pending_deposits > 0 => Some(CapitalStep::ProcessDeposits),
         (Normal, Idle) => Some(CapitalStep::ProcessWithdrawals),
         _ => None,
+    };
+    // Equity and finalization require the operator to unstage first.
+    if view.staging.open.is_some()
+        && matches!(
+            step,
+            Some(CapitalStep::ComputeEquity | CapitalStep::FinalizeCycle)
+        )
+    {
+        None
+    } else {
+        step
     }
 }
 

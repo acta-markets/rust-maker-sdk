@@ -161,3 +161,33 @@ async fn premium_decoding_distinguishes_absence_and_invalid_data() {
         None
     );
 }
+
+#[test]
+fn open_positions_can_be_funded_after_market_finalization() {
+    let program = Pubkey::new_unique();
+    let owner = Pubkey::new_unique();
+    let market_address = Pubkey::new_unique();
+    let (position, market) = fixtures(program, owner, market_address);
+    let mut snapshot = PositionSnapshot {
+        address: Pubkey::new_unique(),
+        position: PositionInfo::from_account(&position, &program).unwrap(),
+        market_address,
+        market: MarketInfo::from_account(&market, &program).unwrap(),
+    };
+    for is_put in [false, true] {
+        snapshot.market.is_put = is_put;
+        snapshot.position.position_type = if is_put {
+            crate::PositionType::CashSecuredPut
+        } else {
+            crate::PositionType::CoveredCall
+        };
+        snapshot.market.is_finalized = true;
+        assert_eq!(snapshot.position.status, PositionStatus::Open);
+        for create_atas in [false, true] {
+            let instructions = snapshot
+                .fund_instructions(&program, owner, owner, create_atas)
+                .unwrap();
+            assert_eq!(instructions.len(), if create_atas { 3 } else { 1 });
+        }
+    }
+}

@@ -17,6 +17,7 @@ fn view(phase: VaultPhase, safety: VaultSafety) -> VaultView {
         accepting_deposits: false,
         pending_deposits: 0,
         pending_withdrawals: 0,
+        staging: Default::default(),
     }
 }
 
@@ -281,4 +282,41 @@ fn listing_strings_parse_into_the_view_enums() {
     assert_eq!("closing".parse(), Ok(VaultSafety::Closing));
     assert!("unknown".parse::<VaultPhase>().is_err());
     assert_eq!("emergency_unwind".parse(), Ok(EmergencyUnwind));
+}
+
+#[test]
+fn staging_blocks_equity_and_finalization_but_preserves_other_steps() {
+    for phase in [Idle, ProcessingCapital] {
+        for safety in [Normal, Frozen] {
+            let mut v = view(phase, safety);
+            v.pending_withdrawals = 1;
+            v.staging.open = Some(super::VaultStagedSlot {
+                mint: key(1),
+                from_leg: crate::types::VaultLeg::Main,
+                amount: 1,
+                staged_at: 1,
+            });
+            assert_eq!(next_step(v, FRESH, POLICY), None);
+            v.equity_computed = true;
+            assert_eq!(
+                next_step(v, FRESH, POLICY),
+                Some(CapitalStep::ProcessWithdrawals)
+            );
+            v.pending_withdrawals = 0;
+            assert_eq!(next_step(v, FRESH, POLICY), None);
+            v.pending_deposits = 1;
+            assert_eq!(
+                next_step(v, FRESH, POLICY),
+                Some(CapitalStep::ProcessDeposits)
+            );
+            v.equity_computed = false;
+            if safety == Normal && phase == Idle {
+                v.accepting_deposits = true;
+                assert_eq!(
+                    next_step(v, FRESH, POLICY),
+                    Some(CapitalStep::CloseDeposits)
+                );
+            }
+        }
+    }
 }
