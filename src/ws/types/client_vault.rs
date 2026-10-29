@@ -1,3 +1,4 @@
+use crate::Address32;
 use crate::types::ids::OrderId;
 use crate::types::{VaultSwapDirection, VaultSwapMode};
 use serde::{Deserialize, Serialize};
@@ -5,23 +6,19 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartVaultAuthData {
-    pub operator: String,
-    pub vault_pda: String,
+    pub operator: Address32,
+    pub vault_pda: Address32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapQuoteData {
     pub request_id: Uuid,
-    pub vault_pda: String,
+    pub vault_pda: Address32,
     pub mode: VaultSwapMode,
     pub direction: VaultSwapDirection,
     pub amount: String,
-    #[serde(default = "default_swap_slippage_bps")]
-    pub slippage_bps: u16,
-}
 
-const fn default_swap_slippage_bps() -> u16 {
-    50
+    pub slippage_bps: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

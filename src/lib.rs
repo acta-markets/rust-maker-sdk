@@ -23,6 +23,7 @@ pub use network::{DEVNET_API, DEVNET_WS, MAINNET_API, MAINNET_WS};
 
 pub const WS_PROTOCOL_VERSION: &str = "1.0.0";
 
+/// The same on devnet and mainnet; `/api/v1/venue` `program_id` is authoritative.
 pub const ACTA_PROGRAM_ID: [u8; 32] =
     solana_pubkey::pubkey!("33Ezs5eoa16QyPW8wifnyz2nCyMEcq2crqkVBNjnTE8U").to_bytes();
 
@@ -31,19 +32,21 @@ pub use quote::{QuoteBuildError, QuoteBuilder, RfqBinding};
 pub use types::PRICE_SCALE;
 pub use types::QuoteExpiry;
 pub use types::ids::{
-    Balance, ChainId, Decimals, DurationSeconds, MarketId, Nonce, OrderId, OrderVersion,
-    PositionType, PositionTypeParseError, Price, Quantity, QuoteCount, RfqVersion, Slot, Strike,
-    TimeoutSeconds, TradeCount, UserId, Volume,
+    Balance, ChainId, ChainPositionType, ChainPositionTypeParseError, ChainTerms, Decimals,
+    DurationSeconds, MarketId, Nonce, OptionTerms, OrderId, OrderVersion, PositionRevision,
+    PositionType, Price, Quantity, QuoteCount, RfqVersion, Slot, Strike, TakerSide, TimeoutSeconds,
+    TradeCount, UserId, Volume,
 };
 pub use types::invite::{
     REFERRAL_CODE_MAX_LEN, REFERRAL_CODE_MIN_LEN, RESERVED_CODES, ReferralCode,
     ReferralCodeFormatError, TakerStatus, is_reserved,
 };
-pub use types::total_premium_quote_atoms;
 pub use types::vault::{
     VaultDelegatePermissions, VaultLeg, VaultOperatorKind, VaultStagingStep, VaultSwapDirection,
     VaultSwapMode,
 };
+pub use types::{Address32, AddressError};
+pub use types::{PhysicalPremium, physical_premium, total_premium_quote_atoms};
 
 #[cfg(feature = "chain")]
 pub mod chain;
@@ -59,7 +62,7 @@ pub use ws::error::{WsClientError, WsResult, WsTransportConfigError};
 #[cfg(feature = "ws-client")]
 pub use ws::maker::{
     MakerClientError, MakerDataClient, MakerDataRequest, MakerDataRequestError, MakerQuoteClient,
-    MakerResponse,
+    MakerResponse, PagedRequest,
 };
 #[cfg(all(feature = "ws-client", feature = "test-helpers"))]
 pub use ws::managed::ManagedWsTestPeer;
@@ -96,3 +99,7 @@ pub use signing::{AsyncSignerLike, SigningError, SigningFuture};
 pub use wire::{
     WireError, decode_base58_32, decode_base58_64, decode_hex_32, encode_base58, encode_hex,
 };
+
+pub mod spreads;
+
+pub use types::{InvalidProductSet, ProductSet};

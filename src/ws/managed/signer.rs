@@ -31,7 +31,7 @@ impl ManagedWsConfig {
         url: impl Into<String>,
         hello: HelloData,
         signer: Arc<dyn AsyncSignerLike>,
-        auth_pubkey: impl Into<String>,
+        auth_pubkey: impl Into<crate::Address32>,
     ) -> Self {
         Self::new_with_signing(
             url,

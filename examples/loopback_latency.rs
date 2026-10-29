@@ -65,7 +65,7 @@ async fn authenticate_peer(socket: &mut Socket) {
             protocol_version: WS_PROTOCOL_VERSION.to_string(),
             server_version: "loopback".to_string(),
             min_supported_version: WS_PROTOCOL_VERSION.to_string(),
-            enabled_features: vec![FEATURE_CANCEL_ON_DISCONNECT.to_string()],
+
             server_time_unix_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 60,
             settlement_buffer_seconds: 50,
@@ -108,8 +108,8 @@ async fn authenticate_peer(socket: &mut Socket) {
                 ServerMessage::Subscriptions(SubscriptionsMessage {
                     request_id: m.request_id,
                     channels: vec![],
-                    underlying_mints: None,
-                    quote_mints: None,
+                    underlying_mints: vec![],
+                    quote_mints: vec![],
                 })
             }
             ClientMessage::Subscribe(m) => ServerMessage::SubscribeAck(SubscribeAckData {
@@ -221,12 +221,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("ws://{address}"),
         HelloData {
             protocol_version: WS_PROTOCOL_VERSION.to_string(),
-            features: Vec::new(),
-            client_name: Some("loopback-latency".to_string()),
-            client_version: None,
+            on_disconnect: acta_maker_sdk::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "loopback-latency".to_string(),
+            client_version: "test".to_string(),
         },
         signer,
-        "maker",
+        acta_maker_sdk::Address32::new([135; 32]),
     )
     .low_latency();
     let handle = spawn_managed_ws(config)?;

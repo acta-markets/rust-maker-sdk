@@ -13,7 +13,7 @@ use uuid::Uuid;
 use super::*;
 use crate::chain::vault::{
     MAX_VAULT_SWAP_ROUTE_ACCOUNTS, PriceRoute, VaultManager, VaultManagerArgs, VaultStagedSlot,
-    VaultStagingState, pyth_price_feed_account,
+    VaultStagingState, VaultTradeTerms, pyth_price_feed_account,
 };
 use crate::types::OrderId;
 use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
@@ -34,6 +34,10 @@ fn key(value: &Value) -> Pubkey {
 
 fn num(value: &Value) -> u64 {
     value.as_u64().unwrap()
+}
+
+fn keeper(case: &Value) -> Pubkey {
+    key(&case["keeper"])
 }
 
 fn manager(case: &Value, field: &str) -> VaultManager {
@@ -63,6 +67,7 @@ fn terms(case: &Value) -> VaultTradeTerms {
         quote_mint: key(&p["quote_mint"]),
         expiry_ts: num(&p["expiry_ts"]),
         is_put: p["is_put"].as_bool().unwrap(),
+        side: crate::types::TakerSide::Sell,
         strike: num(&p["strike"]),
         quantity: num(&p["quantity"]),
         price: num(&p["price"]),
@@ -92,7 +97,7 @@ fn swap_request(case: &Value) -> SwapQuoteData {
     let swap = &case["swap"];
     SwapQuoteData {
         request_id: Uuid::from_str(swap["request_id"].as_str().unwrap()).unwrap(),
-        vault_pda: manager(case, "swapper").addresses.vault.to_string(),
+        vault_pda: manager(case, "swapper").addresses.vault.into(),
         mode: serde_json::from_value(swap["mode"].clone()).unwrap_or(VaultSwapMode::Rebalance),
         direction: serde_json::from_value(swap["direction"].clone()).unwrap(),
         amount: num(&swap["amount"]).to_string(),
@@ -286,10 +291,11 @@ fn verify(
             verify_vault_open(
                 to_sign,
                 &VaultOpenIntent::Sale {
+                    keeper: keeper(case),
                     writer: &writer,
                     maker_owner: key(&case["maker_owner"]),
                     maker_quote_signer: key(&case["position"]["quote_signer"]),
-                    terms,
+                    terms: VaultSaleTerms::Physical(terms),
                 },
                 tables,
                 BOUNDS,
@@ -301,9 +307,10 @@ fn verify(
             verify_vault_open(
                 to_sign,
                 &VaultOpenIntent::BetweenVaults {
+                    keeper: keeper(case),
                     writer: &writer,
                     holder: &holder,
-                    terms,
+                    terms: VaultSaleTerms::Physical(terms),
                 },
                 tables,
                 BOUNDS,
@@ -315,9 +322,10 @@ fn verify(
             verify_vault_open(
                 to_sign,
                 &VaultOpenIntent::Fill {
+                    keeper: keeper(case),
                     holder: &holder,
                     taker: key(&case["taker"]),
-                    terms,
+                    terms: VaultSaleTerms::Physical(terms),
                 },
                 tables,
                 BOUNDS,
@@ -343,6 +351,7 @@ fn terms_or_default(case: &Value) -> VaultTradeTerms {
             quote_mint: Pubkey::default(),
             expiry_ts: 0,
             is_put: false,
+            side: crate::types::TakerSide::Sell,
             strike: 0,
             quantity: 0,
             price: 0,
@@ -398,7 +407,33 @@ fn every_served_fixture_verifies() {
 }
 
 #[test]
-fn recompiled_and_legacy_messages_verify() {
+fn vault_open_fixtures_record_bounded_v0_alt_wire_sizes() {
+    for case in cases().iter().filter(|case| case["position"].is_object()) {
+        let bytes = STANDARD.decode(served_tx(case)).unwrap();
+        let recorded = usize::try_from(num(&case["wire_bytes"])).unwrap();
+        assert_eq!(
+            bytes.len(),
+            recorded,
+            "{} fixture size drifted",
+            case["kind"]
+        );
+        assert!(
+            recorded <= MAX_TRANSACTION_WIRE_BYTES,
+            "{} is {recorded} bytes",
+            case["kind"]
+        );
+        let served = ServedMessage::decode(&served_tx(case), &[table(case)]).unwrap();
+        assert!(served.is_version_zero, "{} is not v0", case["kind"]);
+        assert!(
+            served.has_lookup_table,
+            "{} has no address lookup table",
+            case["kind"]
+        );
+    }
+}
+
+#[test]
+fn recompiled_v0_messages_verify_and_legacy_opens_are_rejected() {
     for case in &cases() {
         let (payer, ixs) = decoded(case);
         let table = table(case);
@@ -411,7 +446,14 @@ fn recompiled_and_legacy_messages_verify() {
             Some(&payer),
             &Hash::new_from_array([3; 32]),
         )));
-        verify(case, &legacy, &[]).unwrap();
+        if is_swap(case) {
+            verify(case, &legacy, &[]).unwrap();
+        } else {
+            assert_eq!(
+                verify(case, &legacy, &[]),
+                Err(VaultIntentError::OpenRequiresVersionZero)
+            );
+        }
     }
 }
 
@@ -591,6 +633,25 @@ fn open_terms_and_counterparties_are_bound() {
         signer["maker"]["delegate_authority"] = signer["position"]["quote_signer"].clone();
         assert!(verify(&signer, &tx, &tables).is_err());
     }
+}
+
+#[test]
+fn vault_trade_builder_refuses_taker_buy_before_constructing_instructions() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case["kind"] == "vault_taker")
+        .expect("vault taker fixture");
+    let mut trade_terms = terms(&case);
+    trade_terms.side = crate::types::TakerSide::Buy;
+
+    assert!(matches!(
+        manager(&case, "writer").open_position_as_taker(
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            &trade_terms,
+        ),
+        Err(VaultChainError::InvalidInput("taker_buy_unsupported"))
+    ));
 }
 
 #[test]
@@ -1383,12 +1444,13 @@ fn malformed_transactions_are_rejected() {
         assert!(verify(case, &STANDARD.encode(&bytes[..cut]), &tables).is_err());
     }
     let mut version = bytes.clone();
-    version[65] = 0x81;
+    let message_start = 1 + 64 * usize::from(bytes[0]);
+    version[message_start] = 0x81;
     assert_eq!(
         verify(case, &STANDARD.encode(version), &tables),
         Err(VaultIntentError::UnsupportedVersion(1))
     );
-    for header in 66..69 {
+    for header in message_start + 1..message_start + 4 {
         let mut changed = bytes.clone();
         changed[header] ^= 1;
         assert!(verify(case, &STANDARD.encode(changed), &tables).is_err());

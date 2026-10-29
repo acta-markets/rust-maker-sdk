@@ -49,6 +49,13 @@ macro_rules! ws_method_request_id {
     };
 }
 
+/// Low-level WebSocket transport.
+///
+/// [`Self::send_hello`] deliberately retains no handshake state. Callers using
+/// this raw client must wait for `Welcome` and validate it with
+/// Check the Welcome protocol version before sending authentication or
+/// exposing the frame to application code. [`crate::ws::managed`] and the
+/// vault fleet enforce that sequence themselves.
 pub struct WsClient {
     stream: Socket,
     server_close: Arc<OnceLock<ServerClose>>,
@@ -301,7 +308,7 @@ impl WsClient {
         self.send(&ClientMessage::Logout).await
     }
 
-    pub async fn start_auth(&mut self, pubkey: String) -> WsResult<()> {
+    pub async fn start_auth(&mut self, pubkey: crate::Address32) -> WsResult<()> {
         self.send(&ClientMessage::StartAuth(StartAuthData { pubkey }))
             .await
     }
@@ -314,7 +321,10 @@ impl WsClient {
         .await
     }
 
-    pub async fn cancel_all_quotes(&mut self, market: Option<String>) -> WsResult<()> {
+    pub async fn cancel_all_quotes(
+        &mut self,
+        market: crate::ws::types::QueryFilter<crate::Address32>,
+    ) -> WsResult<()> {
         self.send(&ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
             request_id: Uuid::new_v4(),
             market,
@@ -332,8 +342,8 @@ impl WsClient {
 
     pub async fn add_mints(
         &mut self,
-        underlying_mints: Option<Vec<String>>,
-        quote_mints: Option<Vec<String>>,
+        underlying_mints: Vec<crate::Address32>,
+        quote_mints: Vec<crate::Address32>,
     ) -> WsResult<()> {
         self.send(&ClientMessage::AddMints(AddMintsData {
             request_id: Uuid::new_v4(),
@@ -345,8 +355,8 @@ impl WsClient {
 
     pub async fn remove_mints(
         &mut self,
-        underlying_mints: Option<Vec<String>>,
-        quote_mints: Option<Vec<String>>,
+        underlying_mints: Vec<crate::Address32>,
+        quote_mints: Vec<crate::Address32>,
     ) -> WsResult<()> {
         self.send(&ClientMessage::RemoveMints(RemoveMintsData {
             request_id: Uuid::new_v4(),

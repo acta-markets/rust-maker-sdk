@@ -7,7 +7,12 @@
       "expiry_ts": 1767225600,
       "is_put": true,
       "status": "finalized",
-      "settlement_price": 150000000000
+      "settlement_price": 150000000000,
+      "products": [
+        "cash_secured_put",
+        "put_spread",
+        "cash_put"
+      ]
     },
     {
       "pda": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
@@ -15,7 +20,12 @@
       "quote": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       "expiry_ts": 4102444800,
       "is_put": false,
-      "status": "active"
+      "status": "active",
+      "products": [
+        "covered_call",
+        "call_spread"
+      ],
+      "settlement_price": null
     }
   ]
 }

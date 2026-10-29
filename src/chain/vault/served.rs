@@ -11,8 +11,8 @@ use solana_sdk::{
 use super::manager::VaultManager;
 use super::price_route::PriceRoute;
 use super::trading::{
-    NO_AMOUNT_OFFSET, VaultStagingAsset, VaultSwapAmountOffset, VaultSwapHop, VaultSwapKind,
-    VaultSwapPlan, VaultTradeTerms,
+    NO_AMOUNT_OFFSET, VaultSaleTerms, VaultStagingAsset, VaultSwapAmountOffset, VaultSwapHop,
+    VaultSwapKind, VaultSwapPlan,
 };
 use super::{VaultAccount, VaultChainError, pda};
 use crate::chain::ix::{
@@ -32,6 +32,7 @@ const ED25519_HEADER: [u8; 16] = [
 ];
 const ED25519_DATA_LEN: usize = 144;
 const SIGNATURE_LEN: usize = 64;
+const MAX_TRANSACTION_WIRE_BYTES: usize = 1232;
 const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
 const SET_COMPUTE_UNIT_PRICE: u8 = 3;
 const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
@@ -53,6 +54,14 @@ pub enum VaultIntentError {
     Malformed(&'static str),
     #[error("unsupported transaction message version {0}")]
     UnsupportedVersion(u8),
+    #[error("vault opens must use a version-0 transaction")]
+    OpenRequiresVersionZero,
+    #[error("vault opens must use an address lookup table")]
+    OpenRequiresLookupTable,
+    #[error("vault-open account {0} must be a static transaction key")]
+    OpenRequiresStaticAccount(Pubkey),
+    #[error("vault-open transaction is {actual} bytes, exceeding the {maximum}-byte wire limit")]
+    OpenTransactionTooLarge { actual: usize, maximum: usize },
     #[error("lookup table {0} was not provided")]
     MissingLookupTable(Pubkey),
     #[error("lookup table {table} has no index {index}")]
@@ -96,6 +105,8 @@ pub enum VaultIntentError {
     },
     #[error("signer {0} is not one of the transaction's required signers")]
     SignerNotRequired(Pubkey),
+    #[error("vault-open participant signer is {found}, expected {expected}")]
+    ParticipantSigner { expected: Pubkey, found: Pubkey },
     #[error("transaction requires signer {0} outside the intent")]
     UnexpectedSigner(Pubkey),
     #[error("transaction loads account {0} that no expected instruction uses")]
@@ -132,24 +143,33 @@ pub struct ComputeBudgetBounds {
 /// What the signer agreed to open; the expected transaction is rebuilt from it.
 #[derive(Debug, Clone, Copy)]
 pub enum VaultOpenIntent<'a> {
-    /// The vault writes and sells to an external maker (`OpenPositionForVaultAsTaker`).
+    /// The vault writes and sells to an external maker
+    /// (`OpenPositionForVaultAsTaker` or `OpenSpreadForVaultAsTaker`).
     Sale {
+        /// The deployment's checked `GlobalConfig.hot_authority`; it pays and signs.
+        keeper: Pubkey,
         writer: &'a VaultManager,
         maker_owner: Pubkey,
         maker_quote_signer: Pubkey,
-        terms: VaultTradeTerms,
+        terms: VaultSaleTerms,
     },
-    /// The vault writes against another vault's quote (`OpenPositionBetweenVaults`).
+    /// The vault writes against another vault's quote
+    /// (`OpenPositionBetweenVaults` or `OpenSpreadBetweenVaults`).
     BetweenVaults {
+        /// The deployment's checked `GlobalConfig.hot_authority`; it pays and signs.
+        keeper: Pubkey,
         writer: &'a VaultManager,
         holder: &'a VaultManager,
-        terms: VaultTradeTerms,
+        terms: VaultSaleTerms,
     },
-    /// An external taker writes against the vault's quote (`OpenPositionForVaultAsMaker`).
+    /// An external taker writes against the vault's quote
+    /// (`OpenPositionForVaultAsMaker` or `OpenSpreadForVaultAsMaker`).
     Fill {
+        /// The deployment's checked `GlobalConfig.hot_authority`; it pays and signs.
+        keeper: Pubkey,
         holder: &'a VaultManager,
         taker: Pubkey,
-        terms: VaultTradeTerms,
+        terms: VaultSaleTerms,
     },
 }
 
@@ -183,55 +203,99 @@ pub fn verify_vault_open(
     bounds: ComputeBudgetBounds,
 ) -> Result<VerifiedTransaction, VaultIntentError> {
     let served = ServedMessage::decode(&to_sign.tx_base64, tables)?;
-    let (payer, quote_signer, open) = match *intent {
+    served.require_vault_open_wire_shape()?;
+    let (keeper, participant, quote_signer, open) = match *intent {
         VaultOpenIntent::Sale {
+            keeper,
             writer,
             maker_owner,
             maker_quote_signer,
             terms,
         } => (
+            keeper,
             writer.args.actor,
             maker_quote_signer,
-            writer.open_position_as_taker(maker_owner, &terms)?,
+            match terms {
+                VaultSaleTerms::Physical(terms) => {
+                    writer.open_position_as_taker(keeper, maker_owner, &terms)?
+                }
+                VaultSaleTerms::Spread(terms) => {
+                    writer.open_spread_as_taker(keeper, maker_owner, &terms)?
+                }
+            },
         ),
         VaultOpenIntent::BetweenVaults {
+            keeper,
             writer,
             holder,
             terms,
         } => (
+            keeper,
             writer.args.actor,
             holder.args.delegate_authority,
-            writer.open_position_with_vault_holder(holder, &terms)?,
+            match terms {
+                VaultSaleTerms::Physical(terms) => {
+                    writer.open_position_with_vault_holder(keeper, holder, &terms)?
+                }
+                VaultSaleTerms::Spread(terms) => {
+                    writer.open_spread_with_vault_holder(keeper, holder, &terms)?
+                }
+            },
         ),
         VaultOpenIntent::Fill {
+            keeper,
             holder,
             taker,
             terms,
         } => (
+            keeper,
             taker,
             holder.args.delegate_authority,
-            holder.open_position_as_maker(taker, &terms)?,
+            match terms {
+                VaultSaleTerms::Physical(terms) => {
+                    holder.open_position_as_maker(keeper, taker, &terms)?
+                }
+                VaultSaleTerms::Spread(terms) => {
+                    holder.open_spread_as_maker(keeper, taker, &terms)?
+                }
+            },
         ),
     };
     if open.order_id != *to_sign.order_id.as_bytes() {
         return Err(VaultIntentError::OrderId);
     }
+    let mut static_accounts = vec![
+        keeper,
+        participant,
+        open.addresses.position,
+        open.addresses.collateral_ata,
+    ];
     let collateral_ata = create_ata_idempotent(
-        payer,
+        keeper,
         open.addresses.position,
         open.addresses.collateral_mint,
         open.addresses.collateral_token_program,
     );
     let mut expected = served.compute_budget(bounds)?;
-    if let VaultOpenIntent::Fill { holder, terms, .. } = intent {
-        let (quote_mint, quote_program) = if holder.args.main_mint == terms.quote_mint {
+    if let VaultOpenIntent::Fill {
+        holder,
+        taker,
+        terms,
+        ..
+    } = intent
+    {
+        let quote_mint = match terms {
+            VaultSaleTerms::Physical(terms) => terms.quote_mint,
+            VaultSaleTerms::Spread(terms) => terms.quote_mint,
+        };
+        let (quote_mint, quote_program) = if holder.args.main_mint == quote_mint {
             (holder.args.main_mint, holder.args.main_token_program)
         } else {
             (holder.args.second_mint, holder.args.second_token_program)
         };
         expected.push(create_ata_idempotent(
-            payer,
-            payer,
+            keeper,
+            *taker,
             quote_mint,
             quote_program,
         ));
@@ -239,7 +303,16 @@ pub fn verify_vault_open(
     expected.push(collateral_ata);
     expected.push(served.quote_signature(expected.len(), quote_signer, &open.order_id)?);
     expected.push(open.instruction);
-    served.matches(payer, &expected)
+    static_accounts.extend(expected.iter().map(|instruction| instruction.program_id));
+    static_accounts.extend(
+        expected
+            .iter()
+            .flat_map(|instruction| instruction.accounts.iter())
+            .filter(|account| account.is_signer)
+            .map(|account| account.pubkey),
+    );
+    served.require_static_accounts(&static_accounts)?;
+    served.matches(keeper, &expected)
 }
 
 /// Verifies a served vault swap against the operator's request and the quoted terms.
@@ -257,7 +330,7 @@ pub fn verify_vault_swap(
     } = *intent;
     vault.ensure_current(&intent.account)?;
     let slot = intent.account.staging;
-    if request.vault_pda != vault.addresses.vault.to_string() {
+    if request.vault_pda != vault.addresses.vault.into() {
         return Err(VaultIntentError::Terms("request names a different vault"));
     }
     if quote.request_id != request.request_id || quote.mode != request.mode {
@@ -757,6 +830,7 @@ struct CompiledMessage {
     static_keys: Vec<Pubkey>,
     instructions: Vec<CompiledInstruction>,
     lookups: Vec<Lookup>,
+    is_version_zero: bool,
 }
 
 struct Reader<'a> {
@@ -873,6 +947,7 @@ impl CompiledMessage {
             static_keys,
             instructions,
             lookups,
+            is_version_zero: versioned,
         })
     }
 }
@@ -887,6 +962,10 @@ struct ServedMessage {
     keys: Vec<(Pubkey, Flags)>,
     instructions: Vec<Instruction>,
     transaction: VerifiedTransaction,
+    static_keys: HashSet<Pubkey>,
+    is_version_zero: bool,
+    has_lookup_table: bool,
+    wire_len: usize,
 }
 
 #[derive(Debug)]
@@ -898,7 +977,15 @@ pub struct VerifiedTransaction {
 }
 
 impl VerifiedTransaction {
-    pub fn sign(mut self, signer: &dyn SignerLike) -> Result<String, VaultIntentError> {
+    pub fn sign(self, signer: &dyn SignerLike) -> Result<String, VaultIntentError> {
+        self.sign_with_participant_signature(signer)
+            .map(|(transaction, _)| transaction)
+    }
+
+    pub(crate) fn sign_with_participant_signature(
+        mut self,
+        signer: &dyn SignerLike,
+    ) -> Result<(String, String), VaultIntentError> {
         let key = Pubkey::new_from_array(signer.pubkey_bytes());
         let index = self
             .signers
@@ -908,7 +995,10 @@ impl VerifiedTransaction {
         let signature = signer.sign_message(&self.bytes[self.message_start..]);
         let slot = self.signatures_start + index * SIGNATURE_LEN;
         self.bytes[slot..slot + SIGNATURE_LEN].copy_from_slice(&signature);
-        Ok(STANDARD.encode(self.bytes))
+        Ok((
+            STANDARD.encode(self.bytes),
+            crate::wire::encode_base58(&signature),
+        ))
     }
 }
 
@@ -920,6 +1010,7 @@ impl ServedMessage {
         let bytes = STANDARD
             .decode(tx_base64)
             .map_err(|_| VaultIntentError::InvalidBase64)?;
+        let wire_len = bytes.len();
         let message = CompiledMessage::decode(&bytes)?;
         let static_len = message.static_keys.len();
         let mut keys: Vec<(Pubkey, Flags)> = message
@@ -1010,7 +1101,40 @@ impl ServedMessage {
             keys,
             instructions,
             transaction,
+            static_keys: message.static_keys.into_iter().collect(),
+            is_version_zero: message.is_version_zero,
+            has_lookup_table: message
+                .lookups
+                .iter()
+                .any(|lookup| !lookup.writable.is_empty() || !lookup.readonly.is_empty()),
+            wire_len,
         })
+    }
+
+    fn require_vault_open_wire_shape(&self) -> Result<(), VaultIntentError> {
+        if !self.is_version_zero {
+            return Err(VaultIntentError::OpenRequiresVersionZero);
+        }
+        if !self.has_lookup_table {
+            return Err(VaultIntentError::OpenRequiresLookupTable);
+        }
+        if self.wire_len > MAX_TRANSACTION_WIRE_BYTES {
+            return Err(VaultIntentError::OpenTransactionTooLarge {
+                actual: self.wire_len,
+                maximum: MAX_TRANSACTION_WIRE_BYTES,
+            });
+        }
+        Ok(())
+    }
+
+    fn require_static_accounts(&self, accounts: &[Pubkey]) -> Result<(), VaultIntentError> {
+        accounts
+            .iter()
+            .find(|account| !self.static_keys.contains(account))
+            .copied()
+            .map_or(Ok(()), |account| {
+                Err(VaultIntentError::OpenRequiresStaticAccount(account))
+            })
     }
 
     fn compute_budget(

@@ -19,6 +19,20 @@ pub fn build_settle_position_ix(
     position: &PositionInfo,
     market: &MarketInfo,
 ) -> Result<Instruction, ChainError> {
+    if position.side.is_taker_buy() {
+        return Err(ChainError::TakerBuyUnsupported);
+    }
+    if position.terms.is_spread() {
+        if position.maker_owner != maker_owner {
+            return Err(ChainError::Identity("wallet maker owner"));
+        }
+        return crate::chain::spreads::build_cash_settle_ix(
+            program_id,
+            maker_owner,
+            position,
+            market,
+        );
+    }
     if position.flags & !3 != 0 || position.flags2 != 0 || position.flags3 != 0 {
         return Err(ChainError::InvalidAccountData);
     }
@@ -36,7 +50,7 @@ pub fn build_settle_position_ix(
         return Err(ChainError::Identity("position market"));
     }
     if !market.is_finalized
-        || market.is_put != (position.position_type == PositionType::CashSecuredPut)
+        || market.is_put != (position.terms.position_type() == PositionType::CashSecuredPut)
     {
         return Err(ChainError::InvalidSettlementState);
     }
@@ -49,9 +63,9 @@ pub fn build_settle_position_ix(
         }
     }
     let otm = if market.is_put {
-        market.settlement_price >= position.strike.value()
+        market.settlement_price >= position.terms.strike().value()
     } else {
-        market.settlement_price <= position.strike.value()
+        market.settlement_price <= position.terms.strike().value()
     };
     let open = position.status == PositionStatus::Open;
     if position.status != PositionStatus::Funded && !(otm && open) {
@@ -109,13 +123,27 @@ pub fn settle_position_sequence(
     position: &PositionInfo,
     market: &MarketInfo,
 ) -> Result<Vec<Instruction>, ChainError> {
+    if position.side.is_taker_buy() {
+        return Err(ChainError::TakerBuyUnsupported);
+    }
+    if position.terms.is_spread() {
+        if position.maker_owner != maker_owner {
+            return Err(ChainError::Identity("wallet maker owner"));
+        }
+        return crate::chain::spreads::cash_settle_sequence(
+            program_id,
+            maker_owner,
+            position,
+            market,
+        );
+    }
     let settle = build_settle_position_ix(program_id, maker_owner, position, market)?;
     let mut instructions = Vec::with_capacity(3);
     if position.status == PositionStatus::Funded {
         let otm = if market.is_put {
-            market.settlement_price >= position.strike.value()
+            market.settlement_price >= position.terms.strike().value()
         } else {
-            market.settlement_price <= position.strike.value()
+            market.settlement_price <= position.terms.strike().value()
         };
         let underlying = (market.underlying_mint, market.underlying_token_program_id);
         let quote = (market.quote_mint, market.quote_token_program_id);

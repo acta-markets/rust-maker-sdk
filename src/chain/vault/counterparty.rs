@@ -1,6 +1,6 @@
 use solana_sdk::pubkey::Pubkey;
 
-use super::{VaultAccount, VaultManager, VaultOpenIntent, VaultTradeTerms};
+use super::{VaultAccount, VaultManager, VaultOpenIntent, VaultSaleTerms};
 use crate::chain::{ChainClient, ChainError, MakerInfo, maker_pda_with_program_id};
 
 const VAULT_DISCRIMINATOR: u8 = 9;
@@ -43,19 +43,22 @@ impl Counterparty {
     pub fn sale<'a>(
         &'a self,
         writer: &'a VaultManager,
-        terms: VaultTradeTerms,
+        keeper: Pubkey,
+        terms: VaultSaleTerms,
     ) -> VaultOpenIntent<'a> {
         match self {
             Self::Maker {
                 owner,
                 quote_signer,
             } => VaultOpenIntent::Sale {
+                keeper,
                 writer,
                 maker_owner: *owner,
                 maker_quote_signer: *quote_signer,
                 terms,
             },
             Self::Vault(holder) => VaultOpenIntent::BetweenVaults {
+                keeper,
                 writer,
                 holder,
                 terms,

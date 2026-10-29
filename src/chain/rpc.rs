@@ -6,7 +6,7 @@ use solana_sdk::{
 };
 
 use crate::chain::ChainError;
-use crate::chain::accounts::{MarketInfo, PositionInfo};
+use crate::chain::accounts::{GlobalConfigInfo, MarketInfo, PositionInfo};
 use crate::chain::ix::{
     DepositPremiumIxArgs, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WithdrawPremiumIxArgs,
     build_deposit_premium_ixs, build_withdraw_premium_ixs,
@@ -275,13 +275,14 @@ impl ChainClient {
                 native_budget: None,
             });
         };
-        let (settlement_mint, settlement_program) = match pos.position_type {
+        let (settlement_mint, settlement_program) = match pos.terms.position_type() {
             crate::types::PositionType::CoveredCall => {
                 (market.quote_mint, market.quote_token_program_id)
             }
             crate::types::PositionType::CashSecuredPut => {
                 (market.underlying_mint, market.underlying_token_program_id)
             }
+            _ => return Err(ChainError::InvalidSettlementState),
         };
         if !is_native_mint(&settlement_mint) {
             return Ok(PreparedFundPosition {
@@ -290,8 +291,8 @@ impl ChainClient {
             });
         }
         let expected_settlement = required_settlement(
-            pos.position_type.into(),
-            pos.strike.value(),
+            pos.terms.to_chain().position_type().into(),
+            pos.terms.strike().value(),
             pos.quantity.value(),
             market.quote_decimals.value(),
             market.underlying_decimals.value(),
@@ -389,6 +390,21 @@ impl ChainClient {
 
     pub async fn fetch_market_quote_mint(&self, market_pda: &Pubkey) -> Result<Pubkey, ChainError> {
         Ok(self.fetch_market_info(market_pda).await?.quote_mint)
+    }
+
+    /// Reads the canonical GlobalConfig PDA and returns its checked hot authority.
+    ///
+    /// Vault opens use this key as both transaction fee payer and account 0, so
+    /// accepting a venue-provided value would let the venue choose the signer.
+    pub async fn hot_authority(&self) -> Result<Pubkey, ChainError> {
+        let (global_config, bump) =
+            Pubkey::find_program_address(&[b"global_config"], &self.program_id);
+        let account = self.fetch_account(&global_config).await?;
+        let config = GlobalConfigInfo::from_account(&account, &self.program_id)?;
+        if config.bump != bump {
+            return Err(ChainError::Identity("global config PDA"));
+        }
+        Ok(config.hot_authority)
     }
 
     /// Fetch the raw token balance (u64 atoms) of a token account.

@@ -405,9 +405,11 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn quote_and_cancellations_keep_fifo_order() {
         use crate::ws::types::{CancelAllQuotesMessage, CancelQuoteData, QuoteMessage};
+        use crate::{OptionTerms, TakerSide};
         let quote = ClientMessage::Quote(QuoteMessage {
             rfq_id: Uuid::nil(),
-            strike: 1.into(),
+            terms: OptionTerms::CoveredCall { strike: 1.into() },
+            side: TakerSide::Sell,
             price: 2.into(),
             valid_until: crate::QuoteExpiry::from_unix_seconds(100),
             nonce: 3.into(),
@@ -420,7 +422,7 @@ mod tests {
         });
         let all = ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
             request_id: Uuid::new_v4(),
-            market: None,
+            market: crate::ws::types::QueryFilter::All {},
         });
         for messages in [
             [quote.clone(), cancel.clone(), all.clone()],

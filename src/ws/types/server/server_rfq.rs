@@ -1,8 +1,9 @@
+use crate::Address32;
 use crate::types::unix_time::{UnixMillis, UnixSeconds};
 use std::time::SystemTime;
 
 use crate::types::ids::{
-    MarketId, OrderId, PositionType, Price, Quantity, QuoteCount, RfqVersion, Strike,
+    MarketId, OptionTerms, OrderId, Price, Quantity, QuoteCount, RfqVersion, TakerSide,
 };
 use crate::types::{QuoteFinalStatus, RfqAvailableAgainReason, RfqCloseReason};
 use serde::{Deserialize, Serialize};
@@ -16,13 +17,16 @@ use super::super::common::{MarketDescriptor, RfqOrderOption};
 pub struct RfqCreatedMessage {
     pub rfq_id: Uuid,
     pub rfq_version: RfqVersion,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms: OptionTerms,
+    pub side: TakerSide,
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub request_id: Option<Uuid>,
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+
     pub order_options: Vec<RfqOrderOption>,
 }
 
@@ -35,9 +39,10 @@ pub struct RfqClosedYourQuote {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqClosedWinner {
-    pub maker: String,
+    pub maker: Address32,
     pub price: Price,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub tx_signature: Option<String>,
 }
 
@@ -47,9 +52,11 @@ pub struct RfqClosedMessage {
     pub rfq_id: Uuid,
     pub rfq_version: RfqVersion,
     pub reason: RfqCloseReason,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub your_quote: Option<RfqClosedYourQuote>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub winner: Option<RfqClosedWinner>,
     #[serde_as(as = "UnixSeconds")]
     pub closed_at: SystemTime,
@@ -60,12 +67,12 @@ pub struct RfqClosedMessage {
 pub struct RfqBroadcastMessage {
     pub rfq_id: Uuid,
     pub market: MarketDescriptor,
-    pub position_type: PositionType,
-    pub strike: Strike,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
     pub quantity: Quantity,
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
-    pub taker: String,
+    pub taker: Address32,
     pub order_options: Vec<RfqOrderOption>,
     /// Server emission time; compare with [`ManagedInbound::received_at`](crate::ws::managed::ManagedInbound::received_at) to measure delivery delay.
     #[serde_as(as = "UnixMillis")]
@@ -88,11 +95,8 @@ pub struct RfqSkippedMessage {
     pub rfq_id: Uuid,
     pub market_id: MarketId,
     pub quantity: Quantity,
-    pub reason: String,
-    /// Structured cap error with current/limit amounts, when the skip was a
-    /// cap pre-filter.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cap_detail: Option<crate::types::errors::CapError>,
+    /// Pre-broadcast, so `maker_insufficient_balance.required` is always `0`.
+    pub cap_detail: crate::types::errors::CapError,
 }
 
 #[serde_as]
@@ -101,13 +105,14 @@ pub struct ActiveRfqInfo {
     pub rfq_id: Uuid,
     pub market: MarketId,
     /// Taker public key included in the `order_id` preimage.
-    pub taker: String,
-    pub position_type: PositionType,
-    pub strike: Strike,
+    pub taker: Address32,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
     pub quantity: Quantity,
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     pub quotes_count: QuoteCount,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub best_price: Option<Price>,
     pub order_options: Vec<RfqOrderOption>,
 }
@@ -120,13 +125,10 @@ pub struct ActiveRfqsData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum MyActiveRfqState {
     Active,
     PendingSignature,
     Enqueued,
-    #[serde(other)]
-    Unknown,
 }
 
 #[serde_as]
@@ -134,16 +136,18 @@ pub enum MyActiveRfqState {
 pub struct MyActiveRfqInfo {
     pub rfq_id: Uuid,
     pub market: MarketId,
-    pub position_type: PositionType,
-    pub strike: Strike,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
     pub quantity: Quantity,
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     pub state: MyActiveRfqState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub locked_order_id: Option<OrderId>,
     pub quotes_count: QuoteCount,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub best_price: Option<Price>,
 }
 

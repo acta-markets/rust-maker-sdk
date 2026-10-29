@@ -5,10 +5,12 @@ use serde_json::Value;
 
 use super::types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 use super::{
-    HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultExposure, VaultLeg,
-    VaultPositionRole, VaultPositionStatus, VaultPositionType, Venue,
+    CountLimit, HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultCapacity,
+    VaultExposure, VaultLeg, VaultPositionProduct, VaultPositionRole, VaultPositionStatus,
+    VaultPositionType, Venue,
 };
 use crate::ws::types::MarketStatus;
+use crate::ws::types::TokenRole;
 
 const VAULTS: &str = include_str!("../../tests/fixtures/http_vaults.json");
 const EXPOSURE: &str = include_str!("../../tests/fixtures/http_exposure.json");
@@ -32,7 +34,13 @@ fn vaults_round_trip_the_backend_shape() {
     };
     assert_eq!(full.second_token_program, TokenProgramKind::Token2022);
     assert_eq!(full.phase, "active");
-    assert_eq!(full.capacity.remaining.as_deref(), Some("860"));
+    assert_eq!(
+        full.capacity,
+        VaultCapacity::Limited {
+            cap_limit: "1000".into(),
+            remaining: "860".into()
+        }
+    );
     assert_eq!(full.tvl_usd_1e9.as_deref(), Some("18000"));
     assert_eq!(full.depositors_in_generation, Some(11));
     let staging = full.staging.as_ref().unwrap();
@@ -65,7 +73,7 @@ fn vaults_round_trip_the_backend_shape() {
     assert_eq!(minimal.metadata, None);
     assert_eq!(minimal.staging, None);
     assert!(minimal.main_balance.is_none() && minimal.deposit_window_set_ts.is_none());
-    assert_eq!(minimal.capacity.remaining, None);
+    assert_eq!(minimal.capacity, VaultCapacity::Unlimited {});
     assert!(minimal.premium.is_none() && minimal.fees.is_none() && minimal.tvl_usd_1e9.is_none());
     let performance = minimal.performance.as_ref().unwrap();
     assert!(!performance.covered);
@@ -110,9 +118,9 @@ fn markets_round_trip_the_backend_shape() {
 #[test]
 fn venue_round_trips_the_backend_shape() {
     let venue: Venue = round_trip(VENUE);
-    assert_eq!(venue.min_quote_validity_seconds, 100);
+    assert_eq!(venue.min_quote_validity_seconds, 60);
     assert_eq!(venue.max_rfq_timeout_seconds, 120);
-    assert_eq!(venue.max_quotes_per_rfq, Some(50));
+    assert_eq!(venue.max_quotes_per_rfq, CountLimit::Limited { value: 50 });
 }
 
 #[test]
@@ -121,12 +129,19 @@ fn tokens_round_trip_the_backend_shape() {
     let [usdc, sol] = response.tokens.as_slice() else {
         panic!("two tokens");
     };
-    assert_eq!(sol.strike_tick.map(|tick| tick.value()), Some(500_000_000));
+    let TokenRole::Underlying {
+        strike_tick,
+        quote_mints,
+        ..
+    } = &sol.role
+    else {
+        panic!("SOL is an underlying");
+    };
+    assert_eq!(strike_tick.value(), 500_000_000);
     assert_eq!(sol.oracle_feed_ids.len(), 1);
-    assert!(sol.size_rule.is_some());
-    assert_eq!(sol.quote_mints, std::slice::from_ref(&usdc.mint));
+    assert_eq!(quote_mints, std::slice::from_ref(&usdc.mint));
     assert_eq!(usdc.symbol, "USDC");
-    assert!(usdc.size_rule.is_none() && usdc.strike_tick.is_none() && usdc.quote_mints.is_empty());
+    assert_eq!(usdc.role, TokenRole::Quote {});
 }
 
 #[test]
@@ -141,18 +156,43 @@ fn vault_positions_round_trip_the_backend_shape() {
     assert_eq!(call.role, VaultPositionRole::Holder);
     assert_eq!(call.is_otm, Some(true));
     assert!(response.next_cursor.is_some());
+
+    assert_eq!(put.product, VaultPositionProduct::Physical);
+
+    let mut value: Value = serde_json::from_str(POSITIONS).unwrap();
+    value["positions"][0]["product"] = serde_json::json!({
+        "kind": "spread",
+        "upper_strike": "160000000000",
+        "collateral": "20000000",
+    });
+    for (wire, kind) in [
+        ("call_spread", VaultPositionType::CallSpread),
+        ("put_spread", VaultPositionType::PutSpread),
+        ("cash_put", VaultPositionType::CashPut),
+    ] {
+        value["positions"][0]["position_type"] = wire.into();
+        let response: VaultPositionsResponse = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(response.positions[0].position_type, kind);
+        assert_eq!(
+            response.positions[0].product,
+            VaultPositionProduct::Spread {
+                upper_strike: "160000000000".into(),
+                collateral: "20000000".into(),
+            }
+        );
+    }
+    let _ = value["positions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("product");
+    assert!(serde_json::from_value::<VaultPositionsResponse>(value).is_err());
 }
 
 #[test]
-fn unknown_enum_values_decode() {
+fn unknown_enum_values_are_rejected() {
     let mut value: Value = serde_json::from_str(VAULTS).unwrap();
     value["vaults"][0]["main_token_program"] = "token_2099".into();
-    value["vaults"][0]["performance"]["new_metric"] = 1.into();
-    let response: VaultsResponse = serde_json::from_value(value).unwrap();
-    assert_eq!(
-        response.vaults[0].main_token_program,
-        TokenProgramKind::Unknown
-    );
+    assert!(serde_json::from_value::<VaultsResponse>(value).is_err());
 }
 
 fn serve(responses: Vec<(&'static str, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
@@ -195,10 +235,7 @@ async fn client_reads_public_routes() {
     ]);
     let client = HttpClient::new(base).unwrap();
     assert_eq!(client.vaults().await.unwrap().len(), 2);
-    let vault = client
-        .vault("11111111111111111111111111111111")
-        .await
-        .unwrap();
+    let vault = client.vault(crate::Address32::new([0; 32])).await.unwrap();
     assert!(vault.metadata.is_none());
     assert_eq!(
         client
@@ -210,28 +247,22 @@ async fn client_reads_public_routes() {
     );
     let tokens = client.tokens().await.unwrap();
     assert_eq!(
-        tokens["So11111111111111111111111111111111111111112"].symbol,
+        tokens[&crate::Address32::from_base58("So11111111111111111111111111111111111111112")
+            .expect("valid fixture")]
+            .symbol,
         "SOL"
     );
     assert_eq!(tokens.len(), 2);
-    assert_eq!(client.venue().await.unwrap().settlement_buffer_seconds, 90);
+    assert_eq!(client.venue().await.unwrap().settlement_buffer_seconds, 50);
     let exposure = client
-        .vault_exposure("11111111111111111111111111111111")
+        .vault_exposure(crate::Address32::new([0; 32]))
         .await
         .unwrap();
     assert_eq!(exposure.positions.len(), 3);
-    assert!(matches!(
-        client.vault_exposure("../markets").await,
-        Err(HttpError::Address(_))
-    ));
-    let missing = client.vault("11111111111111111111111111111111").await;
+    let missing = client.vault(crate::Address32::new([0; 32])).await;
     assert!(matches!(
         missing,
         Err(HttpError::Status { status: 404, .. })
-    ));
-    assert!(matches!(
-        client.vault("../markets").await,
-        Err(HttpError::Address(_))
     ));
     assert_eq!(
         server.join().unwrap(),
@@ -258,14 +289,10 @@ async fn vault_positions_follow_the_cursor() {
     ]);
     let client = HttpClient::new(base).unwrap();
     let positions = client
-        .vault_positions("11111111111111111111111111111111")
+        .vault_positions(crate::Address32::new([0; 32]))
         .await
         .unwrap();
     assert_eq!(positions.len(), 3);
-    assert!(matches!(
-        client.vault_positions("../markets").await,
-        Err(HttpError::Address(_))
-    ));
     let path = "/api/v1/vaults/11111111111111111111111111111111/positions?settled=false&limit=200";
     assert_eq!(
         server.join().unwrap(),
@@ -309,4 +336,13 @@ async fn reference_reads_revalidate_with_etag() {
     assert!(requests[0].starts_with("get /api/v1/markets?is_put=false&active=true "));
     assert!(!requests[0].contains("if-none-match"));
     assert!(requests[1].contains("if-none-match: \"m1\""));
+}
+
+#[test]
+fn venue_requires_protocol_fee_fields() {
+    for field in ["protocol_fee_bps_premium", "protocol_fee_bps_volume"] {
+        let mut value: Value = serde_json::from_str(VENUE).unwrap();
+        value.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<Venue>(value).is_err());
+    }
 }

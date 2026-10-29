@@ -1,13 +1,14 @@
 use solana_sdk::{account::Account, pubkey::Pubkey};
 
 use super::ChainError;
-use crate::types::{Decimals, OrderId, PositionType, Quantity, Strike};
+use crate::types::{Decimals, OptionTerms, OrderId, Quantity, Strike, TakerSide};
 
 const ACCOUNT_OFFSET_DISCRIMINATOR: usize = 0;
 const ACCOUNT_OFFSET_VERSION: usize = 1;
 pub(crate) const POSITION_DISCRIMINATOR: u8 = 1;
 const MAKER_DISCRIMINATOR: u8 = 2;
 const MARKET_DISCRIMINATOR: u8 = 4;
+const GLOBAL_CONFIG_DISCRIMINATOR: u8 = 6;
 const ACCOUNT_VERSION: u8 = 1;
 
 /// On-chain position status discriminant.
@@ -40,7 +41,9 @@ impl TryFrom<u8> for PositionStatus {
 
 #[derive(Debug, Clone)]
 pub struct PositionInfo {
-    pub position_type: PositionType,
+    pub terms: OptionTerms,
+    /// The current account layout has no side byte; the current contract only opens sell-side positions.
+    pub side: TakerSide,
     pub flags: u8,
     pub flags2: u8,
     pub flags3: u8,
@@ -48,7 +51,6 @@ pub struct PositionInfo {
     pub taker_owner: Pubkey,
     pub maker_owner: Pubkey,
     pub market_pda: Pubkey,
-    pub strike: Strike,
     pub quantity: Quantity,
     pub order_id: OrderId,
 }
@@ -65,6 +67,43 @@ pub struct MarketInfo {
     pub quote_token_program_id: Pubkey,
     pub underlying_decimals: Decimals,
     pub quote_decimals: Decimals,
+}
+
+/// The checked global authority used as the keeper for sponsored opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlobalConfigInfo {
+    pub hot_authority: Pubkey,
+    pub bump: u8,
+}
+
+const GLOBAL_CONFIG_LEN: usize = 296;
+const GLOBAL_CONFIG_OFFSET_FLAGS: usize = 3;
+const GLOBAL_CONFIG_OFFSET_PAD0: usize = 4;
+const GLOBAL_CONFIG_OFFSET_HOT_AUTHORITY: usize = 8;
+const GLOBAL_CONFIG_KNOWN_FLAGS: u8 = 1;
+
+impl GlobalConfigInfo {
+    /// Decodes the fixed current GlobalConfig layout owned by `program_id`.
+    pub fn from_account(account: &Account, program_id: &Pubkey) -> Result<Self, ChainError> {
+        let data = current_layout(
+            account,
+            program_id,
+            GLOBAL_CONFIG_DISCRIMINATOR,
+            ACCOUNT_VERSION,
+            GLOBAL_CONFIG_LEN,
+        )?;
+        let hot_authority = read_pubkey(data, GLOBAL_CONFIG_OFFSET_HOT_AUTHORITY)?;
+        if data[GLOBAL_CONFIG_OFFSET_FLAGS] & !GLOBAL_CONFIG_KNOWN_FLAGS != 0
+            || data[GLOBAL_CONFIG_OFFSET_PAD0..GLOBAL_CONFIG_OFFSET_HOT_AUTHORITY] != [0; 4]
+            || hot_authority == Pubkey::default()
+        {
+            return Err(ChainError::InvalidAccountData);
+        }
+        Ok(Self {
+            hot_authority,
+            bump: data[2],
+        })
+    }
 }
 
 const POSITION_OFFSET_POSITION_TYPE: usize = 3;
@@ -91,9 +130,25 @@ impl PositionInfo {
         order_id.copy_from_slice(
             &account.data[POSITION_OFFSET_ORDER_ID..POSITION_OFFSET_ORDER_ID + 32],
         );
+        let product =
+            crate::ChainPositionType::try_from(account.data[POSITION_OFFSET_POSITION_TYPE])
+                .map_err(|error| ChainError::InvalidPositionType(error.0))?;
+        let strike = Strike::new(read_u64(&account.data, POSITION_OFFSET_STRIKE)?);
+        let upper = if product.is_spread() {
+            Some(Strike::new(read_u64(&account.data, 168)?))
+        } else {
+            None
+        };
+        let terms = OptionTerms::from_chain(match product {
+            crate::ChainPositionType::CoveredCall => crate::ChainTerms::CoveredCall { strike },
+            crate::ChainPositionType::CashSecuredPut => {
+                crate::ChainTerms::CashSecuredPut { strike }
+            }
+            _ => crate::ChainTerms::from_parts(product, strike, upper)?,
+        });
         Ok(Self {
-            position_type: PositionType::try_from(account.data[POSITION_OFFSET_POSITION_TYPE])
-                .map_err(|error| ChainError::InvalidPositionType(error.0))?,
+            terms,
+            side: TakerSide::Sell,
             flags: account.data[5],
             flags2: account.data[6],
             flags3: account.data[7],
@@ -101,7 +156,6 @@ impl PositionInfo {
             taker_owner: read_pubkey(&account.data, POSITION_OFFSET_TAKER_OWNER)?,
             maker_owner: read_pubkey(&account.data, POSITION_OFFSET_MAKER_OWNER)?,
             market_pda: read_pubkey(&account.data, POSITION_OFFSET_MARKET)?,
-            strike: Strike::new(read_u64(&account.data, POSITION_OFFSET_STRIKE)?),
             quantity: Quantity::new(read_u64(&account.data, POSITION_OFFSET_QUANTITY)?),
             order_id: OrderId::new(order_id),
         })

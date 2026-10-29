@@ -32,10 +32,7 @@ impl AuthenticationError {
     pub(super) const fn is_server_rejection(&self) -> bool {
         match self {
             Self::Rejected { .. } => true,
-            Self::Terminated(reason) => !matches!(
-                reason,
-                ManagedWsTerminationReason::FeatureUnsupported { .. }
-            ),
+            Self::Terminated(_) => true,
             Self::Transport(_) | Self::Signer(_) => false,
         }
     }
@@ -61,7 +58,7 @@ pub(super) async fn build_auth_response(
     Ok(AuthChallengeData {
         challenge: challenge.to_owned(),
         signature,
-        pubkey: config.auth_pubkey.clone(),
+        pubkey: config.auth_pubkey,
     })
 }
 
@@ -82,20 +79,14 @@ pub(super) async fn authenticate(
             Some(Err(err)) => return Err(err.into()),
             None => return Err(WsClientError::ConnectionClosed.into()),
         };
-        let msg_arc = inbound.publish(message);
-        match &*msg_arc {
+        match message {
             ServerMessage::Welcome(welcome) => {
-                if let Some(feature) = config.missing_required_feature(&welcome.enabled_features) {
-                    return Err(AuthenticationError::Terminated(
-                        ManagedWsTerminationReason::FeatureUnsupported {
-                            feature: feature.to_owned(),
-                        },
-                    ));
-                }
+                inbound.publish(ServerMessage::Welcome(welcome));
                 break;
             }
             message => {
-                if let Some(failure) = control::classify(message) {
+                let msg_arc = inbound.publish(message);
+                if let Some(failure) = control::classify(&msg_arc) {
                     return control_error(failure, resume_session_id);
                 }
             }
@@ -150,7 +141,7 @@ pub(super) async fn authenticate(
         send_auth_response(client, config, &challenge).await?;
     } else {
         let start_auth = ClientMessage::StartAuth(StartAuthData {
-            pubkey: config.auth_pubkey.clone(),
+            pubkey: config.auth_pubkey,
         });
         timeout(config.write_timeout, client.send(&start_auth))
             .await
@@ -191,10 +182,10 @@ async fn authenticate_vault(
     config: &ManagedWsConfig,
     inbound: &mut InboundPublisher<'_>,
     resume_session_id: &mut Option<String>,
-    vault_pda: &str,
+    vault_pda: &crate::Address32,
 ) -> Result<AuthOutcome, AuthenticationError> {
     let start = ClientMessage::StartVaultAuth(StartVaultAuthData {
-        operator: config.auth_pubkey.clone(),
+        operator: config.auth_pubkey,
         vault_pda: vault_pda.to_owned(),
     });
     timeout(config.write_timeout, client.send(&start))

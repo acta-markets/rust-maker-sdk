@@ -5,6 +5,10 @@ use super::ix::ChainIxError;
 
 #[derive(Debug, Error)]
 pub enum ChainError {
+    #[error("taker_buy_unsupported")]
+    TakerBuyUnsupported,
+    #[error(transparent)]
+    Spread(#[from] crate::spreads::SpreadError),
     #[cfg(feature = "chain-rpc")]
     #[error(transparent)]
     Rpc(#[from] solana_rpc_client::api::client_error::Error),

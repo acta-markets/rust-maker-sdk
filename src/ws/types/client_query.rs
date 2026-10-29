@@ -1,35 +1,30 @@
-use crate::types::unix_time::UnixSeconds;
-use std::time::SystemTime;
+use super::common::{PageCursor, PositionStatus, QueryFilter, TimeBound};
+use crate::Address32;
 
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use uuid::Uuid;
 
-use crate::types::{MarketId, OrderId, PositionType, Price, Quantity};
+use crate::types::{MarketId, OptionTerms, OrderId, PositionType, Price, Quantity, TakerSide};
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetPositionsMessage {
     pub request_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde_as(as = "Option<UnixSeconds>")]
-    pub min_expiry_ts: Option<SystemTime>,
+    pub market: QueryFilter<Address32>,
+    pub underlying_mint: QueryFilter<Address32>,
+    pub status: Vec<PositionStatus>,
+    pub min_expiry_ts: TimeBound,
 }
 
 impl Default for GetPositionsMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            market: None,
-            underlying_mint: None,
-            status: None,
-            min_expiry_ts: None,
+            market: QueryFilter::All {},
+            underlying_mint: QueryFilter::All {},
+            status: Vec::new(),
+            min_expiry_ts: TimeBound::Unbounded {},
         }
     }
 }
@@ -61,7 +56,6 @@ default_request!(GetActiveRfqsMessage);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTokenCapsMessage {
     pub request_id: Uuid,
-    #[serde(default)]
     pub include_markets: bool,
 }
 
@@ -79,6 +73,8 @@ pub struct CheckQuoteMessage {
     pub quantity: Quantity,
     /// Gross price per underlying unit in quote units, scaled by 1e9, as on `Quote`.
     pub price: Price,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,12 +96,9 @@ pub struct GetTokensMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetExpiriesMessage {
     pub request_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote_mint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub is_put: Option<bool>,
+    pub underlying_mint: QueryFilter<Address32>,
+    pub quote_mint: QueryFilter<Address32>,
+    pub is_put: QueryFilter<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,113 +117,61 @@ default_request!(GetMyActiveRfqsMessage);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMakerPositionsMessage {
     pub request_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde_as(as = "Option<UnixSeconds>")]
-    pub min_expiry_ts: Option<SystemTime>,
-    /// Max positions to return; server clamps to `[1, 500]`, default 100.
-    /// The `MakerPositions` response sets `has_more` when truncated.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    /// Keyset cursor: `created_at` of the last position from the previous page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde_as(as = "Option<UnixSeconds>")]
-    pub cursor: Option<SystemTime>,
-    /// Ties within one second: `pda` of the last position from the previous page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor_id: Option<String>,
-}
-
-impl Default for GetMakerPositionsMessage {
-    fn default() -> Self {
-        Self {
-            request_id: Uuid::new_v4(),
-            market: None,
-            underlying_mint: None,
-            status: None,
-            min_expiry_ts: None,
-            limit: None,
-            cursor: None,
-            cursor_id: None,
-        }
-    }
+    pub market: QueryFilter<Address32>,
+    pub underlying_mint: QueryFilter<Address32>,
+    pub status: Vec<PositionStatus>,
+    pub min_expiry_ts: TimeBound,
+    /// Page size in `1..=500`; anything else is rejected with `invalid_limit`.
+    pub limit: u32,
+    pub cursor: PageCursor<Address32>,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMyQuotesMessage {
     pub request_id: Uuid,
-    /// `Live` is the complete current owner set. `History` is the persisted,
-    /// paginated projection and never substitutes for live state.
     pub scope: MakerQuoteScope,
-    /// Applies only to `History`; the complete `Live` result is unpaged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    /// Keyset cursor for `History`: `created_at` of the last quote from the
-    /// previous page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde_as(as = "Option<UnixSeconds>")]
-    pub cursor: Option<SystemTime>,
-    /// Ties within one second: hex `order_id` of the last quote from the
-    /// previous page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor_id: Option<String>,
 }
 
 impl Default for GetMyQuotesMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            scope: MakerQuoteScope::Live,
-            limit: None,
-            cursor: None,
-            cursor_id: None,
+            scope: MakerQuoteScope::Live {},
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MakerQuoteScope {
-    Live,
-    History,
+    Live {},
+    History {
+        limit: u32,
+        cursor: PageCursor<OrderId>,
+    },
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMarketsForMakerMessage {
     pub request_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mints: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote_mints: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde_as(as = "Option<UnixSeconds>")]
-    pub min_expiry_ts: Option<SystemTime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde_as(as = "Option<UnixSeconds>")]
-    pub max_expiry_ts: Option<SystemTime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub is_put: Option<bool>,
-    #[serde(default)]
-    pub include_stats: bool,
+    pub underlying_mints: Vec<Address32>,
+    pub quote_mints: Vec<Address32>,
+    pub min_expiry_ts: TimeBound,
+    pub max_expiry_ts: TimeBound,
+    pub is_put: QueryFilter<bool>,
 }
 
 impl Default for GetMarketsForMakerMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            underlying_mints: None,
-            quote_mints: None,
-            min_expiry_ts: None,
-            max_expiry_ts: None,
-            is_put: None,
-            include_stats: false,
+            underlying_mints: Vec::new(),
+            quote_mints: Vec::new(),
+            min_expiry_ts: TimeBound::Unbounded {},
+            max_expiry_ts: TimeBound::Unbounded {},
+            is_put: QueryFilter::All {},
         }
     }
 }
@@ -238,15 +179,14 @@ impl Default for GetMarketsForMakerMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelAllQuotesMessage {
     pub request_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
+    pub market: QueryFilter<Address32>,
 }
 
 impl Default for CancelAllQuotesMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            market: None,
+            market: QueryFilter::All {},
         }
     }
 }
@@ -262,15 +202,9 @@ pub struct GetIndicativePricesMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMyTradesMessage {
     pub request_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde_as(as = "Option<UnixSeconds>")]
-    pub cursor: Option<SystemTime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor_id: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
+    pub limit: u32,
+    pub cursor: PageCursor<Uuid>,
+    pub market: QueryFilter<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,5 +220,5 @@ pub struct GetMmSummaryMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTokenMarketsInfoMessage {
     pub request_id: Uuid,
-    pub underlying_mint: String,
+    pub underlying_mint: Address32,
 }

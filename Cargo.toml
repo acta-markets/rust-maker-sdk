@@ -1,19 +1,28 @@
 [package]
 name = "acta-maker-sdk"
-version = "0.5.7"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
-description = "Rust SDK for Acta options market makers — WebSocket client, order signing, message types"
+description = "Rust SDK for the Acta options RFQ venue on Solana: maker and vault-operator WebSocket clients, order signing, chain builders"
 repository = "https://github.com/acta-markets/rust-maker-sdk"
-documentation = "https://beta.acta.markets/docs"
+homepage = "https://beta.acta.markets/docs"
+documentation = "https://docs.rs/acta-maker-sdk"
 keywords = ["rfq", "options", "defi", "solana", "market-maker"]
-categories = ["api-bindings"]
+categories = ["api-bindings", "cryptography::cryptocurrencies", "finance"]
 readme = "README.md"
-exclude = ["scripts/", ".github/", "tests/", "src/**/*_tests.rs", "src/**/tests.rs", ".gitignore"]
+exclude = [
+  "scripts/",
+  ".github/",
+  "tests/",
+  "src/**/*_tests.rs",
+  "src/**/tests.rs",
+  "src/chain/rpc_mock.rs",
+  ".gitignore",
+]
 
 [package.metadata.docs.rs]
-features = ["ws-client", "chain-rpc", "vault", "http"]
+features = ["ws-client", "chain-rpc", "vault", "http", "decimal"]
 targets = []
 
 [dependencies]
@@ -75,6 +84,10 @@ name = "indicative"
 required-features = ["ws-client"]
 
 [[example]]
+name = "spread_quote"
+required-features = ["ws-client", "http"]
+
+[[example]]
 name = "managed_quote"
 required-features = ["ws-client", "http"]
 
@@ -89,6 +102,10 @@ required-features = ["vault", "http"]
 [[example]]
 name = "vault_capital"
 required-features = ["chain-rpc"]
+
+[[example]]
+name = "curator_pt"
+required-features = ["chain-rpc", "http"]
 
 [dev-dependencies]
 async-trait = "0.1"
@@ -108,7 +125,3 @@ opt-level = 3
 lto = "thin"
 debug = 1
 strip = false
-
-[[example]]
-name = "curator_pt"
-required-features = ["chain-rpc", "http"]

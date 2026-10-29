@@ -1,3 +1,4 @@
+use crate::Address32;
 use crate::types::unix_time::UnixSeconds;
 use std::time::SystemTime;
 
@@ -17,15 +18,14 @@ pub struct AuthSuccessData {
     pub session_id: String,
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maker_pda: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub maker_pda: Option<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthErrorData {
     pub reason: WsErrorCode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub message: String,
 }
 
 impl AuthErrorData {

@@ -1,3 +1,4 @@
+use crate::Address32;
 use crate::types::ids::OrderId;
 use crate::types::{VaultDelegatePermissions, VaultOperatorKind, VaultStagingStep, VaultSwapMode};
 use serde::{Deserialize, Serialize};
@@ -5,15 +6,15 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultAuthSuccessData {
-    pub vault_pda: String,
-    pub operator: String,
+    pub vault_pda: Address32,
+    pub operator: Address32,
     pub operator_kind: VaultOperatorKind,
     pub permissions: VaultDelegatePermissions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultProjectionAdvancedData {
-    pub vault_pda: String,
+    pub vault_pda: Address32,
     pub version: u64,
     pub slot: u64,
     pub transaction_index: u32,
@@ -24,7 +25,7 @@ pub struct VaultProjectionAdvancedData {
 /// Sent to `Vaults` subscribers after a vault is created, re-delegated or closed; re-list vaults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultCatalogChangedData {
-    pub vault_pda: String,
+    pub vault_pda: Address32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +40,8 @@ pub struct SwapQuoteResultData {
     pub minimum_out_amount: String,
     pub valid_until: String,
     /// Absent for one-transaction swaps; once `stage` confirms, re-request (new id) for `unstage`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub staging: Option<VaultStagingStep>,
 }
 
@@ -76,7 +78,7 @@ pub struct SwapStatusMessage {
 /// Pushed to the Vault's sessions when a swap reaches a terminal state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapSettledMessage {
-    pub vault_pda: String,
+    pub vault_pda: Address32,
     pub execution_id: OrderId,
     pub state: SwapExecutionState,
 }

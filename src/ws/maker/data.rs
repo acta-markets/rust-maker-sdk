@@ -29,6 +29,108 @@ pub trait MakerDataRequest: private::Sealed + Sized {
     fn into_response(message: ServerMessage) -> Result<Self::Response, Box<ServerMessage>>;
 }
 
+/// A cursor-paged request. Pages run newest first by (second, id).
+pub trait PagedRequest: MakerDataRequest + Clone {
+    fn first_page(&mut self);
+    /// Points the cursor past the rows in `so_far`; `false` once nothing is left.
+    fn next_page(&mut self, so_far: &Self::Response) -> bool;
+    fn append(so_far: &mut Self::Response, page: Self::Response);
+}
+
+impl PagedRequest for GetMakerPositionsMessage {
+    fn first_page(&mut self) {
+        self.request_id = uuid::Uuid::new_v4();
+        self.limit = 500;
+        self.cursor = PageCursor::Start {};
+    }
+
+    fn next_page(&mut self, so_far: &MakerPositionsMessage) -> bool {
+        // the server orders a second's positions by their base58 PDA
+        let last = so_far
+            .positions
+            .iter()
+            .map(|p| (p.created_at, p.pda.to_base58(), p.pda))
+            .chain(
+                so_far
+                    .unrenderable
+                    .iter()
+                    .map(|p| (p.created_at, p.pda.to_base58(), p.pda)),
+            )
+            .min();
+        match (so_far.has_more, last) {
+            (true, Some((at, _, id))) => {
+                self.request_id = uuid::Uuid::new_v4();
+                self.cursor = PageCursor::After { at, id };
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn append(so_far: &mut MakerPositionsMessage, page: MakerPositionsMessage) {
+        so_far.positions.extend(page.positions);
+        so_far.unrenderable.extend(page.unrenderable);
+        so_far.has_more = page.has_more;
+    }
+}
+
+impl PagedRequest for GetMyTradesMessage {
+    fn first_page(&mut self) {
+        self.request_id = uuid::Uuid::new_v4();
+        self.limit = 200;
+        self.cursor = PageCursor::Start {};
+    }
+
+    fn next_page(&mut self, so_far: &MyTradesMessage) -> bool {
+        match (so_far.has_more, so_far.trades.last()) {
+            (true, Some(last)) => {
+                self.request_id = uuid::Uuid::new_v4();
+                self.cursor = PageCursor::After {
+                    at: last.confirmed_at,
+                    id: last.id,
+                };
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn append(so_far: &mut MyTradesMessage, page: MyTradesMessage) {
+        so_far.trades.extend(page.trades);
+        so_far.has_more = page.has_more;
+    }
+}
+
+/// `Live` is a single snapshot; only `History` pages.
+impl PagedRequest for GetMyQuotesMessage {
+    fn first_page(&mut self) {
+        self.request_id = uuid::Uuid::new_v4();
+        if let MakerQuoteScope::History { limit, cursor } = &mut self.scope {
+            *limit = 1000;
+            *cursor = PageCursor::Start {};
+        }
+    }
+
+    fn next_page(&mut self, so_far: &MyQuotesMessage) -> bool {
+        match (&mut self.scope, so_far.has_more, so_far.quotes.last()) {
+            (MakerQuoteScope::History { cursor, .. }, true, Some(last)) => {
+                *cursor = PageCursor::After {
+                    at: last.created_at,
+                    id: last.order_id,
+                };
+                self.request_id = uuid::Uuid::new_v4();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn append(so_far: &mut MyQuotesMessage, page: MyQuotesMessage) {
+        so_far.quotes.extend(page.quotes);
+        so_far.has_more = page.has_more;
+    }
+}
+
 pub struct MakerResponse<T> {
     payload: T,
 }
@@ -85,9 +187,6 @@ impl MakerDataRequestError {
     }
 }
 
-/// The server's `GetMakerPositions` page cap.
-const MAKER_POSITIONS_PAGE_LIMIT: u32 = 500;
-
 /// Maker data-plane client.
 #[derive(Clone)]
 pub struct MakerDataClient {
@@ -141,48 +240,20 @@ impl MakerDataClient {
         }
     }
 
-    /// Every position matching `filter`, paged at the server maximum; the
-    /// filter's `limit` and cursor are ignored. Use after an `MmSummary` with
-    /// `positions_has_more`.
-    pub async fn all_maker_positions(
+    /// Every page of `request` at the server's largest page size; its own
+    /// `limit` and cursor are ignored. Pages after the first are appended.
+    pub async fn all_pages<R: PagedRequest>(
         &self,
-        mut filter: GetMakerPositionsMessage,
+        mut request: R,
         timeout: Duration,
-    ) -> Result<MakerPositionsMessage, MakerDataRequestError> {
-        let mut all = MakerPositionsMessage {
-            request_id: filter.request_id,
-            positions: Vec::new(),
-            unrenderable: Vec::new(),
-            has_more: false,
-        };
-        filter.limit = Some(MAKER_POSITIONS_PAGE_LIMIT);
-        filter.cursor = None;
-        filter.cursor_id = None;
-        loop {
-            filter.request_id = uuid::Uuid::new_v4();
-            let page = self.request(filter.clone(), timeout).await?.into_payload();
-            // pages run (created_at second, pda) descending, across both lists
-            let last = page
-                .positions
-                .iter()
-                .map(|p| (p.created_at, p.pda.as_str()))
-                .chain(
-                    page.unrenderable
-                        .iter()
-                        .map(|p| (p.created_at, p.pda.as_str())),
-                )
-                .min()
-                .map(|(created_at, pda)| (created_at, pda.to_owned()));
-            all.positions.extend(page.positions);
-            all.unrenderable.extend(page.unrenderable);
-            match (page.has_more, last) {
-                (true, Some((created_at, pda))) => {
-                    filter.cursor = Some(created_at);
-                    filter.cursor_id = Some(pda);
-                }
-                _ => return Ok(all),
-            }
+    ) -> Result<R::Response, MakerDataRequestError> {
+        request.first_page();
+        let mut all = self.request(request.clone(), timeout).await?.into_payload();
+        while request.next_page(&all) {
+            let page = self.request(request.clone(), timeout).await?.into_payload();
+            R::append(&mut all, page);
         }
+        Ok(all)
     }
 
     /// Receive owner-direct `PositionUpdated`, `TradeExecuted` and
@@ -348,13 +419,13 @@ mod tests {
         ManagedWsConfig::new(
             "ws://localhost",
             HelloData {
-                protocol_version: "1.0.0".to_string(),
-                features: Vec::new(),
-                client_name: None,
-                client_version: None,
+                protocol_version: crate::WS_PROTOCOL_VERSION.to_string(),
+                on_disconnect: crate::ws::types::OnDisconnect::KeepQuotes,
+                client_name: "test".to_string(),
+                client_version: "test".to_string(),
             },
             Arc::new(crate::orders::BytesSigner::from_secret([1u8; 32])),
-            "owner",
+            crate::Address32::new([76; 32]),
         )
     }
 
@@ -368,6 +439,68 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn trade_pages_continue_after_the_last_row_until_has_more_is_false() {
+        let page = |id: u128, confirmed_at: u64, has_more: bool| -> MyTradesMessage {
+            serde_json::from_value(serde_json::json!({
+                "request_id": uuid::Uuid::nil(),
+                "trades": [{
+                    "id": uuid::Uuid::from_u128(id), "rfq_id": uuid::Uuid::nil(),
+                    "market_pda": crate::Address32::new([1; 32]),
+                    "underlying_mint": crate::Address32::new([2; 32]), "underlying_symbol": "SOL",
+                    "underlying_decimals": 9,
+                    "quote_mint": crate::Address32::new([3; 32]), "quote_symbol": "USDC",
+                    "quote_decimals": 6,
+                    "terms": {"type": "covered_call", "strike": 100}, "side": "sell",
+                    "taker": crate::Address32::new([4; 32]), "quantity": 1, "price": 1,
+                    "tx_signature": "sig", "position_pda": null, "confirmed_at": confirmed_at
+                }],
+                "has_more": has_more
+            }))
+            .expect("trades page")
+        };
+        let mut request = GetMyTradesMessage {
+            request_id: uuid::Uuid::nil(),
+            limit: 1,
+            cursor: PageCursor::After {
+                at: std::time::UNIX_EPOCH,
+                id: uuid::Uuid::nil(),
+            },
+            market: QueryFilter::All {},
+        };
+        request.first_page();
+        assert_eq!(
+            (request.limit, &request.cursor),
+            (200, &PageCursor::Start {})
+        );
+
+        let mut so_far = page(2, 20, true);
+        assert!(request.next_page(&so_far));
+        assert_eq!(
+            request.cursor,
+            PageCursor::After {
+                at: std::time::UNIX_EPOCH + Duration::from_secs(20),
+                id: uuid::Uuid::from_u128(2),
+            }
+        );
+        GetMyTradesMessage::append(&mut so_far, page(1, 10, false));
+        assert_eq!(so_far.trades.len(), 2);
+        assert!(!request.next_page(&so_far));
+    }
+
+    #[test]
+    fn live_quotes_are_one_page() {
+        let mut request = GetMyQuotesMessage::default();
+        request.first_page();
+        assert_eq!(request.scope, MakerQuoteScope::Live {});
+        let so_far = MyQuotesMessage {
+            request_id: request.request_id,
+            quotes: Vec::new(),
+            has_more: true,
+        };
+        assert!(!request.next_page(&so_far));
     }
 
     #[test]
@@ -440,18 +573,19 @@ mod tests {
     }
 
     fn owner_pushes() -> Vec<ServerMessage> {
-        let caps = serde_json::json!({"positions": {"current": 1, "limit": 10}, "notional": [], "balances": []});
+        let caps = serde_json::json!({"positions": {"current": 1, "limit": 10}, "notional": [], "balances": [], "quote_liabilities": []});
         [
         serde_json::json!({"type": "MakerCapsUpdated", "data": {"caps_snapshot": caps, "reason": "lifecycle"}}),
         serde_json::json!({"type": "PositionUpdated", "data": {
-            "position": {"pda": "p", "market": "m", "underlying_mint": "u", "quote_mint": "q",
-                "position_type": "covered_call", "status": "open", "strike": 1, "quantity": 2,
-                "price": 3, "created_at": 1, "expiry_ts": 2},
-            "update_type": "created", "caps_snapshot": caps
+            "position": {"revision": {"slot": 1, "transaction_index": 0, "instruction_index": 0}, "pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D", "market": "11111111111111111111111111111111", "underlying_mint": "opdhLMLuFCTUEq3YCwdtgqfuhtMqdkHBsJf6YrHfUFF", "quote_mint": "Aa8SVbHR7yKKA6Zq2M2Yw9jGvNsZkMD6QKwCCCR7vgeA",
+                "terms": {"type": "covered_call", "strike": 1}, "side": "sell", "state": "open", "quantity": 2,
+                "price": 3, "total_premium": 6, "created_at": 1, "expiry_ts": 2,
+                "underlying_decimals": 9, "quote_decimals": 6},
+            "update_type": "created"
         }}),
         serde_json::json!({"type": "TradeExecuted", "data": {"trade": {
-            "id": "00000000-0000-0000-0000-000000000001", "market": "m", "position_type": "covered_call",
-            "strike": 1, "quantity": 2, "price": 3, "taker": "t", "maker": "o", "tx_signature": "s", "executed_at": 1
+            "id": "00000000-0000-0000-0000-000000000001", "market": "11111111111111111111111111111111", "terms": {"type": "covered_call", "strike": 1}, "side": "sell",
+            "quantity": 2, "price": 3, "taker": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T", "maker": "7rJSLqoFCCqN39ztKiotFqaxwxEtycG4Fm8XzF4Bvx2M", "tx_signature": "s", "executed_at": 1
         }}}),
     ].into_iter().map(|value| serde_json::from_value(value).unwrap()).collect()
     }

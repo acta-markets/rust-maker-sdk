@@ -31,18 +31,18 @@ pub fn validate_wallet_auth_challenge(challenge: &str, wallet: &str) -> Result<(
 /// Validate before handing the challenge to any signer.
 pub fn validate_vault_auth_challenge(
     challenge: &str,
-    operator: &str,
-    vault: &str,
+    operator: &crate::Address32,
+    vault: &crate::Address32,
 ) -> Result<(), SigningError> {
     let invalid = || SigningError::new("invalid vault authentication challenge");
-    crate::wire::decode_base58_32(operator).map_err(|_| invalid())?;
-    crate::wire::decode_base58_32(vault).map_err(|_| invalid())?;
+    let operator = operator.to_base58();
+    let vault = vault.to_base58();
     let body = challenge
         .strip_prefix(AUTH_PREFIX)
         .and_then(|s| s.strip_prefix("Wallet: "))
-        .and_then(|s| s.strip_prefix(operator))
+        .and_then(|s| s.strip_prefix(operator.as_str()))
         .and_then(|s| s.strip_prefix('\n'))
-        .and_then(|s| s.strip_suffix(vault))
+        .and_then(|s| s.strip_suffix(vault.as_str()))
         .and_then(|s| s.strip_suffix("\nVault: "))
         .ok_or_else(invalid)?;
     if !valid_nonce_and_time(body) {

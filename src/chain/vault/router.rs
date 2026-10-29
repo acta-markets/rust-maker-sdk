@@ -45,7 +45,7 @@ impl Intent {
         }
         Ok(crate::ws::types::SwapQuoteData {
             request_id: uuid::Uuid::new_v4(),
-            vault_pda: vault.to_string(),
+            vault_pda: vault.into(),
             mode: crate::types::VaultSwapMode::Rebalance,
             direction: crate::types::VaultSwapDirection::MainToSecond,
             amount: self.amount().to_string(),
@@ -422,7 +422,6 @@ pub(super) fn recovery_buy(
             && account.phase == VaultPhase::Active
             && now < account.active_expiry),
         Some(VaultLeg::Second) => Ok(false),
-        Some(VaultLeg::Unknown) => Err(invalid("unknown staging origin")),
         None => match intent {
             Intent::Buy(_) if now >= maturity => Err(invalid("cannot buy matured PT")),
             Intent::Sell(_) if now > maturity => Err(invalid("use Redeem after maturity")),
@@ -463,6 +462,9 @@ pub fn funding_needs(
         {
             continue;
         }
+        if position.terms.is_spread() {
+            return Err(invalid("vaults cannot hold spreads"));
+        }
         let item = markets
             .iter()
             .find(|m| m.address == position.market_pda)
@@ -475,13 +477,13 @@ pub fn funding_needs(
             return Err(invalid("funding requires a nonzero price"));
         }
         let put = matches!(
-            position.position_type,
+            position.terms.position_type(),
             crate::types::PositionType::CashSecuredPut
         );
         let itm = if put {
-            item.price < position.strike.value()
+            item.price < position.terms.strike().value()
         } else {
-            item.price > position.strike.value()
+            item.price > position.terms.strike().value()
         };
         if !itm {
             continue;
@@ -492,7 +494,7 @@ pub fn funding_needs(
             (
                 market.quote_mint,
                 crate::types::amounts::scaled_quote_amount(
-                    position.strike.value(),
+                    position.terms.strike().value(),
                     position.quantity.value(),
                     market.quote_decimals.value(),
                     market.underlying_decimals.value(),

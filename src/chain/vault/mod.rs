@@ -52,8 +52,8 @@ pub use served::{
 pub use trading::{
     MAX_VAULT_SWAP_HOPS, MAX_VAULT_SWAP_PATH_ACCOUNTS, MAX_VAULT_SWAP_ROUTE_ACCOUNTS,
     MAX_VAULT_SWAP_ROUTE_DATA, VaultOpenPosition, VaultPositionAddresses, VaultPositionRef,
-    VaultStagingAsset, VaultSwapAmountOffset, VaultSwapHop, VaultSwapKind, VaultSwapPlan,
-    VaultTradeTerms,
+    VaultSaleTerms, VaultSpreadTerms, VaultStagingAsset, VaultSwapAmountOffset, VaultSwapHop,
+    VaultSwapKind, VaultSwapPlan, VaultTradeTerms,
 };
 
 #[cfg(test)]
@@ -66,3 +66,6 @@ mod router_tests;
 
 #[cfg(test)]
 mod owner_tests;
+
+#[cfg(test)]
+pub(crate) mod spread_tests;

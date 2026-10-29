@@ -42,6 +42,19 @@ pub(super) async fn establish(
         recover_subscriptions(client, config, inbound, recovery).await?;
     }
 
+    if config.endpoint == MakerWsEndpoint::Vault && subscriptions.wants_vault_feed() {
+        let mut recovery = subscriptions.recovery(&SubscriptionsMessage {
+            request_id: Uuid::new_v4(),
+            channels: Vec::new(),
+            underlying_mints: vec![],
+            quote_mints: vec![],
+        });
+        if let Some(subscribe) = &mut recovery.subscribe {
+            subscribe.underlying_mints = Vec::new();
+            subscribe.quote_mints = Vec::new();
+        }
+        recover_subscriptions(client, config, inbound, recovery).await?;
+    }
     if config.endpoint == MakerWsEndpoint::Vault && !subscriptions.wants_vault_feed() {
         let request_id = Uuid::new_v4();
         write_message(
@@ -66,10 +79,10 @@ pub(super) async fn establish(
                 }),
                 ClientMessage::GetPositions(GetPositionsMessage {
                     request_id: Uuid::new_v4(),
-                    market: None,
-                    underlying_mint: None,
-                    status: None,
-                    min_expiry_ts: None,
+                    market: crate::ws::types::QueryFilter::All {},
+                    underlying_mint: crate::ws::types::QueryFilter::All {},
+                    status: vec![],
+                    min_expiry_ts: crate::ws::types::TimeBound::Unbounded {},
                 }),
             ];
             if auth
@@ -98,10 +111,7 @@ fn quote_reads() -> Vec<ClientMessage> {
         }),
         ClientMessage::GetMyQuotes(GetMyQuotesMessage {
             request_id: Uuid::new_v4(),
-            scope: MakerQuoteScope::Live,
-            limit: None,
-            cursor: None,
-            cursor_id: None,
+            scope: MakerQuoteScope::Live {},
         }),
     ]
 }
@@ -126,14 +136,13 @@ async fn recover_subscriptions(
         wait_for_unsubscribe_ack(client, inbound, request_id).await?;
     }
 
-    let request_id = recovery.subscribe.request_id;
-    write_message(
-        client,
-        config,
-        &ClientMessage::Subscribe(recovery.subscribe),
-    )
-    .await
-    .map_err(|error| SessionFailure::Retryable(error.to_string()))?;
+    let Some(subscribe) = recovery.subscribe else {
+        return Ok(());
+    };
+    let request_id = subscribe.request_id;
+    write_message(client, config, &ClientMessage::Subscribe(subscribe))
+        .await
+        .map_err(|error| SessionFailure::Retryable(error.to_string()))?;
     wait_for_subscribe_ack(client, inbound, request_id).await
 }
 

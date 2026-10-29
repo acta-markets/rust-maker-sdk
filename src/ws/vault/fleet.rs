@@ -158,11 +158,12 @@ async fn session(
         ws.send(&ClientMessage::Hello(config.hello.clone())),
     )
     .await?;
+    within(bound, "welcome", validate_welcome(&mut ws, &config.hello)).await?;
     within(
         bound,
         "start auth",
         ws.send(&ClientMessage::StartAuth(StartAuthData {
-            pubkey: operator.to_owned(),
+            pubkey: crate::Address32::new(config.operator.pubkey_bytes()),
         })),
     )
     .await?;
@@ -174,9 +175,9 @@ async fn session(
     loop {
         if wanted && listing.is_none() {
             let api = config.api.clone();
-            let operator = operator.to_owned();
+            let operator = crate::Address32::new(config.operator.pubkey_bytes());
             listing = Some(Box::pin(tokio::time::timeout(bound, async move {
-                api.delegated_vaults(&operator).await
+                api.delegated_vaults(operator).await
             })));
             wanted = false;
             relist_at = None;
@@ -225,7 +226,7 @@ async fn session(
                     ws.send(&ClientMessage::AuthChallenge(AuthChallengeData {
                         challenge: request.challenge,
                         signature,
-                        pubkey: operator.to_owned(),
+                        pubkey: crate::Address32::new(config.operator.pubkey_bytes()),
                     })),
                 )
                 .await?;
@@ -235,10 +236,11 @@ async fn session(
                     bound,
                     "subscribe",
                     ws.send(&ClientMessage::Subscribe(SubscribeData {
+                        products: crate::ProductSet::ALL,
                         request_id: subscribe_id,
                         channels: vec![WsChannel::Vaults],
-                        underlying_mints: None,
-                        quote_mints: None,
+                        underlying_mints: vec![],
+                        quote_mints: vec![],
                     })),
                 )
                 .await?;
@@ -261,6 +263,24 @@ async fn session(
             }
             _ => {}
         }
+    }
+}
+
+async fn validate_welcome(ws: &mut WsClient, hello: &HelloData) -> Result<(), BoxError> {
+    let message = ws
+        .next()
+        .await
+        .ok_or_else(|| "connection closed before Welcome".to_owned())??;
+    match message {
+        ServerMessage::Welcome(welcome) if welcome.protocol_version == hello.protocol_version => {
+            Ok(())
+        }
+        ServerMessage::VersionMismatch(mismatch) => {
+            Err(format!("protocol version mismatch: {mismatch:?}").into())
+        }
+        ServerMessage::AuthError(error) => Err(format!("auth rejected: {:?}", error.reason).into()),
+        ServerMessage::Error(error) => Err(format!("server error: {error:?}").into()),
+        other => Err(format!("expected Welcome, received {other:?}").into()),
     }
 }
 
@@ -437,13 +457,19 @@ mod tests {
     /// Hello, wallet auth, `vaults` subscription.
     async fn subscribe(socket: &mut Socket, wallet: &str) {
         assert!(matches!(receive(socket).await, ClientMessage::Hello(_)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), receive(socket))
+                .await
+                .is_err(),
+            "fleet must validate Welcome before StartAuth"
+        );
         send(
             socket,
             ServerMessage::Welcome(WelcomeData {
-                protocol_version: "1.0.0".into(),
+                protocol_version: crate::WS_PROTOCOL_VERSION.into(),
                 server_version: "test".into(),
-                min_supported_version: "1.0.0".into(),
-                enabled_features: Vec::new(),
+                min_supported_version: crate::WS_PROTOCOL_VERSION.into(),
+
                 server_time_unix_ms: std::time::UNIX_EPOCH,
                 min_quote_validity_seconds: 100,
                 settlement_buffer_seconds: 90,
@@ -453,7 +479,10 @@ mod tests {
         let ClientMessage::StartAuth(start) = receive(socket).await else {
             panic!("expected StartAuth");
         };
-        assert_eq!(start.pubkey, wallet);
+        assert_eq!(
+            start.pubkey,
+            crate::Address32::from_base58(wallet).expect("valid fixture")
+        );
         let challenge = crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE
             .replace("Nonce: ", &format!("Wallet: {wallet}\nNonce: "));
         send(
@@ -499,10 +528,10 @@ mod tests {
             VaultFleetConfig::new(
                 ws_url,
                 HelloData {
-                    protocol_version: "1.0.0".into(),
-                    features: Vec::new(),
-                    client_name: None,
-                    client_version: None,
+                    protocol_version: crate::WS_PROTOCOL_VERSION.into(),
+                    on_disconnect: crate::ws::types::OnDisconnect::KeepQuotes,
+                    client_name: "test".to_string(),
+                    client_version: "test".to_string(),
                 },
                 operator,
                 HttpClient::new(api).unwrap(),
@@ -532,7 +561,7 @@ mod tests {
         send(
             &mut socket,
             ServerMessage::VaultCatalogChanged(VaultCatalogChangedData {
-                vault_pda: SECOND.into(),
+                vault_pda: crate::Address32::from_base58(SECOND).expect("fixture"),
             }),
         )
         .await;
@@ -576,7 +605,7 @@ mod tests {
         let FleetListing::Failed(reason) = next(&mut listings).await else {
             panic!("a feed that never subscribes is unhealthy");
         };
-        assert!(reason.contains("did not subscribe in time"), "{reason}");
+        assert!(reason.contains("welcome timed out"), "{reason}");
         let mut socket = accept(&listener).await;
         subscribe(&mut socket, &wallet).await;
         assert!(matches!(next(&mut listings).await, FleetListing::Listed(_)));

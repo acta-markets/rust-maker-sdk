@@ -10,17 +10,16 @@ use reqwest::StatusCode;
 use reqwest::header::{ETAG, IF_NONE_MATCH};
 use serde::de::DeserializeOwned;
 
-use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 pub use types::{
-    PremiumFlow, ProjectionCursor, TokenProgramKind, Vault, VaultCapacity, VaultExposure,
-    VaultExposurePosition, VaultExposureTotal, VaultFees, VaultLeg, VaultMetadata,
-    VaultPerformance, VaultPolicy, VaultPosition, VaultPositionRole, VaultPositionStatus,
-    VaultPositionType, VaultPremium, VaultReturns, VaultStaging, Venue, WindowReturn,
+    CountLimit, PremiumFlow, ProjectionCursor, TokenProgramKind, Vault, VaultCapacity,
+    VaultExposure, VaultExposurePosition, VaultExposureTotal, VaultFees, VaultLeg, VaultMetadata,
+    VaultPerformance, VaultPolicy, VaultPosition, VaultPositionProduct, VaultPositionRole,
+    VaultPositionStatus, VaultPositionType, VaultPremium, VaultReturns, VaultStaging, Venue,
+    WindowReturn,
 };
+use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 
 use crate::ws::types::{MarketInfo, TokenInfo};
-
-use crate::wire::{WireError, decode_base58_32};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const POSITION_PAGE: u16 = 200;
@@ -32,16 +31,14 @@ pub enum HttpError {
     Request(#[from] reqwest::Error),
     #[error("HTTP {status}: {body}")]
     Status { status: u16, body: String },
-    #[error("invalid address: {0}")]
-    Address(#[from] WireError),
     #[error("invalid response body: {0}")]
     Decode(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MarketFilter {
-    pub underlying: Option<String>,
-    pub quote: Option<String>,
+    pub underlying: Option<crate::Address32>,
+    pub quote: Option<crate::Address32>,
     pub expiry: Option<u64>,
     pub is_put: Option<bool>,
     pub active: Option<bool>,
@@ -118,22 +115,25 @@ impl HttpClient {
 
     /// Vaults whose primary delegate is `delegate` with an unexpired grant, the
     /// same rule `/vault` authentication applies.
-    pub async fn delegated_vaults(&self, delegate: &str) -> Result<Vec<Vault>, HttpError> {
-        let _ = decode_base58_32(delegate)?;
+    pub async fn delegated_vaults(
+        &self,
+        delegate: crate::Address32,
+    ) -> Result<Vec<Vault>, HttpError> {
         let response: VaultsResponse = self
             .get(&format!("/api/v1/vaults?delegate={delegate}"))
             .await?;
         Ok(response.vaults)
     }
 
-    pub async fn vault(&self, pda: &str) -> Result<Vault, HttpError> {
-        let _ = decode_base58_32(pda)?;
+    pub async fn vault(&self, pda: crate::Address32) -> Result<Vault, HttpError> {
         self.get(&format!("/api/v1/vaults/{pda}")).await
     }
 
     /// Every unsettled position of the vault, following the server cursor.
-    pub async fn vault_positions(&self, pda: &str) -> Result<Vec<VaultPosition>, HttpError> {
-        let _ = decode_base58_32(pda)?;
+    pub async fn vault_positions(
+        &self,
+        pda: crate::Address32,
+    ) -> Result<Vec<VaultPosition>, HttpError> {
         let base = format!("/api/v1/vaults/{pda}/positions?settled=false&limit={POSITION_PAGE}");
         let mut positions = Vec::new();
         let mut path = base.clone();
@@ -148,8 +148,7 @@ impl HttpClient {
     }
 
     /// Open and funded positions with indicative spot, moneyness and intrinsic value.
-    pub async fn vault_exposure(&self, pda: &str) -> Result<VaultExposure, HttpError> {
-        let _ = decode_base58_32(pda)?;
+    pub async fn vault_exposure(&self, pda: crate::Address32) -> Result<VaultExposure, HttpError> {
         self.get(&format!("/api/v1/vaults/{pda}/exposure")).await
     }
 
@@ -160,12 +159,12 @@ impl HttpClient {
         Ok(response.markets)
     }
 
-    pub async fn tokens(&self) -> Result<BTreeMap<String, TokenInfo>, HttpError> {
+    pub async fn tokens(&self) -> Result<BTreeMap<crate::Address32, TokenInfo>, HttpError> {
         let response: TokensResponse = self.get("/api/v1/tokens").await?;
         Ok(response
             .tokens
             .into_iter()
-            .map(|token| (token.mint.clone(), token))
+            .map(|token| (token.mint, token))
             .collect())
     }
 

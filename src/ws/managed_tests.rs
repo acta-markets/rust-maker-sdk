@@ -7,10 +7,8 @@ use super::{
     normalize_maker_ws_url, normalize_maker_ws_url_for_endpoint, spawn_managed_ws,
     tracker::AwaitTracker, transition_state,
 };
-use crate::types::RfqCloseReason;
-use crate::types::ids::{
-    MarketId, Nonce, OrderId, PositionType, Price, Quantity, Strike, TimeoutSeconds,
-};
+use crate::types::ids::{MarketId, Nonce, OrderId, Price, Quantity, Strike, TimeoutSeconds};
+use crate::types::{OptionTerms, RfqCloseReason, TakerSide};
 use crate::ws::types::common::WsChannel;
 use crate::ws::types::{
     AcceptQuoteMessage, AuthRequestData, AuthSuccessData, BatchQuoteResult, BatchQuotesAckMessage,
@@ -108,28 +106,24 @@ fn managed_config() -> ManagedWsConfig {
         "ws://localhost",
         crate::ws::types::HelloData {
             protocol_version: "1".to_string(),
-            features: Vec::new(),
-            client_name: None,
-            client_version: None,
+            on_disconnect: crate::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "test".to_string(),
+            client_version: "test".to_string(),
         },
         Arc::new(crate::orders::BytesSigner::from_secret([1u8; 32])),
-        "maker",
+        crate::Address32::new([135; 32]),
     )
 }
 
 #[test]
-fn quote_defaults_enable_disconnect_cancellation_and_gap_recovery() {
+fn hello_disconnect_policy_is_explicit_and_quote_gap_recovery_remains_default() {
     let config = managed_config();
-    assert!(config.cancel_on_disconnect);
     assert!(config.reconnect_on_gap());
-    assert!(
-        config
-            .hello()
-            .features
-            .iter()
-            .any(|f| f == "cancel_on_disconnect")
+    assert_eq!(
+        config.hello().on_disconnect,
+        crate::ws::types::OnDisconnect::KeepQuotes
     );
-    let data = config.with_endpoint(MakerWsEndpoint::Data);
+    let data = config.clone().with_endpoint(MakerWsEndpoint::Data);
     assert!(!data.reconnect_on_gap());
     assert!(
         data.clone()
@@ -137,12 +131,29 @@ fn quote_defaults_enable_disconnect_cancellation_and_gap_recovery() {
             .reconnect_on_gap()
     );
     assert!(data.clone().low_latency().reconnect_on_gap());
-    assert!(
-        !data
-            .hello()
-            .features
-            .iter()
-            .any(|f| f == "cancel_on_disconnect")
+    assert_eq!(
+        config.hello().on_disconnect,
+        crate::ws::types::OnDisconnect::KeepQuotes
+    );
+}
+
+#[test]
+fn hello_keeps_explicit_disconnect_policy() {
+    let config = ManagedWsConfig::new(
+        "ws://localhost",
+        crate::ws::types::HelloData {
+            protocol_version: "1".to_string(),
+            on_disconnect: crate::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "test".to_string(),
+            client_version: "test".to_string(),
+        },
+        Arc::new(crate::orders::BytesSigner::from_secret([1u8; 32])),
+        crate::Address32::new([135; 32]),
+    );
+
+    assert_eq!(
+        config.hello().on_disconnect,
+        crate::ws::types::OnDisconnect::KeepQuotes
     );
 }
 
@@ -166,24 +177,25 @@ fn auth_pubkey_is_the_owner_not_the_signer_key() {
         "ws://localhost",
         crate::ws::types::HelloData {
             protocol_version: "1".to_string(),
-            features: Vec::new(),
-            client_name: None,
-            client_version: None,
+            on_disconnect: crate::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "test".to_string(),
+            client_version: "test".to_string(),
         },
         Arc::new(Remote(signer)),
-        "owner",
+        crate::Address32::new([76; 32]),
     );
-    assert_eq!(config.auth_pubkey, "owner");
-    assert_ne!(config.auth_pubkey, signer_key);
+    assert_eq!(config.auth_pubkey, crate::Address32::new([76; 32]));
+    assert_ne!(config.auth_pubkey.to_base58(), signer_key);
 }
 
 #[test]
 fn data_endpoint_rejects_initial_subscription_in_any_builder_order() {
     let subscribe = || SubscribeData {
+        products: crate::ProductSet::ALL,
         request_id: Uuid::new_v4(),
         channels: vec![WsChannel::Rfqs],
-        underlying_mints: None,
-        quote_mints: None,
+        underlying_mints: vec![],
+        quote_mints: vec![],
     };
 
     for config in [
@@ -263,10 +275,11 @@ fn config_rejects_values_above_server_limits() {
 #[test]
 fn config_rejects_oversized_initial_subscription() {
     let mut config = managed_config().with_initial_subscribe(SubscribeData {
+        products: crate::ProductSet::ALL,
         request_id: Uuid::new_v4(),
         channels: vec![WsChannel::Rfqs],
-        underlying_mints: Some(vec!["x".repeat(256)]),
-        quote_mints: None,
+        underlying_mints: vec![crate::Address32::new([45; 32])],
+        quote_mints: vec![],
     });
     config.max_outbound_message_size = 128;
 
@@ -595,10 +608,11 @@ async fn close_interrupts_a_stalled_readiness_barrier() {
     });
 
     let mut config = managed_config().with_initial_subscribe(SubscribeData {
+        products: crate::ProductSet::ALL,
         request_id: Uuid::new_v4(),
         channels: vec![WsChannel::Rfqs],
-        underlying_mints: None,
-        quote_mints: None,
+        underlying_mints: vec![],
+        quote_mints: vec![],
     });
     config.url = format!("ws://{address}");
     config.readiness_timeout = Duration::from_secs(30);
@@ -696,7 +710,7 @@ async fn authenticate_test_peer(
             protocol_version: "1".to_string(),
             server_version: "test".to_string(),
             min_supported_version: "1".to_string(),
-            enabled_features: vec!["cancel_on_disconnect".to_string()],
+
             server_time_unix_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 100,
             settlement_buffer_seconds: 90,
@@ -841,7 +855,7 @@ async fn gap_policy_reconnect_reconnects_after_a_subscriber_lags() {
                 protocol_version: "1".to_string(),
                 server_version: "test".to_string(),
                 min_supported_version: "1".to_string(),
-                enabled_features: vec!["cancel_on_disconnect".to_string()],
+
                 server_time_unix_ms: std::time::UNIX_EPOCH,
                 min_quote_validity_seconds: 100,
                 settlement_buffer_seconds: 90,
@@ -871,10 +885,11 @@ async fn gap_policy_reconnect_reconnects_after_a_subscriber_lags() {
     });
 
     let mut config = managed_config().with_initial_subscribe(SubscribeData {
+        products: crate::ProductSet::ALL,
         request_id: Uuid::new_v4(),
         channels: vec![WsChannel::Rfqs],
-        underlying_mints: None,
-        quote_mints: None,
+        underlying_mints: vec![],
+        quote_mints: vec![],
     });
     config.url = format!("ws://{address}");
     config.broadcast_buffer = 4;
@@ -969,7 +984,10 @@ async fn backend_session_replaced_frame_terminates_without_reconnect() {
 fn quote(order_byte: u8) -> QuoteMessage {
     QuoteMessage {
         rfq_id: Uuid::new_v4(),
-        strike: Strike::new(1),
+        terms: OptionTerms::CoveredCall {
+            strike: Strike::new(1),
+        },
+        side: TakerSide::Sell,
         price: Price::new(2),
         valid_until: crate::QuoteExpiry::from_unix_seconds(100),
         nonce: Nonce::new(3),
@@ -1001,10 +1019,11 @@ fn request_error_is_routed_by_request_id() {
     let mut tracker = AwaitTracker::new(4);
     let request_id = Uuid::new_v4();
     let message = ClientMessage::Subscribe(SubscribeData {
+        products: crate::ProductSet::ALL,
         request_id,
         channels: vec![WsChannel::Rfqs],
-        underlying_mints: None,
-        quote_mints: None,
+        underlying_mints: vec![],
+        quote_mints: vec![],
     });
     let _rx = register(&mut tracker, 1, &message);
 
@@ -1025,9 +1044,14 @@ fn correlated_commands() -> [(Uuid, ClientMessage); 3] {
             rfq,
             ClientMessage::RfqRequest(RfqRequestMessage {
                 request_id: rfq,
-                market: MarketId::new("market"),
-                position_type: PositionType::CoveredCall,
-                strike: Strike::new(1),
+                market: MarketId::new(crate::Address32::new([
+                    228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127,
+                    212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
+                ])),
+                terms: OptionTerms::CoveredCall {
+                    strike: Strike::new(1),
+                },
+                side: TakerSide::Sell,
                 quantity: Quantity::new(1),
                 timeout_seconds: TimeoutSeconds::new(30),
             }),
@@ -1037,7 +1061,7 @@ fn correlated_commands() -> [(Uuid, ClientMessage); 3] {
             ClientMessage::AcceptQuote(AcceptQuoteMessage {
                 request_id: accept,
                 rfq_id: Uuid::new_v4(),
-                maker: "maker".to_string(),
+                maker: crate::Address32::new([135; 32]),
                 order_id: OrderId::new([7; 32]),
             }),
         ),
@@ -1098,9 +1122,12 @@ fn rfq_created_push_does_not_resolve_the_rfq_request() {
             "data": {
                 "rfq_id": Uuid::new_v4(),
                 "rfq_version": 1,
+                "terms": {"type": "covered_call", "strike": 1},
+                "side": "sell",
                 "request_id": request_id,
                 "expires_at": 1,
                 "created_at": 1,
+                "order_options": [],
             },
         })
         .to_string(),
@@ -1202,7 +1229,7 @@ fn quote_rejection_resolves_the_matching_quote() {
         rfq_id: quote.rfq_id,
         order_id: quote.order_id,
         reason: QuoteRejectReason::DuplicateOrderId,
-        message: None,
+        message: "rejected".to_string(),
     });
 
     assert!(tracker.take_for_message(&rejection).is_some());
@@ -1251,9 +1278,10 @@ fn batch_ack_with_future_status_still_correlates_by_order_id() {
                 order_id: first.order_id,
                 replaced_order_id: None,
             }),
-            BatchQuoteResult::Unknown(crate::ws::types::UnknownBatchQuoteResult {
-                status: "deferred".to_string(),
-                data: Some(serde_json::json!({ "order_id": second.order_id })),
+            BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
+                rfq_id: second.rfq_id,
+                order_id: second.order_id,
+                replaced_order_id: None,
             }),
         ],
     });
@@ -1334,6 +1362,57 @@ async fn managed_handle_rejects_oversized_quote_batch_before_queueing() {
             }
         ))
     ));
+    assert!(commands.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn managed_handle_rejects_taker_buy_for_rfq_quote_and_check_quote() {
+    let (handle, mut commands) = super::ManagedWsHandle::test_handle(1, 1);
+    handle.inject_state(ManagedWsState::Ready {
+        connection_epoch: 1,
+    });
+
+    let mut quote = quote(1);
+    quote.side = TakerSide::Buy;
+    let messages = [
+        ClientMessage::RfqRequest(RfqRequestMessage {
+            request_id: Uuid::new_v4(),
+            market: MarketId::new(crate::Address32::new([
+                228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127,
+                212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
+            ])),
+            terms: OptionTerms::PutSpread {
+                lower_strike: Strike::new(100),
+                upper_strike: Strike::new(120),
+            },
+            side: TakerSide::Buy,
+            quantity: Quantity::new(1),
+            timeout_seconds: TimeoutSeconds::new(30),
+        }),
+        ClientMessage::Quote(quote),
+        ClientMessage::CheckQuote(crate::ws::types::CheckQuoteMessage {
+            request_id: Uuid::new_v4(),
+            market_id: MarketId::new(crate::Address32::new([
+                228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127,
+                212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
+            ])),
+            quantity: Quantity::new(1),
+            price: Price::new(1),
+            terms: OptionTerms::CoveredCall {
+                strike: Strike::new(100),
+            },
+            side: TakerSide::Buy,
+        }),
+    ];
+
+    for message in messages {
+        assert!(matches!(
+            handle.send(message).await,
+            Err(super::ManagedWsError::InvalidMessage(
+                OutboundMessageError::TakerBuyUnsupported
+            ))
+        ));
+    }
     assert!(commands.try_recv().is_err());
 }
 
@@ -1552,7 +1631,7 @@ async fn indicative_response_rechecks_readiness_before_enqueue() {
     let response = ClientMessage::IndicativePricesResponse(
         crate::ws::types::IndicativePricesResponseMessage {
             request_id: Uuid::new_v4(),
-            market: "market".into(),
+            market: crate::MarketId::new(crate::Address32::new([7; 32])),
             position_type: crate::PositionType::CoveredCall,
             prices: Vec::new(),
         },
@@ -1634,8 +1713,8 @@ async fn recover_test_peer(
                 ServerMessage::Subscriptions(SubscriptionsMessage {
                     request_id: m.request_id,
                     channels: vec![],
-                    underlying_mints: None,
-                    quote_mints: None,
+                    underlying_mints: vec![],
+                    quote_mints: vec![],
                 })
             }
             ClientMessage::Subscribe(m) => {
@@ -1800,7 +1879,7 @@ async fn auth_error_before_close_keeps_the_close_code() {
                 protocol_version: "1".to_string(),
                 server_version: "test".to_string(),
                 min_supported_version: "1".to_string(),
-                enabled_features: vec!["cancel_on_disconnect".to_string()],
+
                 server_time_unix_ms: UNIX_EPOCH,
                 min_quote_validity_seconds: 100,
                 settlement_buffer_seconds: 90,
@@ -1815,7 +1894,7 @@ async fn auth_error_before_close_keeps_the_close_code() {
             &mut socket,
             ServerMessage::AuthError(AuthErrorData {
                 reason: WsErrorCode::AuthTimeout,
-                message: None,
+                message: "rejected".to_string(),
             }),
         )
         .await;

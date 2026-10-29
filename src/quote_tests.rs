@@ -2,8 +2,8 @@ use super::*;
 
 use crate::orders::{BytesSigner, verify_order_id_signature_bytes};
 use crate::signing::{AsyncSignerLike, SigningFuture};
-use crate::types::ids::ChainId;
-use crate::ws::types::{MarketDescriptor, RfqOrderOption};
+use crate::types::ids::{ChainId, Strike};
+use crate::ws::types::MarketDescriptor;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const PROGRAM: [u8; 32] =
@@ -18,43 +18,50 @@ fn signer() -> BytesSigner {
     BytesSigner::from_secret([3u8; 32])
 }
 
-fn broadcast(strike: u64, alternatives: &[u64]) -> RfqBroadcastMessage {
+fn covered_call(strike: u64) -> OptionTerms {
+    OptionTerms::CoveredCall {
+        strike: Strike::new(strike),
+    }
+}
+
+fn broadcast(terms: OptionTerms, alternatives: &[OptionTerms]) -> RfqBroadcastMessage {
     RfqBroadcastMessage {
         rfq_id: Uuid::from_u128(42),
         market: MarketDescriptor {
             chain_id: ChainId::new(0),
-            program_id: encode_base58(&PROGRAM),
-            market_pda: encode_base58(&market()),
-            underlying_mint: encode_base58(&[1u8; 32]),
-            quote_mint: encode_base58(&[2u8; 32]),
+            program_id: crate::Address32::new(PROGRAM),
+            market_pda: crate::Address32::new(market()),
+            underlying_mint: crate::Address32::new([1u8; 32]),
+            quote_mint: crate::Address32::new([2u8; 32]),
             expiry_ts: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
             is_put: false,
-            collateral_mint: encode_base58(&[1u8; 32]),
-            settlement_mint: encode_base58(&[2u8; 32]),
+            collateral_mint: crate::Address32::new([1u8; 32]),
+            settlement_mint: crate::Address32::new([2u8; 32]),
         },
-        position_type: PositionType::CoveredCall,
-        strike: Strike::new(strike),
+        terms,
+        side: TakerSide::Sell,
         quantity: Quantity::new(5),
         expires_at: UNIX_EPOCH + Duration::from_secs(1_800_000_300),
-        taker: encode_base58(&TAKER),
+        taker: crate::Address32::new(TAKER),
         sent_at_unix_ms: std::time::UNIX_EPOCH,
-        order_options: alternatives
-            .iter()
-            .map(|strike| RfqOrderOption {
-                strike: Strike::new(*strike),
-            })
-            .collect(),
+        order_options: alternatives.to_vec(),
     }
 }
 
 fn binding(strike: u64, alternatives: &[u64]) -> RfqBinding {
-    RfqBinding::from_broadcast(&broadcast(strike, alternatives)).expect("valid identities")
+    let alternatives = alternatives
+        .iter()
+        .copied()
+        .map(covered_call)
+        .collect::<Vec<_>>();
+    RfqBinding::from_broadcast(&broadcast(covered_call(strike), &alternatives))
+        .expect("valid identities")
 }
 
 fn quote_on(binding: &RfqBinding) -> QuoteBuilder<'_> {
     binding
         .quote()
-        .maker_owner(signer().pubkey_bytes())
+        .maker_owner(crate::Address32::new(signer().pubkey_bytes()))
         .min_valid_until(QuoteExpiry::from_unix_seconds(1))
 }
 
@@ -97,10 +104,10 @@ fn order_id_recomputes_from_the_transmitted_message() {
     let server_view = OrderPreimageArgs {
         chain_id: 0,
         program_id: PROGRAM,
-        is_taker_buy: false,
-        position_type: PositionType::CoveredCall,
+        side: TakerSide::Sell,
+        position_type: decoded.terms.position_type(),
         market: market(),
-        strike: decoded.strike.value(),
+        strike: decoded.terms.strike().value(),
         quantity: 5,
         gross_price: decoded.price.value(),
         valid_until: decoded.valid_until.as_unix_seconds(),
@@ -109,7 +116,10 @@ fn order_id_recomputes_from_the_transmitted_message() {
         nonce: decoded.nonce.value(),
     };
 
-    assert_eq!(compute_order_id(&server_view), *decoded.order_id.as_bytes());
+    assert_eq!(
+        compute_order_id(&server_view).unwrap(),
+        *decoded.order_id.as_bytes()
+    );
 }
 
 #[test]
@@ -133,29 +143,29 @@ fn signature_verifies_against_the_order_id() {
 }
 
 #[test]
-fn alternative_strikes_from_order_options_are_accepted() {
+fn alternative_terms_from_order_options_are_accepted() {
     let bind = binding(100, &[110, 120]);
     assert_eq!(
-        bind.offered_strikes(),
-        &[Strike::new(100), Strike::new(110), Strike::new(120)]
+        bind.offered_terms(),
+        &[covered_call(100), covered_call(110), covered_call(120)]
     );
 
     let quote = quote_on(&bind)
-        .strike(Strike::new(120))
+        .terms(covered_call(120))
         .price(Price::new(1))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
         .nonce(Nonce::new(1))
         .sign(&signer())
         .expect("signs");
 
-    assert_eq!(quote.strike, Strike::new(120));
+    assert_eq!(quote.terms, covered_call(120));
 }
 
 #[test]
-fn a_strike_the_rfq_did_not_offer_is_refused_locally() {
+fn terms_the_rfq_did_not_offer_are_refused_locally() {
     let bind = binding(100, &[110]);
     let error = quote_on(&bind)
-        .strike(Strike::new(999))
+        .terms(covered_call(999))
         .price(Price::new(1))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
         .nonce(Nonce::new(1))
@@ -164,16 +174,16 @@ fn a_strike_the_rfq_did_not_offer_is_refused_locally() {
 
     assert!(matches!(
         error,
-        QuoteBuildError::StrikeNotOffered { requested, .. } if requested == Strike::new(999)
+        QuoteBuildError::TermsNotOffered { requested, .. } if requested == covered_call(999)
     ));
 }
 
 #[test]
-fn duplicate_order_option_does_not_repeat_the_requested_strike() {
+fn duplicate_order_option_does_not_repeat_the_requested_terms() {
     let bind = binding(100, &[100, 110]);
     assert_eq!(
-        bind.offered_strikes(),
-        &[Strike::new(100), Strike::new(110)]
+        bind.offered_terms(),
+        &[covered_call(100), covered_call(110)]
     );
 }
 
@@ -222,7 +232,7 @@ fn missing_fields_are_named() {
     ));
     let missing_floor = bind
         .quote()
-        .maker_owner(signer().pubkey_bytes())
+        .maker_owner(crate::Address32::new(signer().pubkey_bytes()))
         .price(Price::new(1))
         .valid_until(QuoteExpiry::from_unix_seconds(1))
         .nonce(Nonce::new(1))
@@ -278,15 +288,18 @@ fn valid_until_must_sit_between_the_venue_floor_and_market_expiry() {
 #[test]
 fn venue_sets_the_floor_and_checks_the_settlement_buffer() {
     let venue = crate::http::Venue {
-        program_id: encode_base58(&PROGRAM),
+        protocol_fee_bps_premium: 100,
+        protocol_fee_bps_volume: 10,
+        program_id: crate::Address32::new(PROGRAM),
+
         min_quote_validity_seconds: 5,
         settlement_buffer_seconds: 30,
         quote_refresh_lead_seconds: 3,
         min_rfq_timeout_seconds: 1,
         max_rfq_timeout_seconds: 60,
         signature_timeout_seconds: 10,
-        max_quotes_per_rfq: None,
-        max_active_rfqs_per_taker: None,
+        max_quotes_per_rfq: crate::http::CountLimit::Unlimited {},
+        max_active_rfqs_per_taker: crate::http::CountLimit::Unlimited {},
         pre_expiry_cutoff_seconds: 0,
     };
     let now = QuoteExpiry::after(Duration::ZERO)
@@ -295,7 +308,7 @@ fn venue_sets_the_floor_and_checks_the_settlement_buffer() {
     let bind = binding(100, &[]);
     let builder = bind
         .quote()
-        .maker_owner(signer().pubkey_bytes())
+        .maker_owner(crate::Address32::new(signer().pubkey_bytes()))
         .price(Price::new(1))
         .nonce(Nonce::new(1))
         .venue(&venue);
@@ -324,13 +337,10 @@ fn venue_sets_the_floor_and_checks_the_settlement_buffer() {
 
 #[test]
 fn a_malformed_identity_names_its_field() {
-    let mut rfq = broadcast(100, &[]);
-    rfq.taker = "not-base58-!!".to_string();
-    let error = RfqBinding::from_broadcast(&rfq).expect_err("bad taker");
-    assert!(matches!(
-        error,
-        QuoteBuildError::Identity { field: "taker", .. }
-    ));
+    let rfq = broadcast(covered_call(100), &[]);
+    let mut json = serde_json::to_value(rfq).expect("fixture");
+    json["taker"] = serde_json::json!("not-base58-!!");
+    assert!(serde_json::from_value::<crate::ws::types::RfqBroadcastMessage>(json).is_err());
 }
 
 #[test]
@@ -403,17 +413,17 @@ fn delegated_signer_puts_the_maker_owner_in_the_preimage() {
 
     let quote = builder
         .clone()
-        .maker_owner(owner)
+        .maker_owner(crate::Address32::new(owner))
         .sign(&signer)
         .expect("signs");
 
     let server_view = OrderPreimageArgs {
         chain_id: 0,
         program_id: PROGRAM,
-        is_taker_buy: false,
+        side: TakerSide::Sell,
         position_type: PositionType::CoveredCall,
         market: market(),
-        strike: quote.strike.value(),
+        strike: quote.terms.strike().value(),
         quantity: 5,
         gross_price: quote.price.value(),
         valid_until: quote.valid_until.as_unix_seconds(),
@@ -421,7 +431,10 @@ fn delegated_signer_puts_the_maker_owner_in_the_preimage() {
         taker: TAKER,
         nonce: quote.nonce.value(),
     };
-    assert_eq!(compute_order_id(&server_view), *quote.order_id.as_bytes());
+    assert_eq!(
+        compute_order_id(&server_view).unwrap(),
+        *quote.order_id.as_bytes()
+    );
     assert_ne!(
         quote.order_id,
         builder.sign(&signer).expect("signs").order_id
@@ -429,10 +442,10 @@ fn delegated_signer_puts_the_maker_owner_in_the_preimage() {
 
     let args = builder
         .clone()
-        .maker_owner(owner)
+        .maker_owner(crate::Address32::new(owner))
         .preimage_args()
         .expect("preimage");
-    assert_eq!(compute_order_id(&args), *quote.order_id.as_bytes());
+    assert_eq!(compute_order_id(&args).unwrap(), *quote.order_id.as_bytes());
 
     let signature = crate::wire::decode_base58_64(&quote.signature).expect("base58 signature");
     verify_order_id_signature_bytes(
@@ -452,7 +465,7 @@ async fn delegated_async_signer_matches_the_local_path() {
         .price(Price::new(11))
         .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
         .nonce(Nonce::new(5))
-        .maker_owner(owner);
+        .maker_owner(crate::Address32::new(owner));
 
     let quote = builder
         .sign_with_async_signer(&remote)
@@ -467,12 +480,14 @@ async fn delegated_async_signer_matches_the_local_path() {
 #[test]
 fn put_binding_requires_the_locally_selected_program_and_seed_terms() {
     let custom_program = [4; 32];
-    let mut rfq = broadcast(100, &[]);
-    rfq.market.program_id = encode_base58(&custom_program);
+    let mut rfq = broadcast(covered_call(100), &[]);
+    rfq.market.program_id = crate::Address32::new(custom_program);
     rfq.market.is_put = true;
-    rfq.position_type = PositionType::CashSecuredPut;
-    rfq.market.collateral_mint = rfq.market.quote_mint.clone();
-    rfq.market.settlement_mint = rfq.market.underlying_mint.clone();
+    rfq.terms = OptionTerms::CashSecuredPut {
+        strike: rfq.terms.strike(),
+    };
+    rfq.market.collateral_mint = rfq.market.quote_mint;
+    rfq.market.settlement_mint = rfq.market.underlying_mint;
     let pda = solana_pubkey::Pubkey::find_program_address(
         &[
             b"market",
@@ -485,7 +500,7 @@ fn put_binding_requires_the_locally_selected_program_and_seed_terms() {
     )
     .0
     .to_bytes();
-    rfq.market.market_pda = encode_base58(&pda);
+    rfq.market.market_pda = crate::Address32::new(pda);
     assert!(matches!(
         RfqBinding::from_broadcast(&rfq),
         Err(QuoteBuildError::MarketBinding(_))
@@ -507,7 +522,7 @@ fn put_binding_requires_the_locally_selected_program_and_seed_terms() {
 
 #[test]
 fn broadcast_binding_rejects_descriptor_substitution() {
-    let valid = broadcast(100, &[]);
+    let valid = broadcast(covered_call(100), &[]);
     assert!(RfqBinding::from_broadcast(&valid).is_ok());
     for field in [
         "program",
@@ -517,22 +532,26 @@ fn broadcast_binding_rejects_descriptor_substitution() {
         "quote",
         "expiry",
         "is_put",
-        "position_type",
+        "terms",
         "collateral",
         "settlement",
     ] {
         let mut rfq = valid.clone();
         match field {
-            "program" => rfq.market.program_id = encode_base58(&[4; 32]),
+            "program" => rfq.market.program_id = crate::Address32::new([4; 32]),
             "chain" => rfq.market.chain_id = ChainId::new(1),
-            "market" => rfq.market.market_pda = encode_base58(&[4; 32]),
-            "underlying" => rfq.market.underlying_mint = encode_base58(&[4; 32]),
-            "quote" => rfq.market.quote_mint = encode_base58(&[4; 32]),
+            "market" => rfq.market.market_pda = crate::Address32::new([4; 32]),
+            "underlying" => rfq.market.underlying_mint = crate::Address32::new([4; 32]),
+            "quote" => rfq.market.quote_mint = crate::Address32::new([4; 32]),
             "expiry" => rfq.market.expiry_ts += Duration::from_secs(1),
             "is_put" => rfq.market.is_put = true,
-            "position_type" => rfq.position_type = PositionType::CashSecuredPut,
-            "collateral" => rfq.market.collateral_mint = encode_base58(&[4; 32]),
-            "settlement" => rfq.market.settlement_mint = encode_base58(&[4; 32]),
+            "terms" => {
+                rfq.terms = OptionTerms::CashSecuredPut {
+                    strike: rfq.terms.strike(),
+                }
+            }
+            "collateral" => rfq.market.collateral_mint = crate::Address32::new([4; 32]),
+            "settlement" => rfq.market.settlement_mint = crate::Address32::new([4; 32]),
             _ => unreachable!(),
         }
         assert!(
@@ -540,4 +559,98 @@ fn broadcast_binding_rejects_descriptor_substitution() {
             "accepted substituted {field}"
         );
     }
+}
+
+#[test]
+fn spread_quotes_bind_pair_and_sign_v2() {
+    for position_type in [PositionType::CallSpread, PositionType::PutSpread] {
+        let terms = match position_type {
+            PositionType::CallSpread => OptionTerms::CallSpread {
+                lower_strike: Strike::new(100_000_000_000),
+                upper_strike: Strike::new(120_000_000_000),
+            },
+            PositionType::PutSpread => OptionTerms::PutSpread {
+                lower_strike: Strike::new(100_000_000_000),
+                upper_strike: Strike::new(120_000_000_000),
+            },
+            _ => unreachable!(),
+        };
+        let mut rfq = broadcast(terms, &[]);
+        rfq.quantity = Quantity::new(1_000_000);
+        rfq.order_options = vec![terms];
+        rfq.market.is_put = position_type.is_put();
+        rfq.market.collateral_mint = rfq.market.quote_mint;
+        rfq.market.settlement_mint = rfq.market.quote_mint;
+        rfq.market.market_pda = market_pda(
+            &solana_pubkey::Pubkey::new_from_array(PROGRAM),
+            &solana_pubkey::Pubkey::new_from_array([1; 32]),
+            &solana_pubkey::Pubkey::new_from_array([2; 32]),
+            2_000_000_000,
+            position_type.is_put(),
+        )
+        .into();
+        assert!(RfqBinding::from_broadcast(&rfq).is_ok());
+        let binding = RfqBinding::from_broadcast_for_program(&rfq, PROGRAM).unwrap();
+        let builder = quote_on(&binding)
+            .price(Price::new(1_000_000_000))
+            .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
+            .nonce(Nonce::new(u64::MAX));
+        let quote = builder.sign(&signer()).unwrap();
+        assert_eq!(quote.terms, terms);
+        assert_eq!(quote.side, TakerSide::Sell);
+        assert!(builder.preimage_args().is_err());
+        assert_eq!(
+            *quote.order_id.as_bytes(),
+            crate::orders::compute_spread_order_id(&builder.spread_preimage_args().unwrap())
+                .unwrap()
+        );
+        assert!(
+            builder
+                .clone()
+                .terms(match position_type {
+                    PositionType::CallSpread => OptionTerms::CallSpread {
+                        lower_strike: Strike::new(110_000_000_000),
+                        upper_strike: Strike::new(120_000_000_000),
+                    },
+                    PositionType::PutSpread => OptionTerms::PutSpread {
+                        lower_strike: Strike::new(110_000_000_000),
+                        upper_strike: Strike::new(120_000_000_000),
+                    },
+                    _ => unreachable!(),
+                })
+                .sign(&signer())
+                .is_err()
+        );
+        assert!(
+            builder
+                .price(Price::new(20_000_000_000))
+                .sign(&signer())
+                .is_err()
+        );
+        let replaced = quote.into_replacement(OrderId::new([1; 32]));
+        assert_eq!(replaced.terms, terms);
+        rfq.order_options[0] = match position_type {
+            PositionType::CallSpread => OptionTerms::CallSpread {
+                lower_strike: Strike::new(100_000_000_000),
+                upper_strike: Strike::new(130_000_000_000),
+            },
+            PositionType::PutSpread => OptionTerms::PutSpread {
+                lower_strike: Strike::new(100_000_000_000),
+                upper_strike: Strike::new(130_000_000_000),
+            },
+            _ => unreachable!(),
+        };
+        assert!(RfqBinding::from_broadcast_for_program(&rfq, PROGRAM).is_err());
+    }
+}
+
+#[test]
+fn buy_terms_are_refused_before_quote_assembly() {
+    let mut rfq = broadcast(covered_call(100), &[]);
+    rfq.side = TakerSide::Buy;
+
+    assert!(matches!(
+        RfqBinding::from_broadcast(&rfq),
+        Err(QuoteBuildError::TakerBuyUnsupported)
+    ));
 }

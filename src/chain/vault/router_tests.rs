@@ -418,7 +418,7 @@ fn mainnet_account_decoders() {
 #[test]
 fn funding_current_cycle_held_itm_only() {
     use crate::chain::{MarketInfo, PositionInfo, PositionStatus};
-    use crate::types::{Decimals, OrderId, PositionType, Quantity, Strike};
+    use crate::types::{Decimals, OrderId, Quantity};
     let manager = manager();
     let mut vault = manager.test_account(VaultStagingState::default());
     vault.active_expiry = 200;
@@ -436,15 +436,17 @@ fn funding_current_cycle_held_itm_only() {
         quote_decimals: Decimals::new(6),
     };
     let mut position = PositionInfo {
+        terms: crate::OptionTerms::CoveredCall {
+            strike: crate::Strike::new(100_000_000_000),
+        },
+        side: crate::TakerSide::Sell,
         flags: 0,
         flags2: 0,
         flags3: 0,
-        position_type: PositionType::CoveredCall,
         status: PositionStatus::Open,
         taker_owner: key(90),
         maker_owner: manager.addresses.vault,
         market_pda: key(91),
-        strike: Strike::new(100_000_000_000),
         quantity: Quantity::new(2_000_000_000),
         order_id: OrderId::new([1; 32]),
     };

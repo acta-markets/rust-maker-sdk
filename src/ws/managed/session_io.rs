@@ -159,7 +159,7 @@ mod tests {
     async fn explicit_epoch_quote_is_rejected_after_queue_wait_and_reconnect() {
         use crate::ws::managed::{ManagedWsHandle, ManagedWsState};
         use crate::ws::types::QuoteMessage;
-        use crate::{Nonce, OrderId, Price, QuoteExpiry, Strike};
+        use crate::{Nonce, OptionTerms, OrderId, Price, QuoteExpiry, Strike, TakerSide};
 
         let (handle, mut commands) = ManagedWsHandle::test_handle(1, 1);
         handle.inject_state(ManagedWsState::Ready {
@@ -168,7 +168,10 @@ mod tests {
         let blocking_ticket = handle.try_send(ClientMessage::Ping).unwrap();
         let quote = ClientMessage::Quote(QuoteMessage {
             rfq_id: uuid::Uuid::nil(),
-            strike: Strike::new(1),
+            terms: OptionTerms::CoveredCall {
+                strike: Strike::new(1),
+            },
+            side: TakerSide::Sell,
             price: Price::new(2),
             valid_until: QuoteExpiry::from_unix_seconds(100),
             nonce: Nonce::new(3),

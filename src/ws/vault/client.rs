@@ -8,7 +8,7 @@ use crate::orders::SignerLike;
 use crate::quote::{QuoteBuildError, QuoteBuilder};
 use crate::types::VaultDelegatePermissions;
 use crate::types::ids::OrderId;
-use crate::wire::{WireError, decode_base58_32};
+use crate::wire::WireError;
 use crate::ws::managed::{
     ManagedMessageReceiver, ManagedWsConfigError, ManagedWsError, ManagedWsEvent, ManagedWsHandle,
     ManagedWsState, ReferenceChangeReceiver, SendAwaitError, SendTicket, WaitUntilReadyError,
@@ -23,9 +23,11 @@ use crate::ws::types::{
 };
 
 use solana_sdk::message::AddressLookupTableAccount;
+use solana_sdk::pubkey::Pubkey;
 
 use crate::chain::vault::{
-    ComputeBudgetBounds, VaultOpenIntent, VaultSwapIntent, verify_vault_open, verify_vault_swap,
+    ComputeBudgetBounds, VaultIntentError, VaultOpenIntent, VaultSwapIntent, verify_vault_open,
+    verify_vault_swap,
 };
 
 use super::config::VaultOperatorConfig;
@@ -45,6 +47,8 @@ pub enum VaultClientError {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum VaultRequestError {
+    #[error("taker_buy_unsupported")]
+    TakerBuyUnsupported,
     #[error(transparent)]
     Session(#[from] ManagedWsError),
     #[error(transparent)]
@@ -86,6 +90,7 @@ impl VaultRequestError {
             },
             Self::Session(ManagedWsError::NotReady | ManagedWsError::QueueFull)
             | Self::Gated
+            | Self::TakerBuyUnsupported
             | Self::Transport(
                 SendAwaitError::SubscriptionPending
                 | SendAwaitError::NotReady
@@ -106,39 +111,29 @@ impl VaultRequestError {
 #[derive(Clone)]
 pub struct VaultOperatorClient {
     inner: ManagedWsHandle,
-    vault_pda: String,
-    vault_owner: [u8; 32],
+    vault_pda: crate::Address32,
     operator: Arc<dyn SignerLike + Send + Sync>,
     request_timeout: Duration,
 }
 
 impl VaultOperatorClient {
     pub fn spawn(config: VaultOperatorConfig) -> Result<Self, VaultClientError> {
-        let vault_owner =
-            decode_base58_32(&config.vault_pda).map_err(VaultClientError::InvalidVaultPda)?;
         Ok(Self {
             inner: spawn_managed_ws(config.managed)?,
             vault_pda: config.vault_pda,
-            vault_owner,
             operator: config.operator,
             request_timeout: config.request_timeout,
         })
     }
 
     #[must_use]
-    pub fn vault_pda(&self) -> &str {
+    pub fn vault_pda(&self) -> &crate::Address32 {
         &self.vault_pda
     }
 
-    /// Vault address used as `maker` in the order preimage.
     #[must_use]
-    pub const fn vault_owner(&self) -> [u8; 32] {
-        self.vault_owner
-    }
-
-    #[must_use]
-    pub fn operator_pubkey(&self) -> String {
-        self.operator.pubkey_base58()
+    pub fn operator_pubkey(&self) -> crate::Address32 {
+        crate::Address32::new(self.operator.pubkey_bytes())
     }
 
     /// `None` before authentication and after it ends.
@@ -180,7 +175,7 @@ impl VaultOperatorClient {
     pub fn sign_quote(&self, quote: &QuoteBuilder<'_>) -> Result<QuoteMessage, QuoteBuildError> {
         quote
             .clone()
-            .maker_owner(self.vault_owner)
+            .maker_owner(self.vault_pda)
             .sign(self.operator.as_ref())
     }
 
@@ -238,6 +233,9 @@ impl VaultOperatorClient {
 
     /// Resolves on the server's receipt; `RfqCreated` still arrives as a push.
     pub async fn rfq_request(&self, payload: RfqRequestMessage) -> Result<(), VaultRequestError> {
+        if payload.side.is_taker_buy() {
+            return Err(VaultRequestError::TakerBuyUnsupported);
+        }
         self.command(ClientMessage::RfqRequest(payload)).await
     }
 
@@ -257,13 +255,44 @@ impl VaultOperatorClient {
         tables: &[AddressLookupTableAccount],
         bounds: ComputeBudgetBounds,
     ) -> Result<SubmitSignedSponsoredTxData, VaultTxError> {
+        self.verify_and_sign_sponsored_tx_with_participant_signature(
+            to_sign, intent, tables, bounds,
+        )
+        .map(|(submit, _)| submit)
+    }
+
+    pub(crate) fn verify_and_sign_sponsored_tx_with_participant_signature(
+        &self,
+        to_sign: &SponsoredTxToSignData,
+        intent: &VaultOpenIntent<'_>,
+        tables: &[AddressLookupTableAccount],
+        bounds: ComputeBudgetBounds,
+    ) -> Result<(SubmitSignedSponsoredTxData, String), VaultTxError> {
+        let expected_participant = match intent {
+            VaultOpenIntent::Sale { writer, .. }
+            | VaultOpenIntent::BetweenVaults { writer, .. } => writer.actor(),
+            VaultOpenIntent::Fill { taker, .. } => *taker,
+        };
+        let signer = Pubkey::new_from_array(self.operator.pubkey_bytes());
+        if signer != expected_participant {
+            return Err(VaultIntentError::ParticipantSigner {
+                expected: expected_participant,
+                found: signer,
+            }
+            .into());
+        }
         let transaction = verify_vault_open(to_sign, intent, tables, bounds)?;
         ensure_system_time_ahead("signature_deadline", to_sign.signature_deadline)?;
-        Ok(SubmitSignedSponsoredTxData {
-            request_id: Uuid::new_v4(),
-            order_id: to_sign.order_id,
-            tx_base64: transaction.sign(self.operator.as_ref())?,
-        })
+        let (tx_base64, participant_signature) =
+            transaction.sign_with_participant_signature(self.operator.as_ref())?;
+        Ok((
+            SubmitSignedSponsoredTxData {
+                request_id: Uuid::new_v4(),
+                order_id: to_sign.order_id,
+                tx_base64,
+            },
+            participant_signature,
+        ))
     }
 
     pub async fn submit_signed_sponsored_tx(

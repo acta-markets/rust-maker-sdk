@@ -6,9 +6,10 @@ mod common;
 #[path = "common/venue.rs"]
 mod venue;
 
+use acta_maker_sdk::chain::ChainClient;
 use acta_maker_sdk::chain::vault::{
     ComputeBudgetBounds, PairPriceRoutes, VaultAccount, VaultManager, VaultOpenIntent,
-    VaultSwapIntent, VaultTradeTerms,
+    VaultSaleTerms, VaultSwapIntent,
 };
 use acta_maker_sdk::ws::managed::*;
 use acta_maker_sdk::ws::types::*;
@@ -35,14 +36,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "set ACTA_VAULT_PDA to the vault this operator key is delegated for")?;
 
     let config = VaultOperatorConfig::new(
+        acta_maker_sdk::ProductSet::ALL,
         url,
         HelloData {
             protocol_version: WS_PROTOCOL_VERSION.to_string(),
-            features: vec![],
-            client_name: Some("vault-operator".to_string()),
-            client_version: Some("0.1.0".to_string()),
+            on_disconnect: acta_maker_sdk::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "vault-operator".to_string(),
+            client_version: "0.1.0".to_string(),
         },
-        vault_pda,
+        acta_maker_sdk::Address32::from_base58(&vault_pda)?,
         operator,
     )
     .with_managed(|managed| managed.low_latency());
@@ -95,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(format!("message stream failed: {error}").into()),
         };
         match msg.message() {
-            ServerMessage::RfqBroadcast(rfq) if client.can_maker() => {
+            ServerMessage::RfqBroadcast(rfq) if client.can_maker() && !rfq.terms.is_spread() => {
                 let valid_until =
                     QuoteExpiry::after(lifetime).ok_or("system clock is before the Unix epoch")?;
                 let binding = RfqBinding::from_broadcast(rfq)?;
@@ -138,15 +140,18 @@ const COMPUTE_BOUNDS: ComputeBudgetBounds = ComputeBudgetBounds {
 #[allow(dead_code)]
 async fn sign_fill(
     client: &VaultOperatorClient,
+    chain: &ChainClient,
     holder: &VaultManager,
     taker: Pubkey,
-    terms: VaultTradeTerms,
+    terms: VaultSaleTerms,
     lookup_tables: &[AddressLookupTableAccount],
     to_sign: &SponsoredTxToSignData,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let keeper = chain.hot_authority().await?;
     let signed = client.verify_and_sign_sponsored_tx(
         to_sign,
         &VaultOpenIntent::Fill {
+            keeper,
             holder,
             taker,
             terms,
@@ -172,7 +177,7 @@ async fn rebalance(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let request = SwapQuoteData {
         request_id: Uuid::new_v4(),
-        vault_pda: client.vault_pda().to_string(),
+        vault_pda: *client.vault_pda(),
         mode: VaultSwapMode::Rebalance,
         direction,
         amount: amount.to_string(),

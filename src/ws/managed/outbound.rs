@@ -25,6 +25,8 @@ impl SendTicket {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum OutboundMessageError {
+    #[error("taker_buy_unsupported")]
+    TakerBuyUnsupported,
     #[error("batch contains {actual} quotes, maximum is {limit}")]
     BatchTooLarge { actual: usize, limit: usize },
     #[error("serialized message is {actual} bytes, maximum is {limit}")]
@@ -38,6 +40,9 @@ pub(super) fn prepare_outbound(
     max_batch_quotes: usize,
     max_message_size: usize,
 ) -> Result<PreparedClientMessage, OutboundMessageError> {
+    if has_taker_buy(message) {
+        return Err(OutboundMessageError::TakerBuyUnsupported);
+    }
     if let ClientMessage::BatchQuotes(batch) = message
         && batch.quotes.len() > max_batch_quotes
     {
@@ -54,4 +59,17 @@ pub(super) fn prepare_outbound(
         });
     }
     Ok(prepared)
+}
+
+fn has_taker_buy(message: &ClientMessage) -> bool {
+    match message {
+        ClientMessage::RfqRequest(request) => request.side.is_taker_buy(),
+        ClientMessage::Quote(quote) => quote.side.is_taker_buy(),
+        ClientMessage::ReplaceQuote(quote) => quote.side.is_taker_buy(),
+        ClientMessage::BatchQuotes(batch) => {
+            batch.quotes.iter().any(|quote| quote.side.is_taker_buy())
+        }
+        ClientMessage::CheckQuote(request) => request.side.is_taker_buy(),
+        _ => false,
+    }
 }

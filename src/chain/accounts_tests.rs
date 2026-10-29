@@ -1,4 +1,5 @@
 use super::*;
+use crate::PositionType;
 
 fn account(owner: Pubkey, data: Vec<u8>) -> Account {
     Account {
@@ -32,12 +33,13 @@ fn position_layout_decodes_canonical_offsets() {
     data[POSITION_OFFSET_ORDER_ID..POSITION_OFFSET_ORDER_ID + 32].fill(11);
 
     let position = PositionInfo::from_account(&account(program_id, data), &program_id).unwrap();
-    assert_eq!(position.position_type, PositionType::CashSecuredPut);
+    assert_eq!(position.terms.position_type(), PositionType::CashSecuredPut);
     assert_eq!(position.status, PositionStatus::Open);
     assert_eq!(position.taker_owner, taker);
     assert_eq!(position.maker_owner, maker);
     assert_eq!(position.market_pda, market);
-    assert_eq!(position.strike, Strike::new(7));
+    assert_eq!(position.terms.strike(), Strike::new(7));
+    assert_eq!(position.side, TakerSide::Sell);
     assert_eq!(position.quantity, Quantity::new(9));
     assert_eq!(position.order_id, OrderId::new([11; 32]));
 }
@@ -159,6 +161,52 @@ fn maker_layout_decodes_owner_and_quote_signer_only_from_the_program() {
     data.push(0);
     assert!(matches!(
         MakerInfo::from_account(&account(program_id, data), &program_id),
+        Err(ChainError::InvalidAccountData)
+    ));
+}
+
+#[test]
+fn global_config_decodes_only_the_current_checked_layout() {
+    let program_id = Pubkey::new_unique();
+    let hot_authority = Pubkey::new_unique();
+    let mut data = vec![0; GLOBAL_CONFIG_LEN];
+    data[ACCOUNT_OFFSET_DISCRIMINATOR] = GLOBAL_CONFIG_DISCRIMINATOR;
+    data[ACCOUNT_OFFSET_VERSION] = ACCOUNT_VERSION;
+    data[2] = 17;
+    data[GLOBAL_CONFIG_OFFSET_FLAGS] = 1;
+    data[GLOBAL_CONFIG_OFFSET_HOT_AUTHORITY..GLOBAL_CONFIG_OFFSET_HOT_AUTHORITY + 32]
+        .copy_from_slice(hot_authority.as_ref());
+
+    assert_eq!(
+        GlobalConfigInfo::from_account(&account(program_id, data.clone()), &program_id).unwrap(),
+        GlobalConfigInfo {
+            hot_authority,
+            bump: 17,
+        }
+    );
+
+    let mut unknown_flag = data.clone();
+    unknown_flag[GLOBAL_CONFIG_OFFSET_FLAGS] = 2;
+    assert!(matches!(
+        GlobalConfigInfo::from_account(&account(program_id, unknown_flag), &program_id),
+        Err(ChainError::InvalidAccountData)
+    ));
+    let mut nonzero_padding = data.clone();
+    nonzero_padding[GLOBAL_CONFIG_OFFSET_PAD0] = 1;
+    assert!(matches!(
+        GlobalConfigInfo::from_account(&account(program_id, nonzero_padding), &program_id),
+        Err(ChainError::InvalidAccountData)
+    ));
+    let mut no_authority = data.clone();
+    no_authority[GLOBAL_CONFIG_OFFSET_HOT_AUTHORITY..GLOBAL_CONFIG_OFFSET_HOT_AUTHORITY + 32]
+        .fill(0);
+    assert!(matches!(
+        GlobalConfigInfo::from_account(&account(program_id, no_authority), &program_id),
+        Err(ChainError::InvalidAccountData)
+    ));
+    data.push(0);
+    assert!(matches!(
+        GlobalConfigInfo::from_account(&account(program_id, data), &program_id),
         Err(ChainError::InvalidAccountData)
     ));
 }

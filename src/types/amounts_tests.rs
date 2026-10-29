@@ -57,6 +57,32 @@ fn total_premium_takes_underlying_then_quote_decimals() {
 }
 
 #[test]
+fn physical_fee_is_the_smaller_of_premium_and_volume_fees() {
+    let split = |premium_bps, volume_bps| {
+        physical_premium(
+            Price::new(50_000_000),
+            Strike::new(100_000_000_000),
+            Quantity::new(3_500_000_000),
+            Decimals::new(9),
+            Decimals::new(6),
+            premium_bps,
+            volume_bps,
+        )
+    };
+    // 0.5% of 0.175 USDC = 875 atoms; 0.1% of the 350 USDC notional = 350 000.
+    assert_eq!(
+        split(50, 10),
+        Some(PhysicalPremium {
+            gross_premium: 175_000,
+            protocol_fee: 875,
+            net_premium: 174_125,
+        })
+    );
+    assert_eq!(split(50, 0).map(|split| split.protocol_fee), Some(0));
+    assert_eq!(split(10_001, 10), None);
+}
+
+#[test]
 fn display_views_divide_by_their_scale() {
     assert!((Strike::new(86_500_000_000).as_decimal() - 86.5).abs() < f64::EPSILON);
     assert!((Price::new(1_250_000_000).as_decimal() - 1.25).abs() < f64::EPSILON);

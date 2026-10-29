@@ -1,8 +1,54 @@
 use super::*;
 use crate::chain::ix::{FundPositionIxArgs, build_fund_position_ixs};
 use solana_sdk::{
-    hash::Hash, instruction::AccountMeta, signature::Keypair, transaction::Transaction,
+    account::Account, hash::Hash, instruction::AccountMeta, signature::Keypair,
+    transaction::Transaction,
 };
+
+fn global_config_account(program: Pubkey, bump: u8, hot_authority: Pubkey) -> Account {
+    let mut data = vec![0; 296];
+    data[..4].copy_from_slice(&[6, 1, bump, 0]);
+    data[8..40].copy_from_slice(hot_authority.as_ref());
+    Account {
+        lamports: 1,
+        data,
+        owner: program,
+        executable: false,
+        rent_epoch: 0,
+    }
+}
+
+#[tokio::test]
+async fn hot_authority_requires_the_canonical_checked_global_config() {
+    let program = Pubkey::new_unique();
+    let keeper = Pubkey::new_unique();
+    let (global, bump) = Pubkey::find_program_address(&[b"global_config"], &program);
+    let client = ChainClient::with_accounts(
+        program,
+        [(global, global_config_account(program, bump, keeper))],
+    );
+    assert_eq!(client.hot_authority().await.unwrap(), keeper);
+
+    let bad_bump = ChainClient::with_accounts(
+        program,
+        [(
+            global,
+            global_config_account(program, bump.wrapping_add(1), keeper),
+        )],
+    );
+    assert!(matches!(
+        bad_bump.hot_authority().await,
+        Err(ChainError::Identity("global config PDA"))
+    ));
+
+    let mut wrong_owner = global_config_account(program, bump, keeper);
+    wrong_owner.owner = Pubkey::new_unique();
+    let wrong_owner = ChainClient::with_accounts(program, [(global, wrong_owner)]);
+    assert!(matches!(
+        wrong_owner.hot_authority().await,
+        Err(ChainError::AccountOwnerMismatch { .. })
+    ));
+}
 
 #[test]
 fn transaction_signing_returns_error_for_missing_signer() {

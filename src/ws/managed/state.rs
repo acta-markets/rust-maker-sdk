@@ -32,10 +32,7 @@ pub enum ManagedWsTerminationReason {
     },
     /// Session task panicked; respawn the client to reconnect.
     SessionPanicked,
-    /// Server did not enable a required feature.
-    FeatureUnsupported {
-        feature: String,
-    },
+    UnsupportedProtocolVersion,
 }
 
 #[derive(Debug, thiserror::Error)]

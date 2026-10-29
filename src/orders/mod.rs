@@ -4,7 +4,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::signing::sign_verified;
-use crate::types::PositionType;
+use crate::types::{PositionType, TakerSide};
 use crate::wire::{WireError, decode_base58_32, decode_base58_64, encode_base58, encode_hex};
 use crate::{AsyncSignerLike, SigningError};
 
@@ -116,7 +116,7 @@ impl SignerLike for BytesSigner {
 pub struct OrderPreimageArgs {
     pub chain_id: u64,
     pub program_id: [u8; 32],
-    pub is_taker_buy: bool,
+    pub side: TakerSide,
     pub position_type: PositionType,
     pub market: [u8; 32],
     pub strike: u64,
@@ -130,6 +130,8 @@ pub struct OrderPreimageArgs {
 
 #[derive(Debug, Error)]
 pub enum OrderError {
+    #[error("spread types require the spread order layout")]
+    SpreadLayoutRequired,
     #[error("keypair public key does not match its secret key")]
     KeypairPublicKeyMismatch,
     #[error("invalid signing key: {0}")]
@@ -142,15 +144,30 @@ pub enum OrderError {
     Wire(#[from] WireError),
 }
 
-pub fn build_order_preimage(args: &OrderPreimageArgs) -> [u8; ORDER_PREIMAGE_LEN] {
+pub fn build_order_preimage(
+    args: &OrderPreimageArgs,
+) -> Result<[u8; ORDER_PREIMAGE_LEN], OrderError> {
+    if args.position_type.is_spread() {
+        return Err(OrderError::SpreadLayoutRequired);
+    }
+    Ok(build_physical_order_preimage(
+        args,
+        args.position_type == PositionType::CashSecuredPut,
+    ))
+}
+
+pub(crate) fn build_physical_order_preimage(
+    args: &OrderPreimageArgs,
+    is_put: bool,
+) -> [u8; ORDER_PREIMAGE_LEN] {
     let mut buf = [0u8; ORDER_PREIMAGE_LEN];
     buf[0..TAG_LEN].copy_from_slice(&ORDER_DOMAIN_TAG);
     buf[TAG_LEN..TAG_LEN + CHAIN_ID_LEN].copy_from_slice(&args.chain_id.to_le_bytes());
     buf[TAG_LEN + CHAIN_ID_LEN..HEADER_LEN].copy_from_slice(&args.program_id);
 
     let b = HEADER_LEN;
-    buf[b + OFF_IS_TAKER_BUY] = u8::from(args.is_taker_buy);
-    buf[b + OFF_POSITION_TYPE] = args.position_type.into();
+    buf[b + OFF_IS_TAKER_BUY] = u8::from(args.side.is_taker_buy());
+    buf[b + OFF_POSITION_TYPE] = u8::from(is_put);
     buf[b + OFF_MARKET..b + OFF_MARKET + PUBKEY_LEN].copy_from_slice(&args.market);
     buf[b + OFF_STRIKE..b + OFF_STRIKE + U64_LEN].copy_from_slice(&args.strike.to_le_bytes());
     buf[b + OFF_QUANTITY..b + OFF_QUANTITY + U64_LEN].copy_from_slice(&args.quantity.to_le_bytes());
@@ -169,8 +186,8 @@ pub fn hash_order_preimage(preimage: &[u8; ORDER_PREIMAGE_LEN]) -> [u8; ORDER_ID
     digest.into()
 }
 
-pub fn compute_order_id(args: &OrderPreimageArgs) -> [u8; ORDER_ID_LEN] {
-    hash_order_preimage(&build_order_preimage(args))
+pub fn compute_order_id(args: &OrderPreimageArgs) -> Result<[u8; ORDER_ID_LEN], OrderError> {
+    Ok(hash_order_preimage(&build_order_preimage(args)?))
 }
 
 pub fn order_id_hex(order_id: &[u8; ORDER_ID_LEN]) -> String {
@@ -261,3 +278,6 @@ pub fn sign_order_id_from_base58_keypair(
 fn decode_hex32(hex_str: &str) -> Result<[u8; 32], OrderError> {
     crate::wire::decode_hex_32(hex_str).map_err(OrderError::Wire)
 }
+
+mod spreads;
+pub use spreads::*;

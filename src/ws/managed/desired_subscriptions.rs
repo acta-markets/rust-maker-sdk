@@ -18,9 +18,10 @@ pub(super) struct DesiredSubscriptions {
 
 #[derive(Debug, Clone, Default)]
 struct SubscriptionSet {
+    products: Option<crate::ProductSet>,
     channels: HashSet<WsChannel>,
-    underlying_mints: HashSet<String>,
-    quote_mints: HashSet<String>,
+    underlying_mints: HashSet<crate::Address32>,
+    quote_mints: HashSet<crate::Address32>,
 }
 
 #[derive(Debug)]
@@ -31,7 +32,7 @@ struct PendingSubscriptionChange {
 
 pub(super) struct SubscriptionRecovery {
     pub(super) unsubscribe: Option<UnsubscribeData>,
-    pub(super) subscribe: SubscribeData,
+    pub(super) subscribe: Option<SubscribeData>,
 }
 
 impl DesiredSubscriptions {
@@ -119,9 +120,7 @@ impl DesiredSubscriptions {
         let extra_channels = actual
             .channels
             .iter()
-            .filter(|channel| {
-                **channel != WsChannel::Unknown && !self.current.channels.contains(channel)
-            })
+            .filter(|channel| !self.current.channels.contains(channel))
             .copied()
             .collect::<Vec<_>>();
         let unsubscribe = (!extra_channels.is_empty()).then(|| UnsubscribeData {
@@ -130,37 +129,36 @@ impl DesiredSubscriptions {
         });
         SubscriptionRecovery {
             unsubscribe,
-            subscribe: SubscribeData {
+            subscribe: self.current.products.map(|products| SubscribeData {
+                products,
                 request_id: Uuid::new_v4(),
                 channels: self.current.channels.iter().copied().collect(),
-                underlying_mints: Some(self.current.underlying_mints.iter().cloned().collect()),
-                quote_mints: Some(self.current.quote_mints.iter().cloned().collect()),
-            },
+                underlying_mints: self.current.underlying_mints.iter().cloned().collect(),
+                quote_mints: self.current.quote_mints.iter().cloned().collect(),
+            }),
         }
     }
 }
 
 impl SubscriptionSet {
     fn apply_subscribe(&mut self, data: &SubscribeData) {
+        self.products = Some(data.products);
         self.channels.extend(data.channels.iter().copied());
-        if data.underlying_mints.is_some() || data.quote_mints.is_some() {
-            self.underlying_mints = normalized(data.underlying_mints.as_deref());
-            self.quote_mints = normalized(data.quote_mints.as_deref());
-        }
+        self.underlying_mints = normalized(&data.underlying_mints);
+        self.quote_mints = normalized(&data.quote_mints);
     }
 
     fn add_mints(&mut self, data: &AddMintsData) {
         self.underlying_mints
-            .extend(normalized(data.underlying_mints.as_deref()));
-        self.quote_mints
-            .extend(normalized(data.quote_mints.as_deref()));
+            .extend(normalized(&data.underlying_mints));
+        self.quote_mints.extend(normalized(&data.quote_mints));
     }
 
     fn remove_mints(&mut self, data: &RemoveMintsData) {
-        for mint in normalized(data.underlying_mints.as_deref()) {
+        for mint in normalized(&data.underlying_mints) {
             self.underlying_mints.remove(&mint);
         }
-        for mint in normalized(data.quote_mints.as_deref()) {
+        for mint in normalized(&data.quote_mints) {
             self.quote_mints.remove(&mint);
         }
     }
@@ -176,14 +174,8 @@ impl SubscriptionSet {
     }
 }
 
-fn normalized(mints: Option<&[String]>) -> HashSet<String> {
-    mints
-        .into_iter()
-        .flatten()
-        .map(|mint| mint.trim())
-        .filter(|mint| !mint.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+fn normalized(mints: &[crate::Address32]) -> HashSet<crate::Address32> {
+    mints.iter().copied().collect()
 }
 
 #[cfg(test)]
@@ -193,10 +185,11 @@ mod tests {
 
     fn initial() -> SubscribeData {
         SubscribeData {
+            products: crate::ProductSet::ALL,
             request_id: Uuid::new_v4(),
             channels: vec![WsChannel::Rfqs],
-            underlying_mints: Some(vec!["underlying".to_string()]),
-            quote_mints: Some(vec!["quote".to_string()]),
+            underlying_mints: vec![crate::Address32::new([52; 32])],
+            quote_mints: vec![crate::Address32::new([99; 32])],
         }
     }
 
@@ -213,7 +206,7 @@ mod tests {
         desired.resolve(&ServerMessage::RequestError(RequestErrorEnvelope {
             request_id,
             error: ServerError::Generic {
-                code: WsErrorCode::Unknown("rejected".into()),
+                code: WsErrorCode::SubscriptionScopeTooLarge,
                 message: "test".to_string(),
             },
             delivery: None,
@@ -222,11 +215,14 @@ mod tests {
         let recovery = desired.recovery(&SubscriptionsMessage {
             request_id: Uuid::new_v4(),
             channels: Vec::new(),
-            underlying_mints: None,
-            quote_mints: None,
+            underlying_mints: vec![],
+            quote_mints: vec![],
         });
         assert!(!desired.has_pending());
-        assert_eq!(recovery.subscribe.channels, vec![WsChannel::Rfqs]);
+        assert_eq!(
+            recovery.subscribe.as_ref().unwrap().channels,
+            vec![WsChannel::Rfqs]
+        );
     }
 
     #[test]
@@ -234,19 +230,22 @@ mod tests {
         let mut desired = DesiredSubscriptions::from_initial(Some(&initial()));
         desired.begin(&SubscriptionChange::RemoveMints(RemoveMintsData {
             request_id: Uuid::new_v4(),
-            underlying_mints: Some(vec!["underlying".to_string()]),
-            quote_mints: Some(vec!["quote".to_string()]),
+            underlying_mints: vec![crate::Address32::new([52; 32])],
+            quote_mints: vec![crate::Address32::new([99; 32])],
         }));
         desired.connection_lost();
 
         let recovery = desired.recovery(&SubscriptionsMessage {
             request_id: Uuid::new_v4(),
             channels: Vec::new(),
-            underlying_mints: Some(vec!["stale".to_string()]),
-            quote_mints: Some(vec!["stale".to_string()]),
+            underlying_mints: vec![crate::Address32::new([160; 32])],
+            quote_mints: vec![crate::Address32::new([160; 32])],
         });
-        assert_eq!(recovery.subscribe.underlying_mints, Some(Vec::new()));
-        assert_eq!(recovery.subscribe.quote_mints, Some(Vec::new()));
+        assert_eq!(
+            recovery.subscribe.as_ref().unwrap().underlying_mints,
+            Vec::new()
+        );
+        assert_eq!(recovery.subscribe.as_ref().unwrap().quote_mints, Vec::new());
     }
 
     #[test]
@@ -255,43 +254,23 @@ mod tests {
         let recovery = desired.recovery(&SubscriptionsMessage {
             request_id: Uuid::new_v4(),
             channels: vec![WsChannel::Rfqs, WsChannel::Trades],
-            underlying_mints: Some(vec!["old-underlying".to_string()]),
-            quote_mints: Some(vec!["old-quote".to_string()]),
+            underlying_mints: vec![crate::Address32::new([99; 32])],
+            quote_mints: vec![crate::Address32::new([197; 32])],
         });
 
         let unsubscribe = recovery.unsubscribe.expect("extra channel must be removed");
         assert_eq!(unsubscribe.channels, vec![WsChannel::Trades]);
-        assert_eq!(recovery.subscribe.channels, vec![WsChannel::Rfqs]);
         assert_eq!(
-            recovery.subscribe.underlying_mints,
-            Some(vec!["underlying".to_string()])
+            recovery.subscribe.as_ref().unwrap().channels,
+            vec![WsChannel::Rfqs]
         );
         assert_eq!(
-            recovery.subscribe.quote_mints,
-            Some(vec!["quote".to_string()])
+            recovery.subscribe.as_ref().unwrap().underlying_mints,
+            vec![crate::Address32::new([52; 32])]
         );
-    }
-    #[test]
-    fn recovery_never_sends_an_unknown_channel_back_to_the_server() {
-        let desired = DesiredSubscriptions::from_initial(Some(&initial()));
-        for (actual, expected) in [
-            (vec![WsChannel::Unknown], None),
-            (
-                vec![WsChannel::Trades, WsChannel::Unknown],
-                Some(vec![WsChannel::Trades]),
-            ),
-        ] {
-            let recovery = desired.recovery(&SubscriptionsMessage {
-                request_id: Uuid::new_v4(),
-                channels: actual,
-                underlying_mints: None,
-                quote_mints: None,
-            });
-            assert_eq!(
-                recovery.unsubscribe.map(|message| message.channels),
-                expected
-            );
-            assert_eq!(recovery.subscribe.channels, vec![WsChannel::Rfqs]);
-        }
+        assert_eq!(
+            recovery.subscribe.as_ref().unwrap().quote_mints,
+            vec![crate::Address32::new([99; 32])]
+        );
     }
 }

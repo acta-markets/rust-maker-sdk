@@ -1,3 +1,4 @@
+use crate::Address32;
 use crate::types::ids::Price;
 use crate::types::unix_time::UnixSeconds;
 use std::time::SystemTime;
@@ -16,13 +17,15 @@ pub enum MarketStatus {
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarketInfo {
-    pub pda: String,
-    pub underlying: String,
-    pub quote: String,
+    pub products: crate::types::ProductSet,
+    pub pda: Address32,
+    pub underlying: Address32,
+    pub quote: Address32,
     #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
     pub is_put: bool,
     pub status: MarketStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub settlement_price: Option<Price>,
 }

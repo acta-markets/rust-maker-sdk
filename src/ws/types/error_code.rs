@@ -1,10 +1,12 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr};
 
-/// `Generic.code` / `AuthError.reason`. Codes newer than this SDK land in `Unknown`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
+/// `Generic.code` / `AuthError.reason`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString, IntoStaticStr,
+)]
+#[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum WsErrorCode {
     ParseError,
     TooManyParseErrors,
@@ -33,12 +35,12 @@ pub enum WsErrorCode {
     AlreadyAuthenticated,
     ChallengeNotIssued,
     ChallengeMismatch,
-    InvalidPubkey,
+
     PubkeyMismatch,
     InvalidSignature,
-    InvalidOperator,
+
     OperatorMismatch,
-    InvalidVault,
+
     VaultAuthNotStarted,
     VaultAuthRequired,
     VaultResumeNotSupported,
@@ -47,22 +49,28 @@ pub enum WsErrorCode {
     VaultSessionInvalidated,
 
     InvalidVaultSubscription,
+    InvalidProducts,
     SubscriptionScopeTooLarge,
     HistoryProjectionIncomplete,
-    InvalidPositionStatus,
-    InvalidCursor,
-    InvalidQueryScope,
+    InvalidLimit,
+    InvalidTimeout,
     MarketNotFound,
     InvalidProgramId,
+    UnsupportedProtocolVersion,
 
     InvalidStrikeNotional,
     InsufficientCollateral,
     InvalidQuantitySizeRule,
+    ProductNotAllowed,
     MissingSizeRuleForUnderlyingMint,
     InvalidUnderlyingMintKey,
     MissingTickForUnderlyingMint,
     LadderStrikeSourceUnavailable,
     InvalidStrikes,
+    TakerBuyUnsupported,
+    SpreadInvalidStrikes,
+    SpreadTickViolation,
+    SpreadPremiumInvalid,
     DuplicateRfqId,
     RfqClosed,
     MarketFinalized,
@@ -99,40 +107,18 @@ pub enum WsErrorCode {
     VaultSwapOracleStale,
     VaultSwapRouteUnavailable,
     VaultSwapServiceUnavailable,
-
-    #[strum(default)]
-    Unknown(String),
 }
 
 impl WsErrorCode {
     #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Unknown(code) => code,
-            known => known.into(),
-        }
+    pub fn as_str(self) -> &'static str {
+        self.into()
     }
 }
 
 impl std::fmt::Display for WsErrorCode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
-    }
-}
-
-impl Serialize for WsErrorCode {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for WsErrorCode {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let code = String::deserialize(deserializer)?;
-        match code.parse() {
-            Ok(known) => Ok(known),
-            Err(_) => Ok(Self::Unknown(code)),
-        }
     }
 }
 
@@ -151,13 +137,18 @@ mod tests {
     }
 
     #[test]
-    fn unknown_code_round_trips() {
-        let code: WsErrorCode = serde_json::from_str("\"brand_new_code\"").expect("parse");
-        assert_eq!(code, WsErrorCode::Unknown("brand_new_code".into()));
-        assert_eq!(code.as_str(), "brand_new_code");
+    fn unsupported_protocol_version_maps_to_typed_variant() {
+        let code: WsErrorCode =
+            serde_json::from_str("\"unsupported_protocol_version\"").expect("parse");
+        assert_eq!(code, WsErrorCode::UnsupportedProtocolVersion);
         assert_eq!(
             serde_json::to_string(&code).expect("ser"),
-            "\"brand_new_code\""
+            "\"unsupported_protocol_version\""
         );
+    }
+
+    #[test]
+    fn unknown_code_is_rejected() {
+        assert!(serde_json::from_str::<WsErrorCode>("\"brand_new_code\"").is_err());
     }
 }

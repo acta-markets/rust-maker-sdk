@@ -5,7 +5,6 @@ use crate::ws::types::{MarketInfo, TokenInfo};
 
 /// Public `/api/v1/vaults` row. Integers wider than JSON-safe stay decimal strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct Vault {
     pub vault_pda: String,
     pub vault_id: String,
@@ -44,66 +43,86 @@ pub struct Vault {
     pub last_hwm_update_ts: String,
     pub last_hwm_reset_ts: String,
     pub last_settlement_ts: String,
-    pub cap_limit: String,
     pub capacity: VaultCapacity,
     pub capital_fallback_delay_secs: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub deposit_window_set_ts: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub main_balance: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub second_balance: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub balance_updated_at: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub live_share_supply: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub observed_manager_stake_shares: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub balance_chain_slot: Option<String>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub staging: Option<VaultStaging>,
     /// The next stage carries `staged_generation + 1`.
     pub staged_generation: String,
     pub policy: VaultPolicy,
     pub projection: ProjectionCursor,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub created_at: Option<String>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub generation_started_at: Option<String>,
     /// Indicative: booked equity at the main mint's USD price, 1e9 scale.
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub tvl_usd_1e9: Option<String>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub price_time: Option<String>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub premium: Option<Vec<VaultPremium>>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub fees: Option<VaultFees>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub depositors_in_generation: Option<u64>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub performance: Option<VaultPerformance>,
     /// Display only; `governance` is the authority.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub metadata: Option<VaultMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultMetadata {
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub curator: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub strategy: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub website: Option<String>,
     /// X handle without `@`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub twitter: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub logo_url: Option<String>,
 }
 
 /// Leg balance moved into a vault ATA of another mint, pending return to a leg.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultStaging {
     pub mint: String,
     pub from_leg: VaultLeg,
@@ -114,18 +133,14 @@ pub struct VaultStaging {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub enum TokenProgramKind {
     #[serde(rename = "legacy_spl")]
     LegacySpl,
     #[serde(rename = "token_2022")]
     Token2022,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultPolicy {
     pub max_open_positions: u16,
     pub max_rebalance_drift_bps: u16,
@@ -133,7 +148,6 @@ pub struct VaultPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct ProjectionCursor {
     pub version: String,
     pub slot: String,
@@ -142,18 +156,19 @@ pub struct ProjectionCursor {
     pub event_index: u32,
 }
 
-/// `remaining` is `None` when uncapped (`cap_limit` is 0).
+/// A zero on-chain cap means the vault accepts deposits without a limit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct VaultCapacity {
-    pub cap_limit: String,
-    #[serde(default)]
-    pub remaining: Option<String>,
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VaultCapacity {
+    Unlimited {},
+    Limited {
+        cap_limit: String,
+        remaining: String,
+    },
 }
 
 /// Net premium per quote mint, in quote atoms, for the current cycle and generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultPremium {
     pub quote_mint: String,
     pub cycle: PremiumFlow,
@@ -161,16 +176,15 @@ pub struct VaultPremium {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct PremiumFlow {
     pub received: String,
     /// `None` when a holder leg's market lacks decimals or its open price.
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub paid: Option<String>,
 }
 
 /// Generation totals in main atoms.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultFees {
     pub management_fee_assessed: String,
     pub performance_fee_assessed: String,
@@ -179,43 +193,50 @@ pub struct VaultFees {
 
 /// Metrics of `capital_generation` as of `computed_at`; all `None` unless `covered`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultPerformance {
     pub capital_generation: String,
     pub computed_at: String,
     pub covered: bool,
-    #[serde(default)]
+
     pub returns: VaultReturns,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub apy_30d: Option<f64>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub apy_90d: Option<f64>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub max_drawdown_pct: Option<f64>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub worst_cycle_return_pct: Option<f64>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub losing_cycles: Option<u64>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub cycles_completed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultReturns {
-    #[serde(rename = "7d", default)]
+    #[serde(rename = "7d")]
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub d7: Option<WindowReturn>,
-    #[serde(rename = "30d", default)]
+    #[serde(rename = "30d")]
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub d30: Option<WindowReturn>,
-    #[serde(rename = "90d", default)]
+    #[serde(rename = "90d")]
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub d90: Option<WindowReturn>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub all: Option<WindowReturn>,
 }
 
 /// Net-of-fee booked share price return between two checkpoint times.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct WindowReturn {
     pub return_pct: f64,
     pub from_time: String,
@@ -224,7 +245,6 @@ pub struct WindowReturn {
 
 /// Public `/api/v1/vaults/{pda}/positions` row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultPosition {
     pub vault: String,
     pub position: String,
@@ -232,54 +252,64 @@ pub struct VaultPosition {
     pub role: VaultPositionRole,
     pub market: String,
     pub position_type: VaultPositionType,
+    /// The lower strike for spreads.
     pub strike: String,
+    pub product: VaultPositionProduct,
     pub quantity: String,
     pub net_premium: String,
     pub counterparty: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub funded_amount: Option<String>,
     pub status: VaultPositionStatus,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub is_otm: Option<bool>,
     pub created_at: String,
     pub acquired_at: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub settled_at: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub transaction_signature: Option<String>,
 }
 
+/// Physical CC/CSP, or a cash spread with its upper strike and the quote atoms it reserves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VaultPositionProduct {
+    Physical,
+    Spread {
+        upper_strike: String,
+        collateral: String,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum VaultPositionRole {
     Writer,
     Holder,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum VaultPositionType {
     CoveredCall,
     CashSecuredPut,
-    #[serde(other)]
-    Unknown,
+    CallSpread,
+    PutSpread,
+    CashPut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum VaultPositionStatus {
     Open,
     Funded,
     Liquidated,
     Settled,
-    #[serde(other)]
-    Unknown,
 }
 
 /// Public `/api/v1/vaults/{pda}/exposure`: outstanding positions at the indicative spot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultExposure {
     pub vault_pda: String,
     /// Unix seconds the positions were read; never older than 15 s.
@@ -290,7 +320,6 @@ pub struct VaultExposure {
 
 /// `intrinsic` is in quote atoms: positive for holder legs, negative for writer legs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultExposurePosition {
     pub position: String,
     pub market: String,
@@ -302,30 +331,38 @@ pub struct VaultExposurePosition {
     pub expiry: String,
     pub underlying_mint: String,
     pub quote_mint: String,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub underlying_decimals: Option<u8>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub quote_decimals: Option<u8>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub spot: Option<String>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub spot_time: Option<String>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub distance_pct: Option<f64>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub itm: Option<bool>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub intrinsic: Option<String>,
 }
 
 /// `None` when any position of the quote mint lacks the value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct VaultExposureTotal {
     pub quote_mint: String,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub notional_at_strike: Option<String>,
-    #[serde(default)]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub outstanding_intrinsic: Option<String>,
 }
 
@@ -350,18 +387,27 @@ pub(super) struct TokensResponse {
     pub(super) tokens: Vec<TokenInfo>,
 }
 
-/// Public `/api/v1/venue`: limits the server validates against. `None` limits are unbounded.
+/// A configured count bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CountLimit {
+    Unlimited {},
+    Limited { value: u64 },
+}
+
+/// Public `/api/v1/venue`: limits the server validates against.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct Venue {
-    pub program_id: String,
+    pub protocol_fee_bps_premium: u16,
+    pub protocol_fee_bps_volume: u16,
+    pub program_id: crate::Address32,
     pub min_quote_validity_seconds: u32,
     pub settlement_buffer_seconds: u32,
     pub quote_refresh_lead_seconds: u32,
     pub min_rfq_timeout_seconds: u32,
     pub max_rfq_timeout_seconds: u32,
     pub signature_timeout_seconds: u64,
-    pub max_quotes_per_rfq: Option<u64>,
-    pub max_active_rfqs_per_taker: Option<u64>,
+    pub max_quotes_per_rfq: CountLimit,
+    pub max_active_rfqs_per_taker: CountLimit,
     pub pre_expiry_cutoff_seconds: u64,
 }

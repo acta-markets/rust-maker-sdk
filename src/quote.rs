@@ -1,12 +1,12 @@
-//! Quote assembly: [`RfqBinding`] decodes identities and resolves offered strikes;
+//! Quote assembly: [`RfqBinding`] decodes identities and resolves offered terms;
 //! [`QuoteBuilder`] derives the signed preimage and [`QuoteMessage`] from the
-//! same strike, price, expiry and nonce.
+//! same terms, price, expiry and nonce.
 
 use crate::orders::{OrderPreimageArgs, SignerLike, compute_order_id, sign_order_id_with_signer};
 use crate::signing::{AsyncSignerLike, SigningError};
-use crate::types::ids::{Nonce, OrderId, Price, Quantity, Strike};
-use crate::types::{PositionType, QuoteExpiry};
-use crate::wire::{WireError, decode_base58_32, encode_base58};
+use crate::types::ids::{Nonce, OrderId, Price, Quantity};
+use crate::types::{OptionTerms, PositionType, QuoteExpiry, TakerSide};
+use crate::wire::{WireError, encode_base58};
 use crate::ws::types::{QuoteMessage, ReplaceQuoteMessage, RfqBroadcastMessage};
 use std::time::Duration;
 use uuid::Uuid;
@@ -15,6 +15,10 @@ use uuid::Uuid;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum QuoteBuildError {
+    #[error(transparent)]
+    Order(#[from] crate::orders::OrderError),
+    #[error(transparent)]
+    Spread(#[from] crate::spreads::SpreadError),
     #[error("rfq field `{field}` is not a valid base58 32-byte key: {source}")]
     Identity {
         field: &'static str,
@@ -25,11 +29,11 @@ pub enum QuoteBuildError {
     #[error("rfq market does not match trusted signing terms: {0}")]
     MarketBinding(&'static str),
 
-    /// Strike absent from `RfqBroadcast.strike` and `order_options`.
-    #[error("strike {requested} is not offered by this rfq; offered: {offered:?}")]
-    StrikeNotOffered {
-        requested: Strike,
-        offered: Vec<Strike>,
+    /// Terms absent from `RfqBroadcast.terms` and `order_options`.
+    #[error("terms {requested:?} are not offered by this rfq; offered: {offered:?}")]
+    TermsNotOffered {
+        requested: OptionTerms,
+        offered: Vec<OptionTerms>,
     },
 
     #[error("quote is missing `{0}`")]
@@ -57,11 +61,14 @@ pub enum QuoteBuildError {
 
     #[error("signing failed: {0}")]
     Signing(#[from] SigningError),
+
+    #[error("taker_buy_unsupported")]
+    TakerBuyUnsupported,
 }
 
-/// An RFQ with its identities decoded and its strike set resolved.
+/// An RFQ with its identities decoded and its offered terms resolved.
 ///
-/// Reuse per RFQ to avoid repeated decoding and strike resolution.
+/// Build once per RFQ and reuse it for every quote on that RFQ.
 #[derive(Debug, Clone)]
 pub struct RfqBinding {
     rfq_id: Uuid,
@@ -70,14 +77,10 @@ pub struct RfqBinding {
     market: [u8; 32],
     market_expiry: QuoteExpiry,
     taker: [u8; 32],
-    position_type: PositionType,
+    terms: OptionTerms,
     quantity: Quantity,
-    requested_strike: Strike,
-    offered_strikes: Vec<Strike>,
-}
-
-fn identity(field: &'static str, value: &str) -> Result<[u8; 32], QuoteBuildError> {
-    decode_base58_32(value).map_err(|source| QuoteBuildError::Identity { field, source })
+    offered_terms: Vec<OptionTerms>,
+    side: TakerSide,
 }
 
 impl RfqBinding {
@@ -98,14 +101,44 @@ impl RfqBinding {
         rfq: &RfqBroadcastMessage,
         expected_program: [u8; 32],
     ) -> Result<Self, QuoteBuildError> {
+        let side = rfq.side;
+        if side.is_taker_buy() {
+            return Err(QuoteBuildError::TakerBuyUnsupported);
+        }
+        let terms = rfq.terms;
+        if terms.is_spread() {
+            let upper = terms
+                .upper_strike()
+                .ok_or(QuoteBuildError::MarketBinding("spread terms"))?;
+            if terms.position_type() != PositionType::CashPut && terms.strike().value() == 0 {
+                return Err(crate::spreads::SpreadError::InvalidStrikes.into());
+            }
+            crate::spreads::validate_strikes(
+                crate::spreads::SpreadType::try_from(u8::from(terms.to_chain().position_type()))?,
+                terms.to_chain().strike().value(),
+                upper.value(),
+            )?;
+            if rfq.quantity.value() == 0
+                || rfq.order_options.len() != 1
+                || rfq.order_options[0] != terms
+            {
+                return Err(QuoteBuildError::MarketBinding("spread pair"));
+            }
+        } else if rfq
+            .order_options
+            .iter()
+            .any(|option| option.is_spread() || option.position_type() != terms.position_type())
+        {
+            return Err(QuoteBuildError::MarketBinding("physical order_options"));
+        }
         let (market, market_expiry) = validate_market_binding(rfq, expected_program)?;
-        let mut offered_strikes = Vec::with_capacity(1 + rfq.order_options.len());
-        offered_strikes.push(rfq.strike);
-        offered_strikes.extend(
+        let mut offered_terms = Vec::with_capacity(1 + rfq.order_options.len());
+        offered_terms.push(terms);
+        offered_terms.extend(
             rfq.order_options
                 .iter()
-                .map(|option| option.strike)
-                .filter(|strike| *strike != rfq.strike),
+                .copied()
+                .filter(|option| *option != terms),
         );
 
         Ok(Self {
@@ -114,11 +147,11 @@ impl RfqBinding {
             program_id: expected_program,
             market,
             market_expiry,
-            taker: identity("taker", &rfq.taker)?,
-            position_type: rfq.position_type,
+            taker: rfq.taker.0,
+            terms,
             quantity: rfq.quantity,
-            requested_strike: rfq.strike,
-            offered_strikes,
+            offered_terms,
+            side,
         })
     }
 
@@ -135,7 +168,18 @@ impl RfqBinding {
 
     #[must_use]
     pub const fn position_type(&self) -> PositionType {
-        self.position_type
+        self.terms.position_type()
+    }
+
+    /// Complete terms selected by the taker for this RFQ.
+    #[must_use]
+    pub const fn terms(&self) -> OptionTerms {
+        self.terms
+    }
+
+    #[must_use]
+    pub const fn side(&self) -> TakerSide {
+        self.side
     }
 
     /// Latest `valid_until` the venue accepts for this RFQ.
@@ -144,17 +188,17 @@ impl RfqBinding {
         self.market_expiry
     }
 
-    /// Every strike this RFQ will accept a quote on.
+    /// Every term set this RFQ will accept a quote on.
     #[must_use]
-    pub fn offered_strikes(&self) -> &[Strike] {
-        &self.offered_strikes
+    pub fn offered_terms(&self) -> &[OptionTerms] {
+        &self.offered_terms
     }
 
-    /// Start a quote on this RFQ's requested strike.
+    /// Start a quote on this RFQ's requested terms.
     pub const fn quote(&self) -> QuoteBuilder<'_> {
         QuoteBuilder {
             binding: self,
-            strike: self.requested_strike,
+            terms: self.terms,
             price: None,
             valid_until: None,
             min_valid_until: None,
@@ -176,22 +220,22 @@ fn validate_market_binding(
     if descriptor.chain_id.value() != 0 {
         return Err(MarketBinding("chain_id"));
     }
-    if identity("market.program_id", &descriptor.program_id)? != expected_program {
+    if descriptor.program_id.0 != expected_program {
         return Err(MarketBinding("program_id"));
     }
-    if descriptor.is_put != (rfq.position_type == PositionType::CashSecuredPut) {
-        return Err(MarketBinding("position_type"));
+    if descriptor.is_put != rfq.terms.position_type().is_put() {
+        return Err(MarketBinding("terms"));
     }
-    let underlying = identity("market.underlying_mint", &descriptor.underlying_mint)?;
-    let quote = identity("market.quote_mint", &descriptor.quote_mint)?;
-    let (collateral, settlement) = if descriptor.is_put {
+    let underlying = descriptor.underlying_mint.0;
+    let quote = descriptor.quote_mint.0;
+    let (collateral, settlement) = if rfq.terms.is_spread() {
+        (quote, quote)
+    } else if descriptor.is_put {
         (quote, underlying)
     } else {
         (underlying, quote)
     };
-    if identity("market.collateral_mint", &descriptor.collateral_mint)? != collateral
-        || identity("market.settlement_mint", &descriptor.settlement_mint)? != settlement
-    {
+    if descriptor.collateral_mint.0 != collateral || descriptor.settlement_mint.0 != settlement {
         return Err(MarketBinding("collateral/settlement mint"));
     }
     let expiry = descriptor
@@ -209,7 +253,7 @@ fn validate_market_binding(
         descriptor.is_put,
     )
     .to_bytes();
-    let market = identity("market.market_pda", &descriptor.market_pda)?;
+    let market = descriptor.market_pda.0;
     if market != expected_market {
         return Err(MarketBinding("market_pda"));
     }
@@ -238,7 +282,6 @@ pub(crate) fn market_pda(
 
 #[derive(Debug, Clone, Copy)]
 struct Resolved {
-    strike: Strike,
     price: Price,
     valid_until: QuoteExpiry,
     nonce: Nonce,
@@ -250,7 +293,7 @@ struct Resolved {
 #[must_use = "a builder does nothing until it is signed"]
 pub struct QuoteBuilder<'a> {
     binding: &'a RfqBinding,
-    strike: Strike,
+    terms: OptionTerms,
     price: Option<Price>,
     valid_until: Option<QuoteExpiry>,
     min_valid_until: Option<QuoteExpiry>,
@@ -260,9 +303,15 @@ pub struct QuoteBuilder<'a> {
 }
 
 impl QuoteBuilder<'_> {
-    /// Quote an alternative strike offered by the RFQ instead of its requested one.
-    pub const fn strike(mut self, strike: Strike) -> Self {
-        self.strike = strike;
+    /// Terms this builder will bind into the quote and signed preimage.
+    #[must_use]
+    pub const fn selected_terms(&self) -> OptionTerms {
+        self.terms
+    }
+
+    /// Quote alternative terms offered by the RFQ instead of its requested terms.
+    pub const fn terms(mut self, terms: OptionTerms) -> Self {
+        self.terms = terms;
         self
     }
 
@@ -319,16 +368,16 @@ impl QuoteBuilder<'_> {
     }
 
     /// Maker owner in the signed preimage, required even when it signs itself.
-    pub const fn maker_owner(mut self, owner: [u8; 32]) -> Self {
-        self.maker = Some(owner);
+    pub const fn maker_owner(mut self, owner: crate::Address32) -> Self {
+        self.maker = Some(*owner.as_bytes());
         self
     }
 
     fn resolve(&self) -> Result<Resolved, QuoteBuildError> {
-        if !self.binding.offered_strikes.contains(&self.strike) {
-            return Err(QuoteBuildError::StrikeNotOffered {
-                requested: self.strike,
-                offered: self.binding.offered_strikes.clone(),
+        if !self.binding.offered_terms.contains(&self.terms) {
+            return Err(QuoteBuildError::TermsNotOffered {
+                requested: self.terms,
+                offered: self.binding.offered_terms.clone(),
             });
         }
         let valid_until = self
@@ -358,7 +407,6 @@ impl QuoteBuilder<'_> {
             });
         }
         Ok(Resolved {
-            strike: self.strike,
             price: self.price.ok_or(QuoteBuildError::Missing("price"))?,
             valid_until,
             nonce: self.nonce.ok_or(QuoteBuildError::Missing("nonce"))?,
@@ -370,10 +418,10 @@ impl QuoteBuilder<'_> {
         OrderPreimageArgs {
             chain_id: self.binding.chain_id,
             program_id: self.binding.program_id,
-            is_taker_buy: false,
-            position_type: self.binding.position_type,
+            side: self.binding.side,
+            position_type: self.terms.position_type(),
             market: self.binding.market,
-            strike: resolved.strike.value(),
+            strike: self.terms.strike().value(),
             quantity: self.binding.quantity.value(),
             gross_price: resolved.price.value(),
             valid_until: resolved.valid_until.as_unix_seconds(),
@@ -388,6 +436,9 @@ impl QuoteBuilder<'_> {
     /// # Errors
     /// See [`QuoteBuildError`].
     pub fn preimage_args(&self) -> Result<OrderPreimageArgs, QuoteBuildError> {
+        if self.terms.is_spread() {
+            return Err(crate::orders::OrderError::SpreadLayoutRequired.into());
+        }
         Ok(self.args_for(self.resolve()?))
     }
 
@@ -417,7 +468,7 @@ impl QuoteBuilder<'_> {
         signer: &S,
     ) -> Result<QuoteMessage, QuoteBuildError> {
         let resolved = self.resolve()?;
-        let order_id = compute_order_id(&self.args_for(resolved));
+        let order_id = self.order_id(resolved)?;
         let signature = crate::orders::sign_order_id_with_async_signer(&order_id, signer).await?;
         Ok(self.assemble(resolved, order_id, signature))
     }
@@ -427,12 +478,56 @@ impl QuoteBuilder<'_> {
         signer: &S,
     ) -> Result<(Resolved, [u8; 32], [u8; 64]), QuoteBuildError> {
         let resolved = self.resolve()?;
-        let order_id = compute_order_id(&self.args_for(resolved));
+        let order_id = self.order_id(resolved)?;
         Ok((
             resolved,
             order_id,
             sign_order_id_with_signer(&order_id, signer),
         ))
+    }
+
+    pub fn spread_preimage_args(
+        &self,
+    ) -> Result<crate::orders::SpreadOrderPreimageArgs, QuoteBuildError> {
+        self.spread_args_for(self.resolve()?)
+    }
+
+    fn spread_args_for(
+        &self,
+        resolved: Resolved,
+    ) -> Result<crate::orders::SpreadOrderPreimageArgs, QuoteBuildError> {
+        let args = self.args_for(resolved);
+        Ok(crate::orders::SpreadOrderPreimageArgs {
+            chain_id: args.chain_id,
+            program_id: args.program_id,
+            side: args.side,
+            position_type: crate::spreads::SpreadType::try_from(u8::from(
+                self.terms.to_chain().position_type(),
+            ))?,
+            market: args.market,
+            lower_strike: self.terms.to_chain().strike().value(),
+            upper_strike: self
+                .terms
+                .upper_strike()
+                .ok_or(QuoteBuildError::MarketBinding("spread terms"))?
+                .value(),
+            quantity: args.quantity,
+            gross_price: args.gross_price,
+            valid_until: args.valid_until,
+            maker: args.maker,
+            taker: args.taker,
+            nonce: args.nonce,
+        })
+    }
+
+    fn order_id(&self, resolved: Resolved) -> Result<[u8; 32], QuoteBuildError> {
+        if self.terms.is_spread() {
+            Ok(crate::orders::compute_spread_order_id(
+                &self.spread_args_for(resolved)?,
+            )?)
+        } else {
+            Ok(compute_order_id(&self.args_for(resolved))?)
+        }
     }
 
     fn assemble(
@@ -443,7 +538,8 @@ impl QuoteBuilder<'_> {
     ) -> QuoteMessage {
         QuoteMessage {
             rfq_id: self.binding.rfq_id,
-            strike: resolved.strike,
+            terms: self.terms,
+            side: self.binding.side,
             price: resolved.price,
             valid_until: resolved.valid_until,
             nonce: resolved.nonce,
@@ -460,7 +556,8 @@ impl QuoteMessage {
         ReplaceQuoteMessage {
             old_order_id,
             rfq_id: self.rfq_id,
-            strike: self.strike,
+            terms: self.terms,
+            side: self.side,
             price: self.price,
             valid_until: self.valid_until,
             nonce: self.nonce,

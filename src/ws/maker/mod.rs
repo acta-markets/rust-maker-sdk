@@ -4,7 +4,9 @@ mod data;
 mod outcome;
 mod quote;
 
-pub use data::{MakerDataClient, MakerDataRequest, MakerDataRequestError, MakerResponse};
+pub use data::{
+    MakerDataClient, MakerDataRequest, MakerDataRequestError, MakerResponse, PagedRequest,
+};
 pub use outcome::{QuoteLossReason, QuoteOutcome, QuoteOutcomeTracker, QuoteUnknownReason};
 pub use quote::MakerQuoteClient;
 

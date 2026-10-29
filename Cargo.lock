@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "acta-maker-sdk"
-version = "0.5.7"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

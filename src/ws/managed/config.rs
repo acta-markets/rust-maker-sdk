@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::ws::client::{PreparedClientMessage, WsTransportConfig};
 use crate::ws::error::WsTransportConfigError;
-use crate::ws::types::{ClientMessage, FEATURE_CANCEL_ON_DISCONNECT, HelloData, SubscribeData};
+use crate::ws::types::{ClientMessage, HelloData, SubscribeData};
 
 use super::endpoint::MakerWsEndpoint;
 use super::signer::ChallengeSigning;
@@ -37,14 +37,14 @@ pub(crate) enum AuthFlow {
     /// `StartVaultAuth` as a vault operator. The server issues no resumable
     /// session, so every reconnect re-runs the challenge.
     #[cfg_attr(not(feature = "vault"), allow(dead_code))]
-    Vault { vault_pda: String },
+    Vault { vault_pda: crate::Address32 },
 }
 
 #[derive(Clone)]
 pub struct ManagedWsConfig {
     pub url: String,
     pub endpoint: MakerWsEndpoint,
-    pub(super) auth_pubkey: String,
+    pub(super) auth_pubkey: crate::Address32,
     pub(super) challenge_signing: ChallengeSigning,
     pub(crate) auth_flow: AuthFlow,
     pub(super) initial_subscribe: Option<SubscribeData>,
@@ -72,10 +72,6 @@ pub struct ManagedWsConfig {
     pub pong_timeout: Duration,
     pub transport: WsTransportConfig,
     pub max_pending_awaits: usize,
-    /// Ask the server to cancel this session's open quotes when it
-    /// disconnects; the session terminates if the server does not enable it.
-    /// Applies only to the quote endpoint.
-    pub cancel_on_disconnect: bool,
     pub gap_policy: GapPolicy,
     pub(super) hello: HelloData,
 }
@@ -88,7 +84,7 @@ impl ManagedWsConfig {
         url: impl Into<String>,
         hello: HelloData,
         signer: Arc<dyn SignerLike + Send + Sync>,
-        auth_pubkey: impl Into<String>,
+        auth_pubkey: impl Into<crate::Address32>,
     ) -> Self {
         Self::new_with_signing(
             url,
@@ -101,7 +97,7 @@ impl ManagedWsConfig {
     pub(crate) fn new_with_signing(
         url: impl Into<String>,
         hello: HelloData,
-        auth_pubkey: String,
+        auth_pubkey: crate::Address32,
         challenge_signing: ChallengeSigning,
     ) -> Self {
         Self {
@@ -128,7 +124,6 @@ impl ManagedWsConfig {
             pong_timeout: Duration::from_secs(10),
             transport: WsTransportConfig::default(),
             max_pending_awaits: 1024,
-            cancel_on_disconnect: true,
             gap_policy: GapPolicy::EndpointDefault,
             hello,
         }
@@ -151,12 +146,6 @@ impl ManagedWsConfig {
         self
     }
 
-    #[must_use]
-    pub const fn with_cancel_on_disconnect(mut self, enabled: bool) -> Self {
-        self.cancel_on_disconnect = enabled;
-        self
-    }
-
     pub(super) fn reconnect_on_gap(&self) -> bool {
         match self.gap_policy {
             GapPolicy::EndpointDefault => self.endpoint == MakerWsEndpoint::Quote,
@@ -165,27 +154,9 @@ impl ManagedWsConfig {
         }
     }
 
-    /// `Hello` with every feature this configuration requires.
+    /// The caller-provided `Hello`; feature requests are never inferred.
     pub(super) fn hello(&self) -> HelloData {
-        let mut hello = self.hello.clone();
-        if self.endpoint == MakerWsEndpoint::Quote
-            && self.cancel_on_disconnect
-            && !hello
-                .features
-                .iter()
-                .any(|f| f == FEATURE_CANCEL_ON_DISCONNECT)
-        {
-            hello.features.push(FEATURE_CANCEL_ON_DISCONNECT.to_owned());
-        }
-        hello
-    }
-
-    /// A required feature the server's `Welcome` did not enable.
-    pub(super) fn missing_required_feature(&self, enabled: &[String]) -> Option<&'static str> {
-        (self.endpoint == MakerWsEndpoint::Quote
-            && self.cancel_on_disconnect
-            && !enabled.iter().any(|f| f == FEATURE_CANCEL_ON_DISCONNECT))
-        .then_some(FEATURE_CANCEL_ON_DISCONNECT)
+        self.hello.clone()
     }
 
     #[must_use]
@@ -196,18 +167,23 @@ impl ManagedWsConfig {
 
     /// Authenticate on `/vault` as an operator of `vault_pda`.
     #[cfg(feature = "vault")]
-    pub(crate) fn with_vault_auth(mut self, vault_pda: String) -> Self {
+    pub(crate) fn with_vault_auth(
+        mut self,
+        vault_pda: crate::Address32,
+        products: crate::ProductSet,
+    ) -> Self {
         self.auth_flow = AuthFlow::Vault { vault_pda };
         self.initial_subscribe = Some(SubscribeData {
+            products,
             request_id: uuid::Uuid::new_v4(),
             channels: vec![crate::ws::types::WsChannel::Vaults],
-            underlying_mints: None,
-            quote_mints: None,
+            underlying_mints: vec![],
+            quote_mints: vec![],
         });
         self.with_endpoint(MakerWsEndpoint::Vault)
     }
 
-    pub(crate) fn vault_pda(&self) -> Option<&str> {
+    pub(crate) fn vault_pda(&self) -> Option<&crate::Address32> {
         match &self.auth_flow {
             AuthFlow::Vault { vault_pda } => Some(vault_pda),
             AuthFlow::Maker => None,

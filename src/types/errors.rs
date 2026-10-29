@@ -6,15 +6,12 @@ use strum::{AsRefStr, Display};
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[allow(clippy::enum_variant_names)]
-#[non_exhaustive]
 pub enum RateLimitReason {
     TooManyActiveRfqsPerTaker,
     TooManyActiveRfqsTotal,
     TooManyQuotesPerRfq,
     TooManyFailedOrdersPerRfq,
     TooManySessionsPerUser,
-    #[serde(other)]
-    Unknown,
 }
 
 impl std::fmt::Display for RateLimitReason {
@@ -25,7 +22,6 @@ impl std::fmt::Display for RateLimitReason {
             Self::TooManyQuotesPerRfq => "Too many quotes for this RFQ",
             Self::TooManyFailedOrdersPerRfq => "Too many unresolved failed orders for this RFQ",
             Self::TooManySessionsPerUser => "Too many active sessions for your account",
-            Self::Unknown => "Unknown rate limit",
         };
         f.write_str(msg)
     }
@@ -35,7 +31,6 @@ impl std::fmt::Display for RateLimitReason {
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error, AsRefStr, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum CapError {
     #[strum(serialize = "token_oi_cap_exceeded")]
     #[error("Token OI cap exceeded for {underlying_mint} ({current}/{limit})")]
@@ -88,18 +83,29 @@ pub enum CapError {
         limit: Balance,
     },
 
+    /// Platform-wide cash-settled spread liability for this quote mint.
+    #[strum(serialize = "quote_liability_cap_exceeded")]
+    #[error("Quote liability cap exceeded for {quote_mint} ({current}/{limit})")]
+    QuoteLiabilityCapExceeded {
+        quote_mint: String,
+        current: Balance,
+        limit: Balance,
+    },
+
+    /// This maker's cash-settled spread liability for this quote mint.
+    #[strum(serialize = "maker_quote_liability_cap_exceeded")]
+    #[error("Maker quote liability cap exceeded for {quote_mint} ({current}/{limit})")]
+    MakerQuoteLiabilityCapExceeded {
+        quote_mint: String,
+        current: Balance,
+        limit: Balance,
+    },
+
     /// Venue state, not maker state: the caps authority is catching up and
     /// quoting is paused for everyone. Retry, do not de-risk.
     #[strum(serialize = "caps_unavailable")]
     #[error("Caps authority temporarily unavailable; retry shortly")]
     CapsUnavailable,
-
-    /// A cap variant this SDK predates; the raw payload is preserved so a
-    /// message carrying it still parses instead of dropping the connection.
-    #[serde(untagged)]
-    #[strum(serialize = "unknown")]
-    #[error("Unrecognized cap error")]
-    Unknown(serde_json::Value),
 }
 
 impl CapError {
@@ -112,19 +118,15 @@ impl CapError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum UserRole {
     Maker,
     Taker,
     Owner,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum AuthRequiredAction {
     SubmitQuotes,
     CancelQuotes,
@@ -137,37 +139,28 @@ pub enum AuthRequiredAction {
     Subscribe,
     Unsubscribe,
     ReadMakerData,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum RfqStateError {
     NotActive,
     NotPendingSignature,
     CannotBeCancelled,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum QuoteLockedReason {
     RfqLocked,
     OrderSubmitted,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum DbFeature {
     MakerPositions,
     MakerMarkets,
@@ -177,6 +170,4 @@ pub enum DbFeature {
     MmSummary,
     MyQuotes,
     MyTrades,
-    #[serde(other)]
-    Unknown,
 }

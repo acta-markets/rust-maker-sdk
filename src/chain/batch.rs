@@ -36,8 +36,11 @@ pub struct MakerSnapshot {
 
 impl PositionSnapshot {
     pub fn settlement_token(&self) -> PremiumToken {
-        match self.position.position_type {
-            crate::PositionType::CoveredCall => PremiumToken {
+        match self.position.terms.position_type() {
+            crate::PositionType::CoveredCall
+            | crate::PositionType::CallSpread
+            | crate::PositionType::PutSpread
+            | crate::PositionType::CashPut => PremiumToken {
                 mint: self.market.quote_mint,
                 token_program: self.market.quote_token_program_id,
             },
@@ -50,8 +53,8 @@ impl PositionSnapshot {
 
     pub fn required_settlement(&self) -> Result<u64, ChainError> {
         super::settlement::required_settlement(
-            self.position.position_type.into(),
-            self.position.strike.value(),
+            self.position.terms.to_chain().position_type().into(),
+            self.position.terms.strike().value(),
             self.position.quantity.value(),
             self.market.quote_decimals.value(),
             self.market.underlying_decimals.value(),
@@ -66,6 +69,9 @@ impl PositionSnapshot {
         fee_payer: Pubkey,
         create_atas: bool,
     ) -> Result<Vec<Instruction>, ChainError> {
+        if self.position.side.is_taker_buy() {
+            return Err(ChainError::TakerBuyUnsupported);
+        }
         if self.market_address != self.position.market_pda {
             return Err(ChainError::Identity("market"));
         }
@@ -75,7 +81,7 @@ impl PositionSnapshot {
         if self.position.status != PositionStatus::Open
             || self.market.is_put
                 != matches!(
-                    self.position.position_type,
+                    self.position.terms.position_type(),
                     crate::PositionType::CashSecuredPut
                 )
         {
@@ -87,7 +93,7 @@ impl PositionSnapshot {
                 maker_owner,
                 position_pda: self.address,
                 market_pda: self.position.market_pda,
-                position_type: self.position.position_type.into(),
+                position_type: self.position.terms.to_chain().position_type().into(),
                 underlying_mint: self.market.underlying_mint,
                 quote_mint: self.market.quote_mint,
                 underlying_token_program_id: self.market.underlying_token_program_id,

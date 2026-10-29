@@ -44,10 +44,7 @@ impl CorrelationKey {
             ServerMessage::QuoteAcknowledged(message) => Some(Self::Quote(message.order_id)),
             ServerMessage::QuoteRejected(message) => Some(Self::Quote(message.order_id)),
             ServerMessage::BatchQuotesAck(message) => Some(Self::Batch(sorted_order_ids(
-                message
-                    .results
-                    .iter()
-                    .filter_map(BatchQuoteResult::order_id),
+                message.results.iter().map(BatchQuoteResult::order_id),
             ))),
             _ => message.request_id().map(Self::Request),
         }

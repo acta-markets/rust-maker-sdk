@@ -176,10 +176,14 @@ fn open_positions_can_be_funded_after_market_finalization() {
     };
     for is_put in [false, true] {
         snapshot.market.is_put = is_put;
-        snapshot.position.position_type = if is_put {
-            crate::PositionType::CashSecuredPut
+        snapshot.position.terms = if is_put {
+            crate::OptionTerms::CashSecuredPut {
+                strike: snapshot.position.terms.strike(),
+            }
         } else {
-            crate::PositionType::CoveredCall
+            crate::OptionTerms::CoveredCall {
+                strike: snapshot.position.terms.strike(),
+            }
         };
         snapshot.market.is_finalized = true;
         assert_eq!(snapshot.position.status, PositionStatus::Open);

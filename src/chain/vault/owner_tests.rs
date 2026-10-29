@@ -1,7 +1,9 @@
 use super::*;
 use crate::chain::ix::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
 use crate::chain::{MarketInfo, PositionInfo, PositionStatus};
-use crate::{Decimals, OrderId, PositionType, Quantity, Strike, VaultDelegatePermissions};
+use crate::{
+    Decimals, OptionTerms, OrderId, Quantity, Strike, TakerSide, VaultDelegatePermissions,
+};
 use serde_json::{Value, json};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -199,11 +201,16 @@ fn settlement(put: bool, vault: bool) -> (PositionInfo, MarketInfo) {
         quote_decimals: Decimals::new(6),
     };
     let position = PositionInfo {
-        position_type: if put {
-            PositionType::CashSecuredPut
+        terms: if put {
+            OptionTerms::CashSecuredPut {
+                strike: Strike::new(100),
+            }
         } else {
-            PositionType::CoveredCall
+            OptionTerms::CoveredCall {
+                strike: Strike::new(100),
+            }
         },
+        side: TakerSide::Sell,
         flags: u8::from(vault),
         flags2: 0,
         flags3: 0,
@@ -211,7 +218,6 @@ fn settlement(put: bool, vault: bool) -> (PositionInfo, MarketInfo) {
         taker_owner: key(2),
         maker_owner: key(1),
         market_pda: crate::quote::market_pda(&key(9), &key(6), &key(5), 100, put),
-        strike: Strike::new(100),
         quantity: Quantity::new(1),
         order_id: OrderId::new([8; 32]),
     };

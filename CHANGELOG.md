@@ -1,5 +1,124 @@
 # Changelog
 
+## 0.6.0
+
+Breaking release for WS protocol `1.0.0`. Spreads and cash puts are part of the
+base protocol, and the wire is closed: every field is present on every frame,
+absent facts are `null`, and state-dependent shapes are tagged unions. Decoding
+rejects unknown message types, error codes, enum values and missing fields.
+
+### Breaking: types and identities
+
+- Account, mint and PDA fields are `Address32` instead of base58 `String` across
+  WS messages. `HttpClient::tokens` is keyed by `Address32`; `WsClient::start_auth`,
+  `VaultOperatorConfig::{vault_pda, operator_pubkey}` and
+  `VaultOperatorClient::vault_pda` use it too. Market filters on cancel and query
+  messages are `QueryFilter<Address32>` instead of `Option<String>`.
+- Address arguments are `Address32` too: `QuoteBuilder::maker_owner`,
+  `VaultOperatorClient::operator_pubkey`, `HttpClient::{vault, vault_positions,
+  vault_exposure, delegated_vaults}` and `MarketFilter::{underlying, quote}`.
+  `HttpError::Address` and `VaultOperatorClient::vault_owner` (same as `vault_pda`)
+  are removed.
+- Wire types are exhaustive. `#[non_exhaustive]`, every `#[serde(other)]` arm and
+  `ServerMessage::Unknown`, `ServerError::Unknown`, `WsErrorCode::Unknown` and
+  `CapError::Unknown` are removed.
+
+### Breaking: session and subscriptions
+
+- Hello requires `on_disconnect`, `client_name` and `client_version`. Feature
+  negotiation is removed, with `FEATURE_CANCEL_ON_DISCONNECT`, `FEATURE_QUOTE_EXPIRED`
+  and `ManagedWsConfig::with_cancel_on_disconnect`; set `HelloData.on_disconnect`.
+- A different protocol version gets `unsupported_protocol_version` and close 4006.
+- Subscribe requires a nonempty `products: ProductSet` and always carries
+  `underlying_mints` and `quote_mints` (`[]` means every mint). Each Subscribe
+  replaces products and mints; channels add up. `AddMints` and `RemoveMints` take
+  required lists. `SubscriptionUpdated` and `Subscriptions` always carry both lists.
+
+### Breaking: products and orders
+
+- RFQs, quotes, positions and trades carry required `terms: OptionTerms` and `side`.
+  The `position_type`, `strike` and `upper_strike` wire fields are removed.
+- `OptionTerms` has `covered_call`, `cash_secured_put`, `call_spread`, `put_spread`
+  and `cash_put`. A cash put `{ strike: K }` signs as PutSpread legs (0, K).
+- `PositionType` has no numeric tags; use `OptionTerms::to_chain()` and `from_chain()`.
+- `TakerSide::Buy` is committed in the preimage but rejected with
+  `taker_buy_unsupported`.
+- `RfqBinding::offered_strikes` is replaced by `offered_terms`, and
+  `QuoteBuilder::strike` by `terms`. `RfqCreated.order_options` lists `OptionTerms`.
+- Spread orders use the 190-byte layout under the `ACTA` domain.
+  `build_order_preimage` and `compute_order_id` return `Result` and reject spreads
+  with `OrderError::SpreadLayoutRequired`.
+- `spreads::STRIKE_TICK`, `MAX_WIDTH` and `SpreadError::StrikePolicy` are removed.
+  The server enforces the per-mint strike tick.
+- OpenSpread takes 16 accounts. `SettleSpreadEvent` gains `taker`. One owner on
+  both sides may settle into one quote account.
+
+### Breaking: positions and queries
+
+- Position rows carry a required `state` (`open`, `funded`, `liquidated`,
+  `settled { settlement: physical | cash }`), market decimals, `total_premium` and
+  `revision { slot, transaction_index, instruction_index }`.
+  `PositionReconciliationStatus` is removed.
+- `PositionUpdated` is `{ position, update_type }` with the full row, coalesced by
+  revision and sent to maker, maker-data, taker and vault sessions. `caps_snapshot`
+  is removed from it.
+- `total_premium` is `Balance`: net premium in quote atoms after the protocol fee.
+- Queries take `QueryFilter::{All, Only}`, `TimeBound::{Unbounded, Bounded}` and
+  `status: Vec<PositionStatus>` (`[]` means every status; `none` is removed).
+- Pages take a required `limit`, rejected outside the endpoint range with
+  `invalid_limit`, and `PageCursor::{Start, After { at, id }}`.
+- `GetMyQuotes.scope` is `MakerQuoteScope::{Live, History { limit, cursor }}`.
+  `include_stats` is removed.
+- Error codes `invalid_cursor`, `invalid_position_status` and `invalid_query_scope`
+  are removed. `invalid_limit`, `invalid_timeout` and the `spread_*` codes are added.
+- `MakerDataClient::all_pages(request, timeout)` replaces `all_maker_positions`. It
+  pages `GetMakerPositions`, `GetMyTrades` and `GetMyQuotes` history.
+- Market `products` list only the pair's products for that market's side.
+
+### Breaking: server frames
+
+- `TokenInfo.role` is `Quote {}` or `Underlying { size_rule, strike_tick, quote_mints }`.
+- Quote-liability caps use one `QuoteLiabilityCapInfo` with
+  `policy: Unconfigured | Unlimited | Limited { max_liability, headroom }`.
+  `MakerQuoteLiabilityCapInfo` is removed.
+- `CapError` adds `QuoteLiabilityCapExceeded` and `MakerQuoteLiabilityCapExceeded`
+  for cash-settled spread liability.
+- `QuoteCheck.verdict` is `Admissible | Rejected { cap_detail }`.
+  `EarnAssetSummary.apr` is `Unavailable | Available { min, max }`.
+- `QuoteRefreshRequested.reason` and `QuoteExpired.reason` are
+  `QuoteExpiryReason::{Expired, ExpiringSoon}`. `RfqSkipped` drops its string
+  `reason`; `cap_detail` is required and names the failing cap.
+- `AuthError.message` and `QuoteRejected.message` are required strings.
+  `MakerPositions.unrenderable`, `MmSummary.unrenderable_positions` and
+  `TokenCaps.{markets, quotes}` are always present.
+- `TradeExecuted.stats_delta`, `MakerMarketInfo.stats` and `MarketStats` are removed.
+- `BatchQuoteResult` is `Acknowledged | Rejected`, and its `order_id()` no longer
+  returns `Option`. `ChainEventMessage::identity()` no longer returns `Option`.
+
+### Breaking: HTTP
+
+- `Venue.max_quotes_per_rfq` and `max_active_rfqs_per_taker` are
+  `CountLimit::{Unlimited, Limited { value }}`.
+- `Venue` adds `protocol_fee_bps_premium` and `protocol_fee_bps_volume`.
+- `Vault.capacity` is `VaultCapacity::{Unlimited, Limited { cap_limit, remaining }}`;
+  the top-level `cap_limit` is removed. Nullable vault fields and `metadata` are
+  always present.
+- `VaultPosition` gains required `product`.
+
+### Vaults
+
+- Vaults trade spreads: `VaultSpreadTerms` and `VaultManager::{open_spread_as_taker,
+  open_spread_as_maker, open_spread_with_vault_holder}` (opcodes 78, 79, 80).
+  `VaultSale.terms` is `OptionTerms`, verified as `VaultSaleTerms::{Physical, Spread}`.
+- Vault opens use the deployment's checked `GlobalConfig.hot_authority` as fee
+  payer and account 0.
+- Vault spreads settle into the vault quote ATA.
+
+### Added
+
+- `physical_premium` returns the contract's gross, fee and net split for a covered
+  call or cash-secured put. `SpreadTerms::premium` does the same for spreads.
+
 ## 0.5.7
 
 - `WsErrorCode` gains `InsufficientCollateral` (wallet taker cannot fund the RFQ's collateral; rejected before broadcast) and `TimeOverflow` (a deadline outside the representable range).
@@ -66,7 +185,7 @@
 - Breaking, `vault`: `VaultOperatorClient::rfq_request`, `accept_quote` and `submit_signed_sponsored_tx` return `Result<(), VaultRequestError>` and resolve on the receipt; `VaultRequestError::delivery()` exposes the rejection's delivery. `swap_status(execution_id)` sends `GetSwapStatus` and returns `SwapStatusMessage { state: SwapExecutionState }`; terminal outcomes are also pushed as `SwapSettled`.
 - Wire, breaking: `SponsoredTxToSignData` and `SwapQuoteResultData` carry `last_valid_block_height: u64` (JSON number), the exact height the served transaction's blockhash is valid through.
 - `vault` + `http`: `VaultFleet::discover(VaultFleetConfig)` follows the vault catalog for one operator key — a `/taker` session subscribed to `vaults` re-lists on each (re)subscription and `VaultCatalogChanged`, never on a timer — and publishes `FleetListing::{Pending, Listed, Failed}` on `listings()`. `Listed` is published only while the feed is live: a feed that does not subscribe within `with_timeout` (default 5 s), or that stays silent for two liveness probes (`Ping` every timeout), publishes `Failed` and reconnects with backoff from `with_retry` (default 5 s) up to 60 s; a failed listing retries after `retry`. Every write and each listing are bounded by the timeout, listings run alongside the socket, and a listing still in flight when the feed dies is dropped unpublished. Both intervals are clamped to 100 ms..=60 s. `HttpClient::delegated_vaults(delegate)` reads `GET /api/v1/vaults?delegate=` (current, unexpired grants only). `ws::auth::validate_wallet_auth_challenge` checks a `StartAuth` challenge.
-- `vault` + `chain-rpc`: `VaultOperatorClient::sell_rfq(chain, &VaultSale, epoch, gate, &mut impl SaleDesk)` drives a vault sale: `RfqRequest`, quotes offered to `SaleDesk::take`, `AcceptQuote`, the served transaction verified against the counterparty loaded from chain and signed, `SubmitSignedSponsoredTx`. It returns `SaleOutcome::{Unfilled, Submitted(SignedSale)}`; `SignedSale` has the transaction id and served `last_valid_block_height`. `SaleError::in_flight()` returns the signed sale a failure may have left in flight. The market PDA must be canonical for `VaultSale::market`. `VaultSale::window` bounds quote collection including `take`, then serving plus `writer`, verification and signing; a stalled hook ends with `SaleError::TimedOut(SaleStage::{Take, Sign})` before anything is signed.
+- `vault` + `chain-rpc`: `VaultOperatorClient::sell_rfq(chain, &VaultSale, epoch, gate, &mut impl SaleDesk)` drives a vault sale: `RfqRequest`, quotes offered to `SaleDesk::take`, `AcceptQuote`, the served transaction verified against the counterparty loaded from chain and signed, `SubmitSignedSponsoredTx`. It returns `SaleOutcome::{Unfilled, Submitted(SignedSale)}`; `SignedSale` has the participant signature and served `last_valid_block_height`, not a transaction id because the keeper cosigns and submits. `SaleError::in_flight()` returns the participant-signed sale a failure may have left with the keeper. The market PDA must be canonical for `VaultSale::market`. `VaultSale::window` bounds quote collection including `take`, then serving plus `writer`, verification and signing; a stalled hook ends with `SaleError::TimedOut(SaleStage::{Take, Sign})` before anything is signed.
 - `SendGate` / `Ungated`: the bot's admission for driver sends, enqueued under the gate's lock. Breaking: `swap_submit` is replaced by `swap_submit_in_epoch(payload, epoch, gate)`. `VaultRequestError::Gated` is new, and `delivery()` also classifies local failures: refusals before the write are `NotForwarded`, possibly written commands `Unknown`.
 - `chain`: `Counterparty::load(&ChainClient, owner)` (`chain-rpc`) resolves a quote's maker as a holder vault or an external maker. `MarketInfo`, `MakerInfo` and `PositionInfo` decode with `from_account(&Account, &program_id)`, checking the owner and header; market and maker also check the exact layout length and version 1. Breaking: `MarketInfo` gains `expiry_ts`, `is_put` and `is_finalized`, and rejects unknown flags. `VaultAccount::from_account` checks the owner, and `VaultAccount` decodes `open_positions`. `ChainError::{Vault, Identity}` and `VaultChainError::Owner` are new. The account decoders need `chain`, not `chain-rpc`.
 - Breaking, `chain::vault`: `VaultSwapIntent` takes `price_feeds: PairPriceFeeds { main, second, shards }` instead of explicit price-update accounts. The served `main_price_update` / `second_price_update` must be a configured shard of the pair's feed (`VaultIntentError::PriceUpdate`) and are verified once.

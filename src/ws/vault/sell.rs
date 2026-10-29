@@ -1,15 +1,17 @@
 use std::future::Future;
 use std::time::Duration;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use solana_sdk::pubkey::Pubkey;
 use uuid::Uuid;
 
-use crate::chain::vault::{ComputeBudgetBounds, Counterparty, VaultManager, VaultTradeTerms};
+use crate::chain::vault::{
+    ComputeBudgetBounds, Counterparty, VaultManager, VaultSaleTerms, VaultSpreadTerms,
+    VaultTradeTerms,
+};
 use crate::chain::{ChainClient, ChainError, MarketInfo};
+use crate::spreads::{SpreadError, SpreadType};
 use crate::types::ids::OrderId;
-use crate::types::{PositionType, Quantity, Strike, TimeoutSeconds};
+use crate::types::{OptionTerms, Quantity, Strike, TakerSide, TimeoutSeconds};
 use crate::ws::managed::ManagedReceiveError;
 use crate::ws::types::{
     AcceptQuoteMessage, ClientMessage, Delivery, QuoteReceivedMessage, RfqRequestMessage,
@@ -20,18 +22,71 @@ use super::client::{VaultOperatorClient, VaultRequestError};
 use super::gate::SendGate;
 use super::tx::VaultTxError;
 
-/// An option the vault writes and sells through an RFQ.
+/// An option or cash spread the vault writes and sells through an RFQ.
 #[derive(Debug, Clone)]
 pub struct VaultSale {
     pub market_pda: Pubkey,
     pub market: MarketInfo,
-    pub strike: Strike,
+    /// Put products (cash-secured put, put spread) need a put market.
+    pub terms: OptionTerms,
     pub quantity: Quantity,
     pub rfq_timeout: TimeoutSeconds,
     /// Bounds quote collection with `take`, and then serving plus `writer`, verification
     /// and signing; RFQ, accept and submit commands are bounded by the request timeout.
     pub window: Duration,
     pub bounds: ComputeBudgetBounds,
+}
+
+impl VaultSale {
+    /// The terms the writer signs to fill `quote`.
+    pub(super) fn signed_terms(
+        &self,
+        quote: &QuoteReceivedMessage,
+    ) -> Result<VaultSaleTerms, ChainError> {
+        let market = &self.market;
+        let spread = |kind, lower_strike: Strike, upper_strike: Strike| {
+            VaultSaleTerms::Spread(VaultSpreadTerms {
+                underlying_mint: market.underlying_mint,
+                quote_mint: market.quote_mint,
+                expiry_ts: market.expiry_ts,
+                kind,
+                side: quote.side,
+                lower_strike: lower_strike.value(),
+                upper_strike: upper_strike.value(),
+                quantity: self.quantity.value(),
+                price: quote.price.value(),
+                valid_until: quote.valid_until.as_unix_seconds(),
+                nonce: quote.nonce.value(),
+            })
+        };
+        Ok(match self.terms {
+            OptionTerms::CashPut { strike } => {
+                spread(SpreadType::PutSpread, Strike::new(0), strike)
+            }
+            OptionTerms::CoveredCall { strike } | OptionTerms::CashSecuredPut { strike } => {
+                VaultSaleTerms::Physical(VaultTradeTerms {
+                    underlying_mint: market.underlying_mint,
+                    quote_mint: market.quote_mint,
+                    expiry_ts: market.expiry_ts,
+                    is_put: market.is_put,
+                    side: quote.side,
+                    strike: strike.value(),
+                    quantity: self.quantity.value(),
+                    price: quote.price.value(),
+                    valid_until: quote.valid_until.as_unix_seconds(),
+                    nonce: quote.nonce.value(),
+                })
+            }
+            OptionTerms::CallSpread {
+                lower_strike,
+                upper_strike,
+            } => spread(SpreadType::CallSpread, lower_strike, upper_strike),
+            OptionTerms::PutSpread {
+                lower_strike,
+                upper_strike,
+            } => spread(SpreadType::PutSpread, lower_strike, upper_strike),
+        })
+    }
 }
 
 /// The bot's decisions and bookkeeping inside [`VaultOperatorClient::sell_rfq`].
@@ -58,11 +113,15 @@ pub trait SaleDesk: Send {
     }
 }
 
-/// A signed sale transaction; `signature` is its transaction id.
+/// A sale accepted by the server after the vault/user participant signed it.
+///
+/// The keeper still supplies transaction signature slot 0 and submits the transaction, so this
+/// does not carry an on-chain transaction id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedSale {
     pub order_id: OrderId,
-    pub signature: String,
+    /// Base58 signature made by the vault delegate or user participant over the served message.
+    pub participant_signature: String,
     pub last_valid_block_height: u64,
 }
 
@@ -70,7 +129,8 @@ pub struct SignedSale {
 pub enum SaleOutcome {
     /// No quote was taken within the window.
     Unfilled,
-    /// The server accepted the signed transaction; its chain outcome is pending.
+    /// The server accepted the participant-signed transaction for keeper cosigning; its chain
+    /// outcome is pending.
     Submitted(SignedSale),
 }
 
@@ -87,6 +147,8 @@ pub enum SaleStage {
 pub enum SaleError<E> {
     #[error("market_pda is not the program's market for these terms")]
     Market,
+    #[error("spread terms: {0}")]
+    Spread(SpreadError),
     #[error("sale desk: {0}")]
     Desk(E),
     #[error("{stage:?} failed")]
@@ -117,7 +179,7 @@ pub enum SaleError<E> {
 }
 
 impl<E> SaleError<E> {
-    /// The signed sale this failure may have left in flight. `None`: nothing
+    /// The participant-signed sale this failure may have left with the keeper. `None`: nothing
     /// signed reached the server, so the sale cannot execute.
     #[must_use]
     pub fn in_flight(&self) -> Option<&SignedSale> {
@@ -151,8 +213,21 @@ impl VaultOperatorClient {
             market.expiry_ts,
             market.is_put,
         );
-        if canonical != sale.market_pda {
+        if canonical != sale.market_pda || sale.terms.position_type().is_put() != market.is_put {
             return Err(SaleError::Market);
+        }
+        if let Some(upper) = sale.terms.upper_strike() {
+            let product = sale.terms.position_type();
+            if product != crate::PositionType::CashPut && sale.terms.strike().value() == 0 {
+                return Err(SaleError::Spread(SpreadError::InvalidStrikes));
+            }
+            crate::spreads::validate_strikes(
+                SpreadType::try_from(u8::from(sale.terms.to_chain().position_type()))
+                    .map_err(SaleError::Spread)?,
+                sale.terms.to_chain().strike().value(),
+                upper.value(),
+            )
+            .map_err(SaleError::Spread)?;
         }
         let mut messages = self.subscribe_messages();
         let request_id = Uuid::new_v4();
@@ -161,13 +236,9 @@ impl VaultOperatorClient {
             connection_epoch,
             ClientMessage::RfqRequest(RfqRequestMessage {
                 request_id,
-                market: sale.market_pda.to_string().into(),
-                position_type: if market.is_put {
-                    PositionType::CashSecuredPut
-                } else {
-                    PositionType::CoveredCall
-                },
-                strike: sale.strike,
+                market: crate::MarketId::new(crate::Address32::new(sale.market_pda.to_bytes())),
+                terms: sale.terms,
+                side: TakerSide::Sell,
                 quantity: sale.quantity,
                 timeout_seconds: sale.rfq_timeout,
             }),
@@ -198,7 +269,8 @@ impl VaultOperatorClient {
                 }
                 ServerMessage::QuoteReceived(quote) if taken.is_none() => {
                     if Some(quote.rfq_id) == rfq_id
-                        && quote.strike == sale.strike
+                        && quote.terms == sale.terms
+                        && quote.side == TakerSide::Sell
                         && tokio::time::timeout_at(deadline, desk.take(quote))
                             .await
                             .map_err(|_| SaleError::TimedOut(SaleStage::Take))?
@@ -211,7 +283,7 @@ impl VaultOperatorClient {
                             ClientMessage::AcceptQuote(AcceptQuoteMessage {
                                 request_id: Uuid::new_v4(),
                                 rfq_id: quote.rfq_id,
-                                maker: quote.maker.clone(),
+                                maker: quote.maker,
                                 order_id: quote.order_id,
                             }),
                         )
@@ -250,37 +322,25 @@ impl VaultOperatorClient {
     ) -> Result<(SignedSale, crate::ws::types::SubmitSignedSponsoredTxData), SaleError<D::Error>>
     {
         let writer = desk.writer().await.map_err(SaleError::Desk)?;
-        let maker = quote
-            .maker
-            .parse::<Pubkey>()
-            .map_err(|_| ChainError::Identity("quote maker"))?;
+        let maker = Pubkey::from(quote.maker);
         let counterparty = Counterparty::load(chain, maker).await?;
-        let terms = VaultTradeTerms {
-            underlying_mint: sale.market.underlying_mint,
-            quote_mint: sale.market.quote_mint,
-            expiry_ts: sale.market.expiry_ts,
-            is_put: sale.market.is_put,
-            strike: sale.strike.value(),
-            quantity: sale.quantity.value(),
-            price: quote.price.value(),
-            valid_until: quote.valid_until.as_unix_seconds(),
-            nonce: quote.nonce.value(),
-        };
+        let keeper = chain.hot_authority().await?;
         let tables = chain
             .address_lookup_tables(
                 &crate::chain::vault::served_lookup_table_keys(&served.tx_base64)
                     .map_err(VaultTxError::from)?,
             )
             .await?;
-        let submit = self.verify_and_sign_sponsored_tx(
-            served,
-            &counterparty.sale(&writer, terms),
-            &tables,
-            sale.bounds,
-        )?;
+        let (submit, participant_signature) = self
+            .verify_and_sign_sponsored_tx_with_participant_signature(
+                served,
+                &counterparty.sale(&writer, keeper, sale.signed_terms(quote)?),
+                &tables,
+                sale.bounds,
+            )?;
         let signed = SignedSale {
             order_id: served.order_id,
-            signature: transaction_id(&submit.tx_base64)?,
+            participant_signature,
             last_valid_block_height: served.last_valid_block_height,
         };
         Ok((signed, submit))
@@ -308,22 +368,5 @@ impl VaultOperatorClient {
                 error,
             }),
         }
-    }
-}
-
-/// First signature of a signed wire transaction, base58.
-fn transaction_id(tx_base64: &str) -> Result<String, VaultTxError> {
-    let malformed = || {
-        VaultTxError::Intent(crate::chain::vault::VaultIntentError::Malformed(
-            "signed transaction",
-        ))
-    };
-    let bytes = STANDARD.decode(tx_base64).map_err(|_| malformed())?;
-    match bytes.first() {
-        Some(count) if (1..0x80).contains(count) => bytes
-            .get(1..65)
-            .map(crate::wire::encode_base58)
-            .ok_or_else(malformed),
-        _ => Err(malformed()),
     }
 }

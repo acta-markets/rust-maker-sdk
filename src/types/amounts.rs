@@ -51,6 +51,50 @@ pub fn total_premium_quote_atoms(
     )
 }
 
+/// A covered-call or cash-secured-put fill's premium split, in quote atoms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhysicalPremium {
+    pub gross_premium: u64,
+    pub protocol_fee: u64,
+    pub net_premium: u64,
+}
+
+/// The contract's fee: the smaller of the premium fee and the volume fee on the
+/// strike notional. `None` as for [`total_premium_quote_atoms`] or when a rate
+/// exceeds 10 000 bps. Rates come from `/api/v1/venue`.
+#[must_use]
+pub fn physical_premium(
+    price: Price,
+    strike: Strike,
+    quantity: Quantity,
+    underlying_decimals: Decimals,
+    quote_decimals: Decimals,
+    premium_bps: u16,
+    volume_bps: u16,
+) -> Option<PhysicalPremium> {
+    if premium_bps > 10_000 || volume_bps > 10_000 {
+        return None;
+    }
+    let quote = |per_unit: u64| {
+        scaled_quote_amount(
+            per_unit,
+            quantity.value(),
+            quote_decimals.value(),
+            underlying_decimals.value(),
+        )
+    };
+    let fee =
+        |amount: u64, bps: u16| u64::try_from(u128::from(amount) * u128::from(bps) / 10_000).ok();
+    let gross_premium = quote(price.value())?;
+    let premium_fee = gross_premium - quote(price.value() - fee(price.value(), premium_bps)?)?;
+    let protocol_fee = premium_fee.min(fee(quote(strike.value())?, volume_bps)?);
+    Some(PhysicalPremium {
+        gross_premium,
+        protocol_fee,
+        net_premium: gross_premium - protocol_fee,
+    })
+}
+
 /// The contract's `scaled_quote_amount`: `per_unit` (1e9-scaled quote per
 /// underlying token) times `quantity` (underlying atoms), in quote atoms.
 pub(crate) fn scaled_quote_amount(

@@ -64,11 +64,13 @@ fn every_quote_construction_entry_point_exists() {
     let _ = RfqBinding::rfq_id;
     let _ = RfqBinding::quantity;
     let _ = RfqBinding::position_type;
-    let _ = RfqBinding::offered_strikes;
+    let _ = RfqBinding::terms;
+    let _ = RfqBinding::side;
+    let _ = RfqBinding::offered_terms;
     let _ = RfqBinding::market_expiry;
     let _ = RfqBinding::quote;
 
-    let _ = QuoteBuilder::strike;
+    let _ = QuoteBuilder::terms;
     let _ = QuoteBuilder::price;
     let _ = QuoteBuilder::valid_until;
     let _ = QuoteBuilder::nonce;

@@ -1,12 +1,20 @@
 {
   "program_id": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
-  "min_quote_validity_seconds": 100,
-  "settlement_buffer_seconds": 90,
+  "min_quote_validity_seconds": 60,
+  "settlement_buffer_seconds": 50,
   "quote_refresh_lead_seconds": 10,
   "min_rfq_timeout_seconds": 5,
   "max_rfq_timeout_seconds": 120,
   "signature_timeout_seconds": 30,
-  "max_quotes_per_rfq": 50,
-  "max_active_rfqs_per_taker": 50,
-  "pre_expiry_cutoff_seconds": 10800
+  "max_quotes_per_rfq": {
+    "type": "limited",
+    "value": 50
+  },
+  "max_active_rfqs_per_taker": {
+    "type": "limited",
+    "value": 50
+  },
+  "pre_expiry_cutoff_seconds": 10800,
+  "protocol_fee_bps_premium": 100,
+  "protocol_fee_bps_volume": 10
 }

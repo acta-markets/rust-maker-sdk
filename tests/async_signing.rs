@@ -107,12 +107,12 @@ fn managed_config_accepts_remote_signer_capability() {
         "wss://example.test",
         HelloData {
             protocol_version: "1".to_string(),
-            features: Vec::new(),
-            client_name: None,
-            client_version: None,
+            on_disconnect: acta_maker_sdk::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "test".to_string(),
+            client_version: "test".to_string(),
         },
         Arc::new(signer),
-        "owner",
+        acta_maker_sdk::Address32::new([76; 32]),
     );
 
     assert!(config.validate().is_ok());

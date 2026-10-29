@@ -12,25 +12,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owner = owner.ok_or("set ACTA_MAKER_OWNER to the registered maker owner")?;
     let mut client = WsClient::connect(&normalize_maker_ws_url(&url)).await?;
 
-    client
-        .send_hello(HelloData {
-            protocol_version: WS_PROTOCOL_VERSION.to_string(),
-            features: vec![],
-            client_name: Some("maker-bot".to_string()),
-            client_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-        })
-        .await?;
+    let hello = HelloData {
+        protocol_version: WS_PROTOCOL_VERSION.to_string(),
+        on_disconnect: acta_maker_sdk::ws::types::OnDisconnect::KeepQuotes,
+        client_name: "maker-bot".to_string(),
+        client_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    client.send_hello(hello.clone()).await?;
 
     while let Some(msg) = client.next().await {
         match msg? {
-            ServerMessage::Welcome(_) => client.start_auth(owner.clone()).await?,
+            ServerMessage::Welcome(_) => {
+                client
+                    .start_auth(acta_maker_sdk::Address32::from_base58(&owner.clone())?)
+                    .await?;
+            }
             ServerMessage::AuthRequest(data) => {
                 acta_maker_sdk::ws::auth::validate_maker_auth_challenge(&data.challenge)?;
                 client
                     .auth_challenge(AuthChallengeData {
                         challenge: data.challenge.clone(),
                         signature: signer.sign_message_base58(data.challenge.as_bytes()),
-                        pubkey: owner.clone(),
+                        pubkey: acta_maker_sdk::Address32::from_base58(&owner.clone())?,
                     })
                     .await?;
             }
@@ -47,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 client
                     .indicative_prices_response(IndicativePricesResponseMessage {
                         request_id: req.request_id,
-                        market: MarketId::new(req.market.market_pda.clone()),
+                        market: MarketId::new(req.market.market_pda),
                         position_type: req.position_type,
                         prices,
                     })

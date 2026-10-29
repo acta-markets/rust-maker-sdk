@@ -13,9 +13,20 @@ fn tracker() -> QuoteOutcomeTracker {
 
 fn message(kind: &str, extra: Value) -> ServerMessage {
     let mut data = json!({"rfq_id": Uuid::nil(), "order_id": OrderId::new([1; 32])});
-    data.as_object_mut()
-        .unwrap()
-        .extend(extra.as_object().unwrap().clone());
+    let nullable: &[&str] = match kind {
+        "QuoteAcknowledged" => &["replaced_order_id"],
+        "QuoteFilled" => &["expiry_ts"],
+        "RfqClosed" => &["your_quote", "winner"],
+        _ => &[],
+    };
+    let fields = data.as_object_mut().unwrap();
+    for key in nullable {
+        let _ = fields.insert((*key).to_string(), Value::Null);
+    }
+    if kind == "QuoteRejected" {
+        let _ = fields.insert("message".to_string(), json!("rejected"));
+    }
+    fields.extend(extra.as_object().unwrap().clone());
     serde_json::from_value(json!({"type": kind, "data": data})).unwrap()
 }
 
@@ -24,11 +35,19 @@ fn feed(t: &mut QuoteOutcomeTracker, kind: &str, extra: Value) {
 }
 
 fn selected() -> Value {
-    json!({"taker":"taker", "price":1, "quantity":1, "strike":1, "signature_deadline":1})
+    json!({
+        "taker":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":1, "quantity":1,
+        "terms":{"type":"covered_call","strike":1}, "side":"sell",
+        "signature_deadline":1
+    })
 }
 
 fn filled() -> Value {
-    json!({"market_pda":"market", "position_type":"covered_call", "taker":"taker", "price":1, "quantity":1, "strike":1, "position_pda":"position", "tx_signature":"tx", "filled_at":1})
+    json!({
+        "market_pda":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9", "terms":{"type":"covered_call","strike":1}, "side":"sell",
+        "taker":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":1, "quantity":1, "position_pda":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
+        "tx_signature":"tx", "filled_at":1
+    })
 }
 
 fn closed(reason: &str) -> Value {
@@ -50,7 +69,7 @@ fn acknowledged_selected_closed_then_filled() {
     feed(&mut t, "QuoteFilled", filled());
     assert!(matches!(t.outcome(), QuoteOutcome::Filled(m) if m.tx_signature == "tx"));
     t.check(8, t.deadline);
-    feed(&mut t, "QuoteExpired", json!({"reason":"late"}));
+    feed(&mut t, "QuoteExpired", json!({"reason":"expired"}));
     assert!(matches!(t.outcome(), QuoteOutcome::Filled(_)));
 }
 
@@ -104,7 +123,6 @@ fn terminal_events_from_each_live_state() {
 fn closure_status_is_order_specific_and_filled_waits_for_details() {
     for (status, terminal) in [
         ("filled", false),
-        ("unknown", false),
         ("outbid", true),
         ("expired", true),
         ("cancelled", true),

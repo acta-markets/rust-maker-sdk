@@ -36,8 +36,8 @@
       "last_hwm_update_ts": "40",
       "last_hwm_reset_ts": "41",
       "last_settlement_ts": "42",
-      "cap_limit": "1000",
       "capacity": {
+        "type": "limited",
         "cap_limit": "1000",
         "remaining": "860"
       },
@@ -132,8 +132,10 @@
         "name": "SOL vault",
         "curator": "Acta",
         "strategy": "Weekly covered calls",
+        "description": null,
         "website": "https://acta.markets",
-        "twitter": "acta_markets"
+        "twitter": "acta_markets",
+        "logo_url": null
       }
     },
     {
@@ -172,10 +174,8 @@
       "last_hwm_update_ts": "40",
       "last_hwm_reset_ts": "41",
       "last_settlement_ts": "42",
-      "cap_limit": "0",
       "capacity": {
-        "cap_limit": "0",
-        "remaining": null
+        "type": "unlimited"
       },
       "capital_fallback_delay_secs": "43200",
       "deposit_window_set_ts": null,
@@ -222,7 +222,8 @@
         "worst_cycle_return_pct": null,
         "losing_cycles": null,
         "cycles_completed": null
-      }
+      },
+      "metadata": null
     }
   ]
 }

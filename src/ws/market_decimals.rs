@@ -30,7 +30,7 @@ impl MarketDecimals {
 
     pub fn insert(&mut self, info: &MarketDescriptorInfo) {
         self.by_market.insert(
-            info.market.market_pda.clone(),
+            info.market.market_pda.to_base58(),
             TokenDecimals {
                 underlying: info.underlying_decimals,
                 quote: info.quote_decimals,

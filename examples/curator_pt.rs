@@ -13,6 +13,7 @@ async fn main() -> Result<(), Error> {
     let signer = read_keypair_file(std::env::var("CURATOR_KEYPAIR")?).map_err(|e| e.to_string())?;
     let vault: Pubkey = std::env::var("VAULT")?.parse()?;
     let program = Pubkey::new_from_array(acta_maker_sdk::ACTA_PROGRAM_ID);
+    // Mainnet Exponent PT market, SY and core vault for the route.
     let config = Config::discover(
         &rpc,
         program,

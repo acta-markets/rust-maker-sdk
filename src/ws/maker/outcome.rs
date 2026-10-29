@@ -174,18 +174,14 @@ impl QuoteOutcomeTracker {
                         QuoteFinalStatus::Outbid => {
                             QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason))
                         }
-                        QuoteFinalStatus::Filled | QuoteFinalStatus::Unknown => return,
+                        QuoteFinalStatus::Filled => return,
                     },
                     None if m.reason == RfqCloseReason::Filled
                         && matches!(self.outcome, QuoteOutcome::Acked) =>
                     {
                         QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason))
                     }
-                    None if m.reason == RfqCloseReason::Filled
-                        || m.reason == RfqCloseReason::Unknown =>
-                    {
-                        return;
-                    }
+                    None if m.reason == RfqCloseReason::Filled => return,
                     None => QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason)),
                 }
             }

@@ -55,7 +55,7 @@ mod tests {
             connection_epoch: 1,
             sequence: 1,
             data: VaultProjectionAdvancedData {
-                vault_pda: String::new(),
+                vault_pda: crate::Address32::new([0; 32]),
                 version,
                 slot: 1,
                 transaction_index: 0,

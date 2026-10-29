@@ -1,6 +1,8 @@
+use crate::Address32;
 use crate::types::QuoteExpiry;
 use crate::types::ids::{
-    MarketId, Nonce, OrderId, PositionType, Price, Quantity, Strike, TimeoutSeconds,
+    MarketId, Nonce, OptionTerms, OrderId, PositionType, Price, Quantity, Strike, TakerSide,
+    TimeoutSeconds,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -14,7 +16,6 @@ use super::common::{MarketDescriptor, WsChannel};
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr)]
 #[serde(tag = "type", content = "data")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum ClientMessage {
     Hello(HelloData),
     StartAuth(StartAuthData),
@@ -68,19 +69,17 @@ pub enum ClientMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HelloData {
     pub protocol_version: String,
-    #[serde(default)]
-    pub features: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_version: Option<String>,
+    pub on_disconnect: crate::ws::types::OnDisconnect,
+    pub client_name: String,
+    pub client_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartAuthData {
-    pub pubkey: String,
+    pub pubkey: Address32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,7 +91,7 @@ pub struct ResumeAuthData {
 pub struct AuthChallengeData {
     pub challenge: String,
     pub signature: String,
-    pub pubkey: String,
+    pub pubkey: Address32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,12 +115,11 @@ pub struct CancelRfqData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscribeData {
+    pub products: crate::ProductSet,
     pub request_id: Uuid,
     pub channels: Vec<WsChannel>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mints: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote_mints: Option<Vec<String>>,
+    pub underlying_mints: Vec<Address32>,
+    pub quote_mints: Vec<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,19 +131,15 @@ pub struct UnsubscribeData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddMintsData {
     pub request_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mints: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote_mints: Option<Vec<String>>,
+    pub underlying_mints: Vec<Address32>,
+    pub quote_mints: Vec<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoveMintsData {
     pub request_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mints: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote_mints: Option<Vec<String>>,
+    pub underlying_mints: Vec<Address32>,
+    pub quote_mints: Vec<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,7 +175,8 @@ pub struct GetMyReferralInfoData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuoteMessage {
     pub rfq_id: Uuid,
-    pub strike: Strike,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
     pub price: Price,
     pub valid_until: QuoteExpiry,
     pub nonce: Nonce,
@@ -194,7 +189,8 @@ pub struct QuoteMessage {
 pub struct ReplaceQuoteMessage {
     pub old_order_id: OrderId,
     pub rfq_id: Uuid,
-    pub strike: Strike,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
     pub price: Price,
     pub valid_until: QuoteExpiry,
     pub nonce: Nonce,
@@ -212,8 +208,8 @@ pub struct RfqRequestMessage {
     /// Also the idempotency key: a repeated `request_id` returns the RFQ it created.
     pub request_id: Uuid,
     pub market: MarketId,
-    pub position_type: PositionType,
-    pub strike: Strike,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
     pub quantity: Quantity,
     pub timeout_seconds: TimeoutSeconds,
 }
@@ -222,7 +218,7 @@ pub struct RfqRequestMessage {
 pub struct AcceptQuoteMessage {
     pub request_id: Uuid,
     pub rfq_id: Uuid,
-    pub maker: String,
+    pub maker: Address32,
     pub order_id: OrderId,
 }
 

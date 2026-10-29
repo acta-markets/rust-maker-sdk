@@ -4,58 +4,43 @@ use strum::IntoStaticStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum VaultOperatorKind {
     Governance,
     Delegate,
-    #[serde(other)]
-    Unknown,
 }
 
 /// Staging half: once `Stage` confirms, requesting the same swap again returns the `Unstage`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum VaultStagingStep {
     Stage,
     Unstage,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum VaultLeg {
     Main,
     Second,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum VaultSwapMode {
     Rebalance,
     Recovery,
     Closing,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum VaultSwapDirection {
     MainToSecond,
     SecondToMain,
-    #[serde(other)]
-    Unknown,
 }
 
 /// Wire permission integer; preserves unknown bits for forward compatibility.

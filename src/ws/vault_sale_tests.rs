@@ -1,14 +1,20 @@
 use std::str::FromStr;
 
 use solana_sdk::account::Account;
-use solana_sdk::pubkey::Pubkey;
+use solana_sdk::{message::AddressLookupTableAccount, pubkey::Pubkey};
 
 use super::*;
+use crate::chain::vault::spread_tests::{compile_with_tables, served_sale};
 use crate::chain::vault::{
-    ComputeBudgetBounds, Counterparty, VaultAccount, VaultManager, VaultManagerArgs,
+    ComputeBudgetBounds, Counterparty, VaultAccount, VaultIntentError, VaultManager,
+    VaultManagerArgs, VaultOpenIntent, VaultSaleTerms, VaultSpreadTerms, VaultTradeTerms,
+    verify_vault_open,
 };
 use crate::chain::{ChainClient, ChainError, MarketInfo, maker_pda_with_program_id};
-use crate::types::{Nonce, Price, Quantity, QuoteExpiry, Strike, TimeoutSeconds};
+use crate::spreads::{SpreadError, SpreadType};
+use crate::types::{
+    Nonce, OptionTerms, Price, Quantity, QuoteExpiry, Strike, TakerSide, TimeoutSeconds,
+};
 use crate::ws::types::{
     CommandAcceptedData, Delivery, QuoteReceivedMessage, RequestErrorEnvelope, ServerError,
     SponsoredTxToSignData, SubmitSignedSponsoredTxData, SwapSubmitData, SwapSubmitResultData,
@@ -75,17 +81,32 @@ fn maker_account(program: Pubkey, owner: Pubkey, quote_signer: Pubkey) -> Accoun
     account(program, data)
 }
 
-/// The fixture's chain: its maker account and lookup table.
+fn global_config_account(program: Pubkey, hot_authority: Pubkey) -> (Pubkey, Account) {
+    let (address, bump) = Pubkey::find_program_address(&[b"global_config"], &program);
+    let mut data = vec![0; 296];
+    data[..4].copy_from_slice(&[6, 1, bump, 0]);
+    data[8..40].copy_from_slice(hot_authority.as_ref());
+    (address, account(program, data))
+}
+
+fn fixture_table(case: &serde_json::Value) -> AddressLookupTableAccount {
+    let table = &case["served"]["lookup_table"];
+    AddressLookupTableAccount {
+        key: key(&table["key"]),
+        addresses: table["addresses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(key)
+            .collect(),
+    }
+}
+
+/// The fixture's chain: its maker account, checked GlobalConfig, and lookup table.
 fn chain(case: &serde_json::Value) -> ChainClient {
     let program = key(&case["program_id"]);
     let owner = key(&case["maker_owner"]);
-    let table = &case["served"]["lookup_table"];
-    let addresses: Vec<Pubkey> = table["addresses"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(key)
-        .collect();
+    let table = fixture_table(case);
     ChainClient::with_accounts(
         program,
         [
@@ -94,9 +115,10 @@ fn chain(case: &serde_json::Value) -> ChainClient {
                 maker_account(program, owner, key(&case["position"]["quote_signer"])),
             ),
             (
-                key(&table["key"]),
-                ChainClient::lookup_table_account(&addresses),
+                table.key,
+                ChainClient::lookup_table_account(&table.addresses),
             ),
+            global_config_account(program, key(&case["keeper"])),
         ],
     )
 }
@@ -117,7 +139,9 @@ fn sale(case: &serde_json::Value, window: Duration) -> VaultSale {
             underlying_decimals: crate::types::Decimals::new(9),
             quote_decimals: crate::types::Decimals::new(6),
         },
-        strike: Strike::new(num(&p["strike"])),
+        terms: OptionTerms::CoveredCall {
+            strike: Strike::new(num(&p["strike"])),
+        },
         quantity: Quantity::new(num(&p["quantity"])),
         rfq_timeout: TimeoutSeconds::new(20),
         window,
@@ -129,8 +153,12 @@ fn quote(case: &serde_json::Value, rfq_id: Uuid, price: u64) -> ServerMessage {
     let p = &case["position"];
     ServerMessage::QuoteReceived(QuoteReceivedMessage {
         rfq_id,
-        strike: Strike::new(num(&p["strike"])),
-        maker: case["maker_owner"].as_str().unwrap().to_owned(),
+        terms: OptionTerms::CoveredCall {
+            strike: Strike::new(num(&p["strike"])),
+        },
+        side: TakerSide::Sell,
+        maker: crate::Address32::from_base58(case["maker_owner"].as_str().unwrap())
+            .expect("valid fixture"),
         price: Price::new(price),
         valid_until: QuoteExpiry::from_unix_seconds(num(&p["valid_until"])),
         nonce: Nonce::new(num(&p["nonce"])),
@@ -236,8 +264,9 @@ async fn serve_sale(
     let rfq_id = Uuid::new_v4();
     let created = serde_json::json!({
         "type": "RfqCreated",
-        "data": {"rfq_id": rfq_id, "rfq_version": 1, "request_id": rfq.request_id,
-            "expires_at": 1, "created_at": 1},
+        "data": {"rfq_id": rfq_id, "rfq_version": 1, "terms": rfq.terms,
+            "side": rfq.side, "request_id": rfq.request_id,
+            "expires_at": 1, "created_at": 1, "order_options": []},
     });
     socket
         .send(Message::Text(created.to_string().into()))
@@ -339,16 +368,27 @@ async fn sell_rfq_takes_a_quote_signs_the_served_sale_and_reports_delivery() {
     client.close().await.expect("close");
     let submitted = peer.await.expect("peer");
 
-    let signature = |submit: &Option<SubmitSignedSponsoredTxData>| {
+    let participant_signature = |submit: &Option<SubmitSignedSponsoredTxData>| {
         let bytes = STANDARD
             .decode(&submit.as_ref().unwrap().tx_base64)
             .unwrap();
-        encode_base58(&bytes[1..65])
+        assert_eq!(
+            bytes[0], 2,
+            "keeper and vault delegate must be static signers"
+        );
+        assert!(
+            bytes[1..65].iter().all(|byte| *byte == 0),
+            "the keeper's transaction-id slot is still unsigned"
+        );
+        encode_base58(&bytes[65..129])
     };
     let Ok(SaleOutcome::Submitted(signed)) = &outcomes[0] else {
         panic!("first sale submitted: {:?}", outcomes[0]);
     };
-    assert_eq!(signed.signature, signature(&submitted[0]));
+    assert_eq!(
+        signed.participant_signature,
+        participant_signature(&submitted[0])
+    );
     assert_eq!(signed.order_id, submitted[0].as_ref().unwrap().order_id);
     let Err(unforwarded) = &outcomes[1] else {
         panic!("second sale rejected");
@@ -358,15 +398,19 @@ async fn sell_rfq_takes_a_quote_signs_the_served_sale_and_reports_delivery() {
         panic!("third sale rejected");
     };
     assert_eq!(
-        unknown.in_flight().map(|sale| sale.signature.clone()),
-        Some(signature(&submitted[2]))
+        unknown
+            .in_flight()
+            .map(|sale| sale.participant_signature.clone()),
+        Some(participant_signature(&submitted[2]))
     );
     let Err(silent) = &outcomes[3] else {
         panic!("unanswered submission fails");
     };
     assert_eq!(
-        silent.in_flight().map(|sale| sale.signature.clone()),
-        Some(signature(&submitted[3])),
+        silent
+            .in_flight()
+            .map(|sale| sale.participant_signature.clone()),
+        Some(participant_signature(&submitted[3])),
         "a timed-out submission may be in flight"
     );
     assert!(
@@ -562,8 +606,9 @@ async fn a_stalled_desk_times_out_before_anything_is_signed() {
         accept_command(&mut socket, rfq.request_id).await;
         let created = serde_json::json!({
             "type": "RfqCreated",
-            "data": {"rfq_id": Uuid::from_u128(9), "rfq_version": 1, "request_id": rfq.request_id,
-                "expires_at": 1, "created_at": 1},
+            "data": {"rfq_id": Uuid::from_u128(9), "rfq_version": 1, "terms": rfq.terms,
+                "side": rfq.side, "request_id": rfq.request_id,
+                "expires_at": 1, "created_at": 1, "order_options": []},
         });
         socket
             .send(Message::Text(created.to_string().into()))
@@ -606,4 +651,317 @@ async fn a_stalled_desk_times_out_before_anything_is_signed() {
     }
     client.close().await.expect("close");
     peer.await.expect("peer");
+}
+
+const SPREAD_QUOTE_SIGNER: [u8; 32] = [21; 32];
+
+/// A spread on the fixture sale's pair and expiry, K2 four premiums above K1.
+fn spread_sale(case: &serde_json::Value, put: bool) -> VaultSale {
+    let p = &case["position"];
+    let lower_strike = Strike::new(num(&p["strike"]));
+    let upper_strike = Strike::new(num(&p["strike"]) + 4 * num(&p["price"]));
+    let mut sale = sale(case, Duration::from_secs(5));
+    sale.market.is_put = put;
+    sale.market_pda = crate::quote::market_pda(
+        &key(&case["program_id"]),
+        &key(&p["underlying_mint"]),
+        &key(&p["quote_mint"]),
+        num(&p["expiry_ts"]),
+        put,
+    );
+    sale.terms = if put {
+        OptionTerms::PutSpread {
+            lower_strike,
+            upper_strike,
+        }
+    } else {
+        OptionTerms::CallSpread {
+            lower_strike,
+            upper_strike,
+        }
+    };
+    sale
+}
+
+/// The fixture maker's quote for `sale` and the vault open it binds.
+fn spread_quote(
+    case: &serde_json::Value,
+    sale: &VaultSale,
+    rfq_id: Uuid,
+) -> (QuoteReceivedMessage, crate::chain::vault::VaultOpenPosition) {
+    let p = &case["position"];
+    let mut quote = QuoteReceivedMessage {
+        rfq_id,
+        terms: sale.terms,
+        side: TakerSide::Sell,
+        maker: crate::Address32::from_base58(case["maker_owner"].as_str().unwrap())
+            .expect("valid fixture"),
+        price: Price::new(num(&p["price"])),
+        valid_until: QuoteExpiry::from_unix_seconds(num(&p["valid_until"])),
+        nonce: Nonce::new(num(&p["nonce"])),
+        order_id: OrderId::new([0; 32]),
+        net_price: None,
+    };
+    let VaultSaleTerms::Spread(terms) = sale.signed_terms(&quote).unwrap() else {
+        panic!("spread sale signs spread terms");
+    };
+    let open = writer(case)
+        .open_spread_as_taker(key(&case["keeper"]), key(&case["maker_owner"]), &terms)
+        .unwrap();
+    quote.order_id = OrderId::new(open.order_id);
+    (quote, open)
+}
+
+#[test]
+fn vault_sale_signs_both_spread_strikes_and_the_single_option_strike() {
+    let case = sale_case();
+    let p = &case["position"];
+    for (put, kind) in [
+        (false, SpreadType::CallSpread),
+        (true, SpreadType::PutSpread),
+    ] {
+        let sale = spread_sale(&case, put);
+        let (quote, _) = spread_quote(&case, &sale, Uuid::nil());
+        assert_eq!(
+            sale.signed_terms(&quote).unwrap(),
+            VaultSaleTerms::Spread(VaultSpreadTerms {
+                underlying_mint: key(&p["underlying_mint"]),
+                quote_mint: key(&p["quote_mint"]),
+                expiry_ts: num(&p["expiry_ts"]),
+                kind,
+                side: TakerSide::Sell,
+                lower_strike: num(&p["strike"]),
+                upper_strike: num(&p["strike"]) + 4 * num(&p["price"]),
+                quantity: num(&p["quantity"]),
+                price: num(&p["price"]),
+                valid_until: num(&p["valid_until"]),
+                nonce: num(&p["nonce"]),
+            })
+        );
+    }
+    let ServerMessage::QuoteReceived(quote) = quote(&case, Uuid::nil(), num(&p["price"])) else {
+        panic!("quote");
+    };
+    assert_eq!(
+        sale(&case, Duration::from_secs(1))
+            .signed_terms(&quote)
+            .unwrap(),
+        VaultSaleTerms::Physical(VaultTradeTerms {
+            underlying_mint: key(&p["underlying_mint"]),
+            quote_mint: key(&p["quote_mint"]),
+            expiry_ts: num(&p["expiry_ts"]),
+            is_put: false,
+            side: TakerSide::Sell,
+            strike: num(&p["strike"]),
+            quantity: num(&p["quantity"]),
+            price: num(&p["price"]),
+            valid_until: num(&p["valid_until"]),
+            nonce: num(&p["nonce"]),
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
+    let case = sale_case();
+    let signer = BytesSigner::from_secret(SPREAD_QUOTE_SIGNER);
+    // Call and put are served honestly; the last call is served with K2 moved.
+    let rounds: Vec<(VaultSale, Uuid, bool)> = [(false, true), (true, true), (false, false)]
+        .into_iter()
+        .map(|(put, honest)| (spread_sale(&case, put), Uuid::new_v4(), honest))
+        .collect();
+    let served: Vec<(QuoteReceivedMessage, String, bool)> = rounds
+        .iter()
+        .map(|(sale, rfq_id, honest)| {
+            let (quote, open) = spread_quote(&case, sale, *rfq_id);
+            let keeper = key(&case["keeper"]);
+            let mut ixs = served_sale(keeper, &open, &signer);
+            if !honest {
+                ixs[4].data[74] ^= 1;
+            }
+            let tx_base64 = compile_with_tables(keeper, &ixs, &[fixture_table(&case)]);
+            if *honest {
+                let writer = writer(&case);
+                let intent = VaultOpenIntent::Sale {
+                    keeper,
+                    writer: &writer,
+                    maker_owner: key(&case["maker_owner"]),
+                    maker_quote_signer: Pubkey::new_from_array(signer.pubkey_bytes()),
+                    terms: sale.signed_terms(&quote).unwrap(),
+                };
+                let to_sign = SponsoredTxToSignData {
+                    order_id: quote.order_id,
+                    tx_base64: tx_base64.clone(),
+                    last_valid_block_height: SERVED_HEIGHT,
+                    signature_deadline: std::time::SystemTime::now() + Duration::from_secs(60),
+                };
+                verify_vault_open(&to_sign, &intent, &[fixture_table(&case)], BOUNDS)
+                    .unwrap_or_else(|error| panic!("spread served transaction rejected: {error}"));
+            }
+            (quote, tx_base64, *honest)
+        })
+        .collect();
+    let (listener, url) = bind().await;
+    let peer_served = served.clone();
+    let peer = tokio::spawn(async move {
+        let mut socket = accept(&listener).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::ALL).await;
+        answer_reconcile(&mut socket, ALL_READS).await;
+        let mut submitted = Vec::new();
+        for (quote, tx_base64, honest) in peer_served {
+            let ClientMessage::RfqRequest(rfq) = receive_client(&mut socket).await else {
+                panic!("expected RfqRequest");
+            };
+            assert_eq!((rfq.terms, rfq.side), (quote.terms, TakerSide::Sell));
+            let created = serde_json::json!({
+                "type": "RfqCreated",
+                "data": {"rfq_id": quote.rfq_id, "rfq_version": 1, "terms": rfq.terms,
+                    "side": rfq.side, "request_id": rfq.request_id,
+                    "expires_at": 1, "created_at": 1, "order_options": []},
+            });
+            socket
+                .send(Message::Text(created.to_string().into()))
+                .await
+                .expect("send RfqCreated");
+            accept_command(&mut socket, rfq.request_id).await;
+            send_server(&mut socket, ServerMessage::QuoteReceived(quote.clone())).await;
+            let ClientMessage::AcceptQuote(accept) = receive_client(&mut socket).await else {
+                panic!("expected AcceptQuote");
+            };
+            assert_eq!(accept.order_id, quote.order_id);
+            accept_command(&mut socket, accept.request_id).await;
+            send_server(
+                &mut socket,
+                ServerMessage::SponsoredTxToSign(SponsoredTxToSignData {
+                    order_id: quote.order_id,
+                    tx_base64,
+                    last_valid_block_height: SERVED_HEIGHT,
+                    signature_deadline: std::time::SystemTime::now() + Duration::from_secs(60),
+                }),
+            )
+            .await;
+            if honest {
+                let ClientMessage::SubmitSignedSponsoredTx(submit) =
+                    receive_client(&mut socket).await
+                else {
+                    panic!("expected SubmitSignedSponsoredTx");
+                };
+                accept_command(&mut socket, submit.request_id).await;
+                submitted.push(submit);
+            }
+        }
+        drain_until_closed(socket).await;
+        submitted
+    });
+
+    let client = spawn_writer(url);
+    let epoch = client.wait_until_ready().await.expect("ready");
+    let program = key(&case["program_id"]);
+    let owner = key(&case["maker_owner"]);
+    let table = fixture_table(&case);
+    let chain = ChainClient::with_accounts(
+        program,
+        [
+            (
+                maker_pda_with_program_id(&program, &owner).0,
+                maker_account(
+                    program,
+                    owner,
+                    Pubkey::new_from_array(signer.pubkey_bytes()),
+                ),
+            ),
+            (
+                table.key,
+                ChainClient::lookup_table_account(&table.addresses),
+            ),
+            global_config_account(program, key(&case["keeper"])),
+        ],
+    );
+    let desk = || Desk {
+        writer: writer(&case),
+        min_price: num(&case["position"]["price"]),
+        events: Vec::new(),
+        stall: None,
+    };
+
+    // Refused before anything is sent: a put product on a call market, and K1 >= K2 or K1 = 0.
+    let call = &rounds[0].0;
+    let OptionTerms::CallSpread {
+        lower_strike,
+        upper_strike,
+    } = call.terms
+    else {
+        panic!("call spread");
+    };
+    let put_on_call = VaultSale {
+        terms: OptionTerms::PutSpread {
+            lower_strike,
+            upper_strike,
+        },
+        ..call.clone()
+    };
+    assert!(matches!(
+        client
+            .sell_rfq(&chain, &put_on_call, epoch, &Ungated, &mut desk())
+            .await,
+        Err(SaleError::Market)
+    ));
+    for (lower_strike, upper_strike) in [
+        (upper_strike, lower_strike),
+        (lower_strike, lower_strike),
+        (Strike::new(0), upper_strike),
+    ] {
+        let invalid = VaultSale {
+            terms: OptionTerms::CallSpread {
+                lower_strike,
+                upper_strike,
+            },
+            ..call.clone()
+        };
+        assert!(matches!(
+            client
+                .sell_rfq(&chain, &invalid, epoch, &Ungated, &mut desk())
+                .await,
+            Err(SaleError::Spread(SpreadError::InvalidStrikes))
+        ));
+    }
+
+    let mut outcomes = Vec::new();
+    for (sale, _, _) in &rounds {
+        let mut desk = desk();
+        outcomes.push(
+            client
+                .sell_rfq(&chain, sale, epoch, &Ungated, &mut desk)
+                .await,
+        );
+    }
+    client.close().await.expect("close");
+    let submitted = peer.await.expect("peer");
+    assert_eq!(submitted.len(), 2);
+    for ((outcome, submit), (quote, _, _)) in outcomes.iter().zip(&submitted).zip(&served) {
+        let Ok(SaleOutcome::Submitted(signed)) = outcome else {
+            panic!("spread sale submitted: {outcome:?}");
+        };
+        assert_eq!(
+            (signed.order_id, submit.order_id),
+            (quote.order_id, quote.order_id)
+        );
+        let bytes = STANDARD.decode(&submit.tx_base64).unwrap();
+        assert_eq!(signed.participant_signature, encode_base58(&bytes[65..129]));
+        assert_signed_by(&submit.tx_base64, 1, &BytesSigner::from_secret([10; 32]));
+    }
+    let Err(tampered) = &outcomes[2] else {
+        panic!("tampered spread signed: {:?}", outcomes[2]);
+    };
+    assert!(
+        matches!(
+            tampered,
+            SaleError::Sign(VaultTxError::Intent(VaultIntentError::Data {
+                index: 4,
+                offset: 74
+            }))
+        ),
+        "{tampered:?}"
+    );
+    assert!(tampered.in_flight().is_none());
 }

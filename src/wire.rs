@@ -1,5 +1,14 @@
 use thiserror::Error;
 
+/// Decodes a nullable field while requiring its JSON key to be present.
+pub fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer)
+}
+
 #[derive(Debug, Error)]
 pub enum WireError {
     #[error("invalid hex: {0}")]

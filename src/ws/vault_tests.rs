@@ -16,9 +16,10 @@ use super::{VaultOperatorClient, VaultOperatorConfig, VaultRequestError, VaultTx
 use crate::orders::{BytesSigner, SignerLike};
 use crate::types::ids::OrderId;
 use crate::types::{
-    VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection, VaultSwapMode,
+    OptionTerms, TakerSide, VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection,
+    VaultSwapMode,
 };
-use crate::wire::{decode_base58_32, decode_base58_64, encode_base58};
+use crate::wire::{decode_base58_64, encode_base58};
 use crate::ws::managed::{ManagedWsEvent, ManagedWsState, SendAwaitError};
 use crate::ws::types::{
     ActiveRfqsData, AuthRequestData, ClientMessage, HelloData, MakerPositionCapInfo, MmSummaryData,
@@ -36,18 +37,19 @@ fn operator() -> Arc<BytesSigner> {
     Arc::new(BytesSigner::from_secret(OPERATOR_SECRET))
 }
 
-fn vault_pda() -> String {
-    encode_base58(&VAULT_BYTES)
+fn vault_pda() -> crate::Address32 {
+    crate::Address32::new(VAULT_BYTES)
 }
 
 fn config(url: String) -> VaultOperatorConfig {
     VaultOperatorConfig::new(
+        crate::ProductSet::ALL,
         url,
         HelloData {
-            protocol_version: "1.0.0".to_string(),
-            features: Vec::new(),
-            client_name: Some("vault-test".to_string()),
-            client_version: None,
+            protocol_version: crate::WS_PROTOCOL_VERSION.to_string(),
+            on_disconnect: crate::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "vault-test".to_string(),
+            client_version: "test".to_string(),
         },
         vault_pda(),
         operator(),
@@ -121,7 +123,7 @@ async fn vault_handshake(socket: &mut Socket, permissions: VaultDelegatePermissi
         socket,
         ServerMessage::VaultAuthSuccess(VaultAuthSuccessData {
             vault_pda: vault_pda(),
-            operator: operator().pubkey_base58(),
+            operator: crate::Address32::new(operator().pubkey_bytes()),
             operator_kind: VaultOperatorKind::Delegate,
             permissions,
         }),
@@ -133,19 +135,17 @@ async fn vault_handshake_response(socket: &mut Socket, response: ServerMessage) 
     let ClientMessage::Hello(hello) = receive_client(socket).await else {
         panic!("expected Hello");
     };
-    assert!(
-        !hello
-            .features
-            .iter()
-            .any(|feature| feature == crate::ws::types::FEATURE_CANCEL_ON_DISCONNECT)
+    assert_eq!(
+        hello.on_disconnect,
+        crate::ws::types::OnDisconnect::KeepQuotes
     );
     send_server(
         socket,
         ServerMessage::Welcome(WelcomeData {
-            protocol_version: "1.0.0".to_string(),
+            protocol_version: crate::WS_PROTOCOL_VERSION.to_string(),
             server_version: "test".to_string(),
-            min_supported_version: "1.0.0".to_string(),
-            enabled_features: Vec::new(),
+            min_supported_version: crate::WS_PROTOCOL_VERSION.to_string(),
+
             server_time_unix_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 100,
             settlement_buffer_seconds: 90,
@@ -157,10 +157,14 @@ async fn vault_handshake_response(socket: &mut Socket, response: ServerMessage) 
         other => panic!("expected StartVaultAuth, got {other:?}"),
     };
     let operator_pubkey = operator().pubkey_base58();
-    assert_eq!(start.operator, operator_pubkey);
+    assert_eq!(
+        start.operator,
+        crate::Address32::from_base58(&operator_pubkey).expect("valid fixture")
+    );
     assert_eq!(start.vault_pda, vault_pda());
 
-    let challenge = crate::ws::auth::test_vault_auth_challenge(&operator_pubkey, &vault_pda());
+    let challenge =
+        crate::ws::auth::test_vault_auth_challenge(&operator_pubkey, &vault_pda().to_base58());
     send_server(
         socket,
         ServerMessage::AuthRequest(AuthRequestData {
@@ -173,9 +177,11 @@ async fn vault_handshake_response(socket: &mut Socket, response: ServerMessage) 
         other => panic!("expected AuthChallenge, got {other:?}"),
     };
     assert_eq!(answer.challenge, challenge);
-    assert_eq!(answer.pubkey, operator_pubkey);
-    let key = VerifyingKey::from_bytes(&decode_base58_32(&answer.pubkey).expect("pubkey"))
-        .expect("verifying key");
+    assert_eq!(
+        answer.pubkey,
+        crate::Address32::from_base58(&operator_pubkey).expect("valid fixture")
+    );
+    let key = VerifyingKey::from_bytes(&answer.pubkey.0).expect("verifying key");
     let signature = Signature::from_bytes(&decode_base58_64(&answer.signature).expect("sig"));
     key.verify(challenge.as_bytes(), &signature)
         .expect("challenge signed by the operator key");
@@ -186,7 +192,19 @@ async fn vault_handshake_response(socket: &mut Socket, response: ServerMessage) 
 /// Answer reconcile reads in the order they arrive, asserting the expected set.
 async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
     for expected_type in expected {
-        let read = receive_client(socket).await;
+        let mut read = receive_client(socket).await;
+        if let ClientMessage::Subscribe(subscribe) = read {
+            assert!(subscribe.products == crate::ProductSet::ALL);
+            send_server(
+                socket,
+                ServerMessage::SubscribeAck(crate::ws::types::SubscribeAckData {
+                    request_id: subscribe.request_id,
+                    subscribed: subscribe.channels,
+                }),
+            )
+            .await;
+            read = receive_client(socket).await;
+        }
         let actual: &'static str = (&read).into();
         assert_eq!(actual, *expected_type, "unexpected reconcile read {read:?}");
         let reply = match read {
@@ -196,7 +214,33 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
             }),
             ClientMessage::GetPositions(m) => ServerMessage::Positions(PositionsData {
                 request_id: m.request_id,
-                positions: Vec::new(),
+                positions: vec![crate::ws::types::PositionInfo {
+                    revision: crate::types::ids::PositionRevision {
+                        slot: 1,
+                        transaction_index: 0,
+                        instruction_index: 0,
+                    },
+                    pda: crate::Address32::new([11; 32]),
+                    market: crate::types::MarketId::new(crate::Address32::new([
+                        228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96,
+                        127, 212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
+                    ])),
+                    underlying_mint: crate::Address32::new([12; 32]),
+                    quote_mint: crate::Address32::new([13; 32]),
+                    underlying_decimals: 9,
+                    quote_decimals: 6,
+                    terms: OptionTerms::CallSpread {
+                        lower_strike: crate::types::Strike::new(100),
+                        upper_strike: crate::types::Strike::new(120),
+                    },
+                    side: TakerSide::Sell,
+                    state: crate::ws::types::PositionState::Open {},
+                    quantity: crate::types::Quantity::new(1),
+                    price: crate::types::Price::new(1),
+                    total_premium: crate::types::ids::Balance::new(1),
+                    created_at: std::time::UNIX_EPOCH,
+                    expiry_ts: std::time::UNIX_EPOCH,
+                }],
             }),
             ClientMessage::GetMmSummary(m) => ServerMessage::MmSummary(MmSummaryData {
                 request_id: m.request_id,
@@ -209,6 +253,7 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
                     },
                     notional: Vec::new(),
                     balances: Vec::new(),
+                    quote_liabilities: Vec::new(),
                 },
                 positions: Vec::new(),
                 active_quotes: Vec::new(),
@@ -223,7 +268,7 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
                 rfqs: Vec::new(),
             }),
             ClientMessage::GetMyQuotes(m) => {
-                assert!(m.scope == crate::ws::types::MakerQuoteScope::Live && m.cursor.is_none());
+                assert!(m.scope == crate::ws::types::MakerQuoteScope::Live {});
                 ServerMessage::MyQuotes(MyQuotesMessage {
                     request_id: m.request_id,
                     quotes: Vec::new(),
@@ -288,7 +333,10 @@ async fn vault_auth_handshake_reaches_ready_with_taker_reconcile() {
 
     let auth = client.auth().expect("vault auth recorded");
     assert_eq!(auth.permissions, VaultDelegatePermissions::OPEN_TAKER);
-    assert_eq!(auth.operator, operator().pubkey_base58());
+    assert_eq!(
+        auth.operator,
+        crate::Address32::new(operator().pubkey_bytes())
+    );
     assert!(client.can_taker());
     assert!(!client.can_maker());
 
@@ -345,7 +393,7 @@ async fn governance_without_quote_permission_recovers_only_taker_state() {
             &mut socket,
             ServerMessage::VaultAuthSuccess(VaultAuthSuccessData {
                 vault_pda: vault_pda(),
-                operator: operator().pubkey_base58(),
+                operator: crate::Address32::new(operator().pubkey_bytes()),
                 operator_kind: VaultOperatorKind::Governance,
                 permissions: VaultDelegatePermissions::from_bits(61),
             }),
@@ -375,7 +423,7 @@ async fn governance_with_quote_permission_recovers_maker_state_and_can_quote() {
             &mut socket,
             ServerMessage::VaultAuthSuccess(VaultAuthSuccessData {
                 vault_pda: vault_pda(),
-                operator: operator().pubkey_base58(),
+                operator: crate::Address32::new(operator().pubkey_bytes()),
                 operator_kind: VaultOperatorKind::Governance,
                 permissions: VaultDelegatePermissions::ALL,
             }),
@@ -577,7 +625,7 @@ async fn paused_swap_requests_receive_their_own_rejections_out_of_order() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trading_commands_resolve_on_their_receipt_or_rejection() {
-    use crate::types::ids::{MarketId, PositionType, Quantity, Strike, TimeoutSeconds};
+    use crate::types::ids::{MarketId, Quantity, Strike, TimeoutSeconds};
     use crate::ws::types::{
         AcceptQuoteMessage, CommandAcceptedData, Delivery, RequestErrorEnvelope, RfqRequestMessage,
         ServerError, SubmitSignedSponsoredTxData, SwapExecutionState, SwapStatusMessage,
@@ -588,30 +636,36 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
         let mut socket = accept(&listener).await;
         vault_handshake(&mut socket, VaultDelegatePermissions::ALL).await;
         answer_reconcile(&mut socket, ALL_READS).await;
-        let ClientMessage::RfqRequest(rfq) = receive_client(&mut socket).await else {
-            panic!("expected RfqRequest");
-        };
-        let created = serde_json::json!({
-            "type": "RfqCreated",
-            "data": {
-                "rfq_id": Uuid::new_v4(),
-                "rfq_version": 1,
-                "request_id": rfq.request_id,
-                "expires_at": 1,
-                "created_at": 1,
-            },
-        });
-        socket
-            .send(Message::Text(created.to_string().into()))
-            .await
-            .expect("send RfqCreated");
-        send_server(
-            &mut socket,
-            ServerMessage::CommandAccepted(CommandAcceptedData {
-                request_id: rfq.request_id,
-            }),
-        )
-        .await;
+        for spread in [false, true] {
+            let ClientMessage::RfqRequest(rfq) = receive_client(&mut socket).await else {
+                panic!("expected RfqRequest");
+            };
+            assert_eq!(rfq.terms.is_spread(), spread);
+            let created = serde_json::json!({
+                "type": "RfqCreated",
+                "data": {
+                    "rfq_id": Uuid::new_v4(),
+                    "rfq_version": 1,
+                    "terms": rfq.terms,
+                    "side": rfq.side,
+                    "request_id": rfq.request_id,
+                    "expires_at": 1,
+                    "created_at": 1,
+                    "order_options": [],
+                },
+            });
+            socket
+                .send(Message::Text(created.to_string().into()))
+                .await
+                .expect("send RfqCreated");
+            send_server(
+                &mut socket,
+                ServerMessage::CommandAccepted(CommandAcceptedData {
+                    request_id: rfq.request_id,
+                }),
+            )
+            .await;
+        }
         let ClientMessage::AcceptQuote(accept) = receive_client(&mut socket).await else {
             panic!("expected AcceptQuote");
         };
@@ -667,22 +721,35 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
 
     let client = VaultOperatorClient::spawn(config(url)).expect("spawn");
     client.wait_until_ready().await.expect("ready");
-    client
-        .rfq_request(RfqRequestMessage {
-            request_id: Uuid::new_v4(),
-            market: MarketId::new("market"),
-            position_type: PositionType::CoveredCall,
+    for terms in [
+        OptionTerms::CoveredCall {
             strike: Strike::new(1),
-            quantity: Quantity::new(1),
-            timeout_seconds: TimeoutSeconds::new(30),
-        })
-        .await
-        .expect("RfqRequest accepted");
+        },
+        OptionTerms::CallSpread {
+            lower_strike: Strike::new(1),
+            upper_strike: Strike::new(2),
+        },
+    ] {
+        client
+            .rfq_request(RfqRequestMessage {
+                request_id: Uuid::new_v4(),
+                market: MarketId::new(crate::Address32::new([
+                    228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127,
+                    212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
+                ])),
+                terms,
+                side: TakerSide::Sell,
+                quantity: Quantity::new(1),
+                timeout_seconds: TimeoutSeconds::new(30),
+            })
+            .await
+            .expect("RfqRequest accepted");
+    }
     let rejected = client
         .accept_quote(AcceptQuoteMessage {
             request_id: Uuid::new_v4(),
             rfq_id: Uuid::new_v4(),
-            maker: "maker".into(),
+            maker: crate::Address32::new([113; 32]),
             order_id: OrderId::new([5; 32]),
         })
         .await
@@ -975,7 +1042,7 @@ async fn rejected_reauthentication_does_not_retain_the_old_grant() {
             &mut socket,
             ServerMessage::AuthError(crate::ws::types::AuthErrorData {
                 reason: crate::ws::types::WsErrorCode::VaultOperatorUnauthorized,
-                message: None,
+                message: "rejected".to_string(),
             }),
         )
         .await;
@@ -1010,6 +1077,17 @@ async fn failed_initial_reads_clear_the_authenticated_grant() {
         let mut socket = accept(&listener).await;
         vault_handshake(&mut socket, VaultDelegatePermissions::ALL).await;
         failure_allowed.await.unwrap();
+        let ClientMessage::Subscribe(subscribe) = receive_client(&mut socket).await else {
+            panic!("expected Subscribe");
+        };
+        send_server(
+            &mut socket,
+            ServerMessage::SubscribeAck(crate::ws::types::SubscribeAckData {
+                request_id: subscribe.request_id,
+                subscribed: subscribe.channels,
+            }),
+        )
+        .await;
         let ClientMessage::GetMyActiveRfqs(request) = receive_client(&mut socket).await else {
             panic!("expected initial read");
         };
@@ -1018,7 +1096,7 @@ async fn failed_initial_reads_clear_the_authenticated_grant() {
             ServerMessage::RequestError(crate::ws::types::RequestErrorEnvelope {
                 request_id: request.request_id,
                 error: crate::ws::types::ServerError::Generic {
-                    code: crate::ws::types::WsErrorCode::Unknown("unavailable".into()),
+                    code: crate::ws::types::WsErrorCode::TemporarilyUnavailable,
                     message: "projection unavailable".into(),
                 },
                 delivery: None,
@@ -1054,7 +1132,8 @@ async fn checked_signing_verifies_served_intent_before_signing() {
 
     use crate::chain::vault::{
         ComputeBudgetBounds, PairPriceRoutes, PriceRoute, VaultIntentError, VaultManager,
-        VaultManagerArgs, VaultOpenIntent, VaultStagingState, VaultSwapIntent, VaultTradeTerms,
+        VaultManagerArgs, VaultOpenIntent, VaultSaleTerms, VaultStagingState, VaultSwapIntent,
+        VaultTradeTerms,
     };
 
     let cases: Vec<serde_json::Value> =
@@ -1107,20 +1186,22 @@ async fn checked_signing_verifies_served_intent_before_signing() {
     let writer = manager(case, "writer");
     let p = &case["position"];
     let intent = VaultOpenIntent::Sale {
+        keeper: key(&case["keeper"]),
         writer: &writer,
         maker_owner: key(&case["maker_owner"]),
         maker_quote_signer: key(&p["quote_signer"]),
-        terms: VaultTradeTerms {
+        terms: VaultSaleTerms::Physical(VaultTradeTerms {
             underlying_mint: key(&p["underlying_mint"]),
             quote_mint: key(&p["quote_mint"]),
             expiry_ts: p["expiry_ts"].as_u64().unwrap(),
             is_put: p["is_put"].as_bool().unwrap(),
+            side: crate::types::TakerSide::Sell,
             strike: p["strike"].as_u64().unwrap(),
             quantity: p["quantity"].as_u64().unwrap(),
             price: p["price"].as_u64().unwrap(),
             valid_until: p["valid_until"].as_u64().unwrap(),
             nonce: p["nonce"].as_u64().unwrap(),
-        },
+        }),
     };
     let mut to_sign = crate::ws::types::SponsoredTxToSignData {
         order_id: OrderId::from_hex(p["order_id"].as_str().unwrap()).unwrap(),
@@ -1131,7 +1212,23 @@ async fn checked_signing_verifies_served_intent_before_signing() {
     let signed = client
         .verify_and_sign_sponsored_tx(&to_sign, &intent, &table(case), bounds)
         .unwrap();
-    assert_signed_by(&signed.tx_base64, 0, &BytesSigner::from_secret([10; 32]));
+    let bytes = STANDARD.decode(&signed.tx_base64).unwrap();
+    assert!(
+        bytes[1..65].iter().all(|byte| *byte == 0),
+        "the keeper's slot remains unsigned for the keeper to cosign"
+    );
+    assert_signed_by(&signed.tx_base64, 1, &BytesSigner::from_secret([10; 32]));
+    let (_listener, wrong_url) = bind().await;
+    let wrong_signer = BytesSigner::from_secret([11; 32]);
+    let wrong_client = spawn(wrong_url, 11);
+    assert!(matches!(
+        wrong_client.verify_and_sign_sponsored_tx(&to_sign, &intent, &table(case), bounds),
+        Err(VaultTxError::Intent(VaultIntentError::ParticipantSigner {
+            expected,
+            found,
+        })) if expected == writer.actor() && found == Pubkey::new_from_array(wrong_signer.pubkey_bytes())
+    ));
+    wrong_client.close().await.expect("close");
     assert!(matches!(
         client.verify_and_sign_sponsored_tx(&to_sign, &intent, &[], bounds),
         Err(VaultTxError::Intent(VaultIntentError::MissingLookupTable(
@@ -1160,7 +1257,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
     let swap = &case["swap"];
     let request = SwapQuoteData {
         request_id: Uuid::from_str(swap["request_id"].as_str().unwrap()).unwrap(),
-        vault_pda: vault.addresses.vault.to_string(),
+        vault_pda: vault.addresses.vault.into(),
         mode: VaultSwapMode::Rebalance,
         direction: VaultSwapDirection::MainToSecond,
         amount: "1000000".into(),

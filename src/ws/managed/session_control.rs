@@ -32,7 +32,7 @@ pub(super) fn classify(message: &ServerMessage) -> Option<ControlFailure> {
 /// Every `AuthError` ends the attempt; unknown reasons trigger a retry.
 pub(super) fn classify_auth_error(error: &AuthErrorData) -> ControlFailure {
     let code = &error.reason;
-    let message = error.message.as_deref();
+    let message = Some(error.message.as_str());
     match classify_code(code, message) {
         Some(failure) => failure,
         None => ControlFailure::Retry(format_detail(code, message)),
@@ -44,13 +44,13 @@ fn classify_code(code: &WsErrorCode, message: Option<&str>) -> Option<ControlFai
         WsErrorCode::SessionReplaced => Some(ControlFailure::Terminate(
             ManagedWsTerminationReason::SessionReplaced,
         )),
+        WsErrorCode::UnsupportedProtocolVersion => Some(ControlFailure::Terminate(
+            ManagedWsTerminationReason::UnsupportedProtocolVersion,
+        )),
         WsErrorCode::Blacklisted
         | WsErrorCode::MakerUnregistered
         | WsErrorCode::MakerNotRegistered
-        | WsErrorCode::InvalidPubkey
         | WsErrorCode::InvalidSignature
-        | WsErrorCode::InvalidOperator
-        | WsErrorCode::InvalidVault
         | WsErrorCode::OperatorMismatch
         | WsErrorCode::VaultOperatorUnauthorized => Some(ControlFailure::Terminate(
             ManagedWsTerminationReason::AuthenticationRejected {
@@ -101,7 +101,7 @@ mod tests {
         let action = classify(&ServerMessage::VersionMismatch(VersionMismatchData {
             requested_version: "0.9.0".to_string(),
             server_version: "1.1.0".to_string(),
-            min_supported_version: "1.0.0".to_string(),
+            min_supported_version: crate::WS_PROTOCOL_VERSION.to_string(),
             message: "unsupported".to_string(),
         }));
 
@@ -121,5 +121,20 @@ mod tests {
         }));
 
         assert!(matches!(action, Some(ControlFailure::ClearCredentials(_))));
+    }
+
+    #[test]
+    fn unsupported_protocol_is_a_typed_terminal_outcome() {
+        let action = classify(&ServerMessage::Error(ServerError::Generic {
+            code: WsErrorCode::UnsupportedProtocolVersion,
+            message: "spreads".to_string(),
+        }));
+
+        assert!(matches!(
+            action,
+            Some(ControlFailure::Terminate(
+                ManagedWsTerminationReason::UnsupportedProtocolVersion
+            ))
+        ));
     }
 }

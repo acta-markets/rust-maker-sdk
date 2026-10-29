@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let common::Config { signer, owner, url } = common::load()?;
     let owner = owner.ok_or("set ACTA_MAKER_OWNER to the registered maker owner")?;
-    let maker_owner = acta_maker_sdk::decode_base58_32(&owner)?;
+    let maker_owner = acta_maker_sdk::Address32::from_base58(&owner)?;
     let venue = venue::load(&url).await?;
     let lifetime = std::time::Duration::from_secs(u64::from(venue.min_quote_validity_seconds) + 60);
     let signer = Arc::new(signer);
@@ -32,19 +32,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         url,
         HelloData {
             protocol_version: WS_PROTOCOL_VERSION.to_string(),
-            features: vec!["quote_expired".to_string()],
-            client_name: Some("maker-bot".to_string()),
-            client_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            on_disconnect: acta_maker_sdk::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "maker-bot".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
         },
         signer,
-        owner,
+        acta_maker_sdk::Address32::from_base58(&owner)?,
     )
     .low_latency()
     .with_initial_subscribe(SubscribeData {
+        products: acta_maker_sdk::ProductSet::ALL,
         request_id: Uuid::new_v4(),
         channels: vec![WsChannel::Rfqs],
-        underlying_mints: None,
-        quote_mints: None,
+        underlying_mints: vec![],
+        quote_mints: vec![],
     });
 
     let client = MakerQuoteClient::spawn(config)?;
@@ -109,21 +110,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ServerMessage::RfqBroadcast(rfq) if recovered == (true, true) => {
                 let valid_until =
                     QuoteExpiry::after(lifetime).ok_or("system clock is before the Unix epoch")?;
-                let quote = match RfqBinding::from_broadcast(rfq)?
-                    .quote()
-                    .maker_owner(maker_owner)
-                    .price(Price::new(1_000_000_000))
-                    .valid_until(valid_until)
-                    .venue(&venue)
-                    .nonce(Nonce::new(NONCE_GEN.next_u64()?))
-                    .sign(signer_for_quotes.as_ref())
+                let quote = match RfqBinding::from_broadcast_for_program(
+                    rfq,
+                    acta_maker_sdk::ACTA_PROGRAM_ID,
+                )?
+                .quote()
+                .maker_owner(maker_owner)
+                .price(Price::new(1_000_000_000))
+                .valid_until(valid_until)
+                .venue(&venue)
+                .nonce(Nonce::new(NONCE_GEN.next_u64()?))
+                .sign(signer_for_quotes.as_ref())
                 {
                     Ok(quote) => quote,
                     Err(QuoteBuildError::ValidUntilAfterMarketExpiry { .. }) => continue,
                     Err(error) => return Err(error.into()),
                 };
 
-                tracing::info!(rfq = %quote.rfq_id, strike = %quote.strike, "submitting quote");
+                tracing::info!(rfq = %quote.rfq_id, strike = %quote.terms.strike(), "submitting quote");
                 match client.quote_in_epoch(quote, recovery_epoch).await {
                     Ok(()) | Err(ManagedWsError::NotReady) => {}
                     Err(error) => return Err(error.into()),

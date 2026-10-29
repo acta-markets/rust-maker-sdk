@@ -1,6 +1,6 @@
-use acta_maker_sdk::PositionType;
 use acta_maker_sdk::orders::*;
 use acta_maker_sdk::wire::{encode_base58, encode_hex};
+use acta_maker_sdk::{PositionType, TakerSide};
 use proptest::prelude::*;
 
 #[test]
@@ -8,7 +8,7 @@ fn order_preimage_layout_is_stable() {
     let args = OrderPreimageArgs {
         chain_id: 0,
         program_id: [4u8; 32],
-        is_taker_buy: false,
+        side: TakerSide::Sell,
         position_type: PositionType::CashSecuredPut,
         market: [1u8; 32],
         strike: 42,
@@ -20,7 +20,7 @@ fn order_preimage_layout_is_stable() {
         nonce: 999,
     };
 
-    let preimage = build_order_preimage(&args);
+    let preimage = build_order_preimage(&args).unwrap();
     assert_eq!(preimage.len(), ORDER_PREIMAGE_LEN);
     assert_eq!(&preimage[0..4], &ORDER_DOMAIN_TAG);
     assert_eq!(u64::from_le_bytes(preimage[4..12].try_into().unwrap()), 0);
@@ -59,7 +59,7 @@ fn order_id_changes_when_nonce_changes() {
     let base = OrderPreimageArgs {
         chain_id: 0,
         program_id: [4u8; 32],
-        is_taker_buy: false,
+        side: TakerSide::Sell,
         position_type: PositionType::CashSecuredPut,
         market: [9u8; 32],
         strike: 1_000_000_000,
@@ -75,8 +75,8 @@ fn order_id_changes_when_nonce_changes() {
         ..base.clone()
     };
 
-    let h1 = compute_order_id(&base);
-    let h2 = compute_order_id(&alt);
+    let h1 = compute_order_id(&base).unwrap();
+    let h2 = compute_order_id(&alt).unwrap();
     assert_ne!(h1, h2);
 }
 
@@ -85,7 +85,7 @@ fn sign_and_verify_order_id() {
     let args = OrderPreimageArgs {
         chain_id: 0,
         program_id: [1u8; 32],
-        is_taker_buy: false,
+        side: TakerSide::Sell,
         position_type: PositionType::CoveredCall,
         market: [2u8; 32],
         strike: 1,
@@ -96,7 +96,7 @@ fn sign_and_verify_order_id() {
         taker: [4u8; 32],
         nonce: 42,
     };
-    let order_id = compute_order_id(&args);
+    let order_id = compute_order_id(&args).unwrap();
 
     let signing_key = [9u8; 32];
     let signature = sign_order_id_bytes(&order_id, &signing_key).unwrap();
@@ -170,7 +170,11 @@ proptest! {
         let args = OrderPreimageArgs {
             chain_id,
             program_id,
-            is_taker_buy,
+            side: if is_taker_buy {
+                TakerSide::Buy
+            } else {
+                TakerSide::Sell
+            },
             position_type: if is_put {
                 PositionType::CashSecuredPut
             } else {
@@ -186,14 +190,14 @@ proptest! {
             nonce,
         };
 
-        let preimage = build_order_preimage(&args);
+        let preimage = build_order_preimage(&args).unwrap();
         prop_assert_eq!(preimage.len(), ORDER_PREIMAGE_LEN);
         prop_assert_eq!(&preimage[0..4], &ORDER_DOMAIN_TAG);
         prop_assert_eq!(u64::from_le_bytes(preimage[4..12].try_into().unwrap()), chain_id);
 
         let base = 44usize;
         prop_assert_eq!(preimage[base], if is_taker_buy { 1 } else { 0 });
-        prop_assert_eq!(preimage[base + 1], u8::from(args.position_type));
+        prop_assert_eq!(preimage[base + 1], u8::from(args.position_type == PositionType::CashSecuredPut));
         prop_assert_eq!(&preimage[base + 2..base + 34], &args.market);
         prop_assert_eq!(
             u64::from_le_bytes(preimage[base + 34..base + 42].try_into().unwrap()),
@@ -237,7 +241,11 @@ proptest! {
         let base = OrderPreimageArgs {
             chain_id,
             program_id,
-            is_taker_buy,
+            side: if is_taker_buy {
+                TakerSide::Buy
+            } else {
+                TakerSide::Sell
+            },
             position_type: if is_put {
                 PositionType::CashSecuredPut
             } else {
@@ -257,8 +265,8 @@ proptest! {
             ..base.clone()
         };
 
-        let h1 = compute_order_id(&base);
-        let h2 = compute_order_id(&alt);
+        let h1 = compute_order_id(&base).unwrap();
+        let h2 = compute_order_id(&alt).unwrap();
         prop_assert_ne!(h1, h2);
     }
 }
@@ -267,7 +275,7 @@ proptest! {
 fn order_id_matches_contract_golden_vector() {
     let preimage = build_order_preimage(&OrderPreimageArgs {
         chain_id: 0x0102030405060708,
-        is_taker_buy: true,
+        side: TakerSide::Buy,
         strike: 0x1112131415161718,
         quantity: 0x2122232425262728,
         gross_price: 0x3132333435363738,
@@ -278,7 +286,8 @@ fn order_id_matches_contract_golden_vector() {
         market: std::array::from_fn(|i| (i + 32) as u8),
         maker: std::array::from_fn(|i| (i + 64) as u8),
         taker: std::array::from_fn(|i| (i + 96) as u8),
-    });
+    })
+    .unwrap();
     let expected_preimage = [
         0x41, 0x43, 0x54, 0x41, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00, 0x01, 0x02,
         0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11,

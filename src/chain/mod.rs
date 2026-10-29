@@ -14,7 +14,7 @@ pub mod vault;
 
 pub mod wsol;
 
-pub use accounts::{MakerInfo, MarketInfo, PositionInfo, PositionStatus};
+pub use accounts::{GlobalConfigInfo, MakerInfo, MarketInfo, PositionInfo, PositionStatus};
 pub use batch::{
     MakerSnapshot, PositionSnapshot, PremiumBalance, PremiumToken, decode_premium_balance,
 };
@@ -34,3 +34,6 @@ pub use rpc::{
 };
 
 pub use wsol::{DEFAULT_SOL_RESERVE_LAMPORTS, NATIVE_MINT, NativeSolFunding};
+
+pub mod events;
+pub mod spreads;

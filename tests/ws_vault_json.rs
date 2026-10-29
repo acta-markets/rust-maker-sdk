@@ -32,18 +32,32 @@ fn assert_server_wire(message: &ServerMessage, expected: &str) -> ServerMessage 
 #[test]
 fn start_vault_auth_roundtrip() {
     let message = ClientMessage::StartVaultAuth(StartVaultAuthData {
-        operator: "operator".to_string(),
-        vault_pda: "vault".to_string(),
+        operator: acta_maker_sdk::Address32::from_base58(
+            "TvHro9eZ3AMmmTr83uL1tJDubsTad4dj4rEbK1jC2Pk",
+        )
+        .unwrap(),
+        vault_pda: acta_maker_sdk::Address32::from_base58(
+            "GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY",
+        )
+        .unwrap(),
     });
     let parsed = assert_client_wire(
         &message,
-        r#"{"type":"StartVaultAuth","data":{"operator":"operator","vault_pda":"vault"}}"#,
+        r#"{"type":"StartVaultAuth","data":{"operator":"TvHro9eZ3AMmmTr83uL1tJDubsTad4dj4rEbK1jC2Pk","vault_pda":"GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY"}}"#,
     );
     let ClientMessage::StartVaultAuth(data) = parsed else {
         panic!("expected StartVaultAuth");
     };
-    assert_eq!(data.operator, "operator");
-    assert_eq!(data.vault_pda, "vault");
+    assert_eq!(
+        data.operator,
+        acta_maker_sdk::Address32::from_base58("TvHro9eZ3AMmmTr83uL1tJDubsTad4dj4rEbK1jC2Pk")
+            .unwrap()
+    );
+    assert_eq!(
+        data.vault_pda,
+        acta_maker_sdk::Address32::from_base58("GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY")
+            .unwrap()
+    );
     assert_eq!(message.request_id(), None);
 }
 
@@ -51,14 +65,17 @@ fn start_vault_auth_roundtrip() {
 fn vault_swap_quote_and_submit_roundtrip() {
     let quote = ClientMessage::SwapQuote(SwapQuoteData {
         request_id: request_id(),
-        vault_pda: "vault".to_string(),
+        vault_pda: acta_maker_sdk::Address32::from_base58(
+            "GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY",
+        )
+        .unwrap(),
         mode: VaultSwapMode::Rebalance,
         direction: VaultSwapDirection::MainToSecond,
         amount: u64::MAX.to_string(),
         slippage_bps: 25,
     });
     let expected = format!(
-        r#"{{"type":"SwapQuote","data":{{"request_id":"{REQUEST_ID}","vault_pda":"vault","mode":"rebalance","direction":"main_to_second","amount":"{}","slippage_bps":25}}}}"#,
+        r#"{{"type":"SwapQuote","data":{{"request_id":"{REQUEST_ID}","vault_pda":"GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY","mode":"rebalance","direction":"main_to_second","amount":"{}","slippage_bps":25}}}}"#,
         u64::MAX
     );
     let ClientMessage::SwapQuote(data) = assert_client_wire(&quote, &expected) else {
@@ -84,30 +101,31 @@ fn vault_swap_quote_and_submit_roundtrip() {
 }
 
 #[test]
-fn swap_quote_slippage_defaults_to_50_bps() {
+fn swap_quote_requires_slippage() {
     let raw = format!(
-        r#"{{"type":"SwapQuote","data":{{"request_id":"{REQUEST_ID}","vault_pda":"vault","mode":"recovery","direction":"second_to_main","amount":"1"}}}}"#
+        r#"{{"type":"SwapQuote","data":{{"request_id":"{REQUEST_ID}","vault_pda":"GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY","mode":"recovery","direction":"second_to_main","amount":"1"}}}}"#
     );
-    let ClientMessage::SwapQuote(data) = serde_json::from_str(&raw).unwrap() else {
-        panic!("expected SwapQuote");
-    };
-    assert_eq!(data.slippage_bps, 50);
-    assert_eq!(data.mode, VaultSwapMode::Recovery);
-    assert_eq!(data.direction, VaultSwapDirection::SecondToMain);
+    assert!(serde_json::from_str::<ClientMessage>(&raw).is_err());
 }
 
 #[test]
 fn vault_auth_success_roundtrip() {
     let permissions = VaultDelegatePermissions::from_bits(3);
     let message = ServerMessage::VaultAuthSuccess(VaultAuthSuccessData {
-        vault_pda: "vault".to_string(),
-        operator: "operator".to_string(),
+        vault_pda: acta_maker_sdk::Address32::from_base58(
+            "GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY",
+        )
+        .unwrap(),
+        operator: acta_maker_sdk::Address32::from_base58(
+            "TvHro9eZ3AMmmTr83uL1tJDubsTad4dj4rEbK1jC2Pk",
+        )
+        .unwrap(),
         operator_kind: VaultOperatorKind::Delegate,
         permissions,
     });
     let parsed = assert_server_wire(
         &message,
-        r#"{"type":"VaultAuthSuccess","data":{"vault_pda":"vault","operator":"operator","operator_kind":"delegate","permissions":3}}"#,
+        r#"{"type":"VaultAuthSuccess","data":{"vault_pda":"GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY","operator":"TvHro9eZ3AMmmTr83uL1tJDubsTad4dj4rEbK1jC2Pk","operator_kind":"delegate","permissions":3}}"#,
     );
     let ServerMessage::VaultAuthSuccess(data) = parsed else {
         panic!("expected VaultAuthSuccess");
@@ -131,20 +149,18 @@ fn vault_auth_success_roundtrip() {
 }
 
 #[test]
-fn vault_enums_decode_unknown_tags() {
-    let raw = r#"{"type":"VaultAuthSuccess","data":{"vault_pda":"vault","operator":"operator","operator_kind":"custodian","permissions":128}}"#;
-    let ServerMessage::VaultAuthSuccess(data) = parse_server_message(raw).unwrap() else {
-        panic!("expected VaultAuthSuccess");
-    };
-    assert_eq!(data.operator_kind, VaultOperatorKind::Unknown);
-    assert_eq!(data.permissions.bits(), 128);
-    assert!(!data.permissions.contains(VaultDelegatePermissions::ALL));
+fn vault_enums_reject_unknown_tags() {
+    let raw = r#"{"type":"VaultAuthSuccess","data":{"vault_pda":"GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY","operator":"TvHro9eZ3AMmmTr83uL1tJDubsTad4dj4rEbK1jC2Pk","operator_kind":"custodian","permissions":128}}"#;
+    assert!(parse_server_message(raw).is_err());
 }
 
 #[test]
 fn vault_projection_advanced_carries_numeric_version_and_slot() {
     let message = ServerMessage::VaultProjectionAdvanced(VaultProjectionAdvancedData {
-        vault_pda: "vault".to_string(),
+        vault_pda: acta_maker_sdk::Address32::from_base58(
+            "GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY",
+        )
+        .unwrap(),
         version: 7,
         slot: 42,
         transaction_index: 3,
@@ -153,7 +169,7 @@ fn vault_projection_advanced_carries_numeric_version_and_slot() {
     });
     let parsed = assert_server_wire(
         &message,
-        r#"{"type":"VaultProjectionAdvanced","data":{"vault_pda":"vault","version":7,"slot":42,"transaction_index":3,"signature":"sig","event_index":1}}"#,
+        r#"{"type":"VaultProjectionAdvanced","data":{"vault_pda":"GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY","version":7,"slot":42,"transaction_index":3,"signature":"sig","event_index":1}}"#,
     );
     let ServerMessage::VaultProjectionAdvanced(data) = parsed else {
         panic!("expected VaultProjectionAdvanced");
@@ -165,16 +181,23 @@ fn vault_projection_advanced_carries_numeric_version_and_slot() {
 #[test]
 fn vault_catalog_changed_names_the_vault() {
     let message = ServerMessage::VaultCatalogChanged(VaultCatalogChangedData {
-        vault_pda: "vault".to_string(),
+        vault_pda: acta_maker_sdk::Address32::from_base58(
+            "GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY",
+        )
+        .unwrap(),
     });
     let parsed = assert_server_wire(
         &message,
-        r#"{"type":"VaultCatalogChanged","data":{"vault_pda":"vault"}}"#,
+        r#"{"type":"VaultCatalogChanged","data":{"vault_pda":"GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY"}}"#,
     );
     let ServerMessage::VaultCatalogChanged(data) = parsed else {
         panic!("expected VaultCatalogChanged");
     };
-    assert_eq!(data.vault_pda, "vault");
+    assert_eq!(
+        data.vault_pda,
+        acta_maker_sdk::Address32::from_base58("GYVb4hWw8D22pkScWSZZB1QjT7jmuFkPCR1a9DCe1GjY")
+            .unwrap()
+    );
     assert_eq!(message.request_id(), None);
 }
 
@@ -193,7 +216,7 @@ fn vault_swap_results_roundtrip_without_claiming_chain_confirmation() {
         staging: None,
     });
     let expected = format!(
-        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","last_valid_block_height":77,"in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":"123"}}}}"#
+        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","last_valid_block_height":77,"in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":"123","staging":null}}}}"#
     );
     let ServerMessage::SwapQuoteResult(data) = assert_server_wire(&quote, &expected) else {
         panic!("expected SwapQuoteResult");
@@ -206,10 +229,7 @@ fn vault_swap_results_roundtrip_without_claiming_chain_confirmation() {
         r#""valid_until":"123","main_price_update":"M","second_price_update":"S""#,
     );
     assert!(serde_json::from_str::<ServerMessage>(&older).is_ok());
-    let staged = expected.replace(
-        r#""valid_until":"123""#,
-        r#""valid_until":"123","staging":"unstage""#,
-    );
+    let staged = expected.replace(r#""staging":null"#, r#""staging":"unstage""#);
     let ServerMessage::SwapQuoteResult(data) = serde_json::from_str(&staged).unwrap() else {
         panic!("expected SwapQuoteResult");
     };

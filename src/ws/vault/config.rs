@@ -9,26 +9,27 @@ use crate::ws::types::HelloData;
 pub struct VaultOperatorConfig {
     pub managed: ManagedWsConfig,
     pub request_timeout: Duration,
-    pub(super) vault_pda: String,
+    pub(super) vault_pda: crate::Address32,
     pub(super) operator: Arc<dyn SignerLike + Send + Sync>,
 }
 
 impl VaultOperatorConfig {
     #[must_use]
     pub fn new(
+        products: crate::ProductSet,
         url: impl Into<String>,
         hello: HelloData,
-        vault_pda: impl Into<String>,
+        vault_pda: impl Into<crate::Address32>,
         operator: Arc<dyn SignerLike + Send + Sync>,
     ) -> Self {
         let vault_pda = vault_pda.into();
         let managed = ManagedWsConfig::new_with_signing(
             url,
             hello,
-            operator.pubkey_base58(),
+            crate::Address32::new(operator.pubkey_bytes()),
             ChallengeSigning::Local(Arc::clone(&operator)),
         )
-        .with_vault_auth(vault_pda.clone());
+        .with_vault_auth(vault_pda, products);
         Self {
             managed,
             request_timeout: Duration::from_secs(5),
@@ -50,12 +51,12 @@ impl VaultOperatorConfig {
     }
 
     #[must_use]
-    pub fn vault_pda(&self) -> &str {
+    pub fn vault_pda(&self) -> &crate::Address32 {
         &self.vault_pda
     }
 
     #[must_use]
-    pub fn operator_pubkey(&self) -> String {
-        self.operator.pubkey_base58()
+    pub fn operator_pubkey(&self) -> crate::Address32 {
+        crate::Address32::new(self.operator.pubkey_bytes())
     }
 }

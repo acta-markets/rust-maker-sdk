@@ -104,12 +104,9 @@ impl<'de> Deserialize<'de> for ReferralCode {
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum TakerStatus {
     Pending,
     Active,
-    #[serde(other)]
-    Unknown,
 }
 
 impl TryFrom<String> for TakerStatus {

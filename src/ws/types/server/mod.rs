@@ -29,7 +29,6 @@ use super::market::MarketInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoStaticStr, strum::VariantNames)]
 #[serde(tag = "type", content = "data")]
-#[non_exhaustive]
 pub enum ServerMessage {
     Welcome(WelcomeData),
     VersionMismatch(VersionMismatchData),
@@ -110,20 +109,6 @@ pub enum ServerMessage {
     SwapStatus(SwapStatusMessage),
     SwapSettled(SwapSettledMessage),
     CommandAccepted(CommandAcceptedData),
-    /// Forward-compat: any message type this SDK version doesn't know yet.
-    Unknown(UnknownServerMessage),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnknownServerMessage {
-    pub message_type: String,
-    pub raw_json: Box<str>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnknownServerError {
-    pub error_type: String,
-    pub raw_json: Box<str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,7 +116,8 @@ pub struct RequestErrorEnvelope {
     pub request_id: Uuid,
     pub error: ServerError,
     /// Present on `SubmitSignedSponsoredTx` and `SwapSubmit` failures.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub delivery: Option<Delivery>,
 }
 
@@ -187,7 +173,6 @@ pub struct MyReferralInfoData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum InviteErrorReason {
     InvalidCode,
     CodeExhausted,
@@ -197,28 +182,22 @@ pub enum InviteErrorReason {
     CodeOwnerBlacklisted,
     AlreadyRegistered,
     InternalError,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum ClaimErrorReason {
     NotRegistered,
     InvalidFormat,
     CodeTaken,
     Reserved,
     InternalError,
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(
     Debug, Clone, Serialize, Deserialize, IntoStaticStr, strum::VariantNames, thiserror::Error,
 )]
 #[serde(tag = "type", content = "data")]
-#[non_exhaustive]
 pub enum ServerError {
     #[error("Must be authenticated to {action}")]
     Unauthenticated { action: AuthRequiredAction },
@@ -326,10 +305,6 @@ pub enum ServerError {
 
     #[error("{message}")]
     Generic { code: WsErrorCode, message: String },
-
-    /// Forward-compat: any error code this SDK version doesn't know yet.
-    #[error("unrecognized server error")]
-    Unknown(UnknownServerError),
 }
 
 #[serde_as]
@@ -338,7 +313,6 @@ pub struct WelcomeData {
     pub protocol_version: String,
     pub server_version: String,
     pub min_supported_version: String,
-    pub enabled_features: Vec<String>,
     #[serde_as(as = "UnixMillis")]
     pub server_time_unix_ms: SystemTime,
     /// Earliest accepted quote `valid_until` is now plus this.
@@ -444,80 +418,12 @@ impl ServerMessage {
             | Self::StatsUpdate(_)
             | Self::Pong(_)
             | Self::Error(_)
-            | Self::RequireInvite
-            | Self::Unknown(_) => None,
+            | Self::RequireInvite => None,
         }
     }
 }
 
-/// Parse a server frame, tolerating unknown message types and error codes
-/// (forward-compat): unknown `type` → [`ServerMessage::Unknown`], unknown
-/// error code or error payload → [`ServerError::Unknown`]. A known non-error
-/// message type with a malformed payload is still an error.
+/// Parse a server frame. The wire is closed: an unknown type or code is an error.
 pub fn parse_server_message(text: &str) -> Result<ServerMessage, serde_json::Error> {
-    match serde_json::from_str::<ServerMessage>(text) {
-        Ok(msg) => Ok(msg),
-        Err(err) => match unknown_fallback(text) {
-            Some(msg) => Ok(msg),
-            None => Err(err),
-        },
-    }
-}
-
-fn unknown_fallback(text: &str) -> Option<ServerMessage> {
-    use strum::VariantNames;
-
-    #[derive(Deserialize)]
-    struct Tag {
-        r#type: String,
-    }
-    #[derive(Deserialize)]
-    struct Envelope {
-        data: Tag,
-    }
-    #[derive(Deserialize)]
-    struct RequestErrorWire {
-        data: RequestErrorDataWire,
-    }
-    #[derive(Deserialize)]
-    struct RequestErrorDataWire {
-        request_id: Uuid,
-        error: Tag,
-        #[serde(default)]
-        delivery: Option<Delivery>,
-    }
-
-    let tag = serde_json::from_str::<Tag>(text).ok()?;
-    if !ServerMessage::VARIANTS.contains(&tag.r#type.as_str()) {
-        tracing::debug!(message_type = %tag.r#type, "ignoring unknown server message type");
-        return Some(ServerMessage::Unknown(UnknownServerMessage {
-            message_type: tag.r#type,
-            raw_json: text.into(),
-        }));
-    }
-    match tag.r#type.as_str() {
-        "Error" => {
-            let env = serde_json::from_str::<Envelope>(text).ok()?;
-            tracing::debug!(error_type = %env.data.r#type, "unrecognized server error code");
-            Some(ServerMessage::Error(ServerError::Unknown(
-                UnknownServerError {
-                    error_type: env.data.r#type,
-                    raw_json: text.into(),
-                },
-            )))
-        }
-        "RequestError" => {
-            let env = serde_json::from_str::<RequestErrorWire>(text).ok()?;
-            tracing::debug!(error_type = %env.data.error.r#type, "unrecognized server error code");
-            Some(ServerMessage::RequestError(RequestErrorEnvelope {
-                request_id: env.data.request_id,
-                error: ServerError::Unknown(UnknownServerError {
-                    error_type: env.data.error.r#type,
-                    raw_json: text.into(),
-                }),
-                delivery: env.data.delivery,
-            }))
-        }
-        _ => None,
-    }
+    serde_json::from_str(text)
 }

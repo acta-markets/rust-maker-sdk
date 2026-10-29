@@ -1,23 +1,23 @@
+use crate::Address32;
 use crate::types::unix_time::UnixSeconds;
 use std::time::SystemTime;
 
 use crate::types::QuoteExpiry;
 use crate::types::ids::{
-    Decimals, MarketId, OrderId, OrderVersion, PositionType, Price, Quantity, RfqVersion, Slot,
-    Strike,
+    Decimals, MarketId, OptionTerms, OrderId, OrderVersion, PositionType, Price, Quantity,
+    RfqVersion, Slot, Strike,
 };
 use crate::types::{
     MakerBalanceCapInfo, MakerNotionalCapInfo, MakerPositionCapInfo, MarketCapInfo, QuoteCapInfo,
-    TokenCapInfo,
+    QuoteLiabilityCapInfo, TakerSide, TokenCapInfo,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use uuid::Uuid;
 
 use super::super::common::{
-    GlobalStats, MarketDescriptorInfo, MarketStats, PositionInfo, PositionReconciliationStatus,
-    PositionSizeRule, PositionStatus, PositionUpdateType, StatsDelta, TokenInfo, TradeInfo,
-    WsChannel,
+    GlobalStats, MarketDescriptorInfo, PositionInfo, PositionSizeRule, PositionUpdateType,
+    TokenInfo, TradeInfo, WsChannel,
 };
 use super::super::market::MarketInfo;
 
@@ -64,10 +64,8 @@ pub struct MakerPositionsMessage {
     pub request_id: Uuid,
     pub positions: Vec<MakerPositionInfo>,
     /// Positions omitted from `positions` because their market projection is incomplete.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unrenderable: Vec<UnrenderablePositionInfo>,
-    /// True when the result was truncated at the server limit (default 100, max 500).
-    #[serde(default)]
+    /// More rows exist past this page's cursor.
     pub has_more: bool,
 }
 
@@ -75,7 +73,7 @@ pub struct MakerPositionsMessage {
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnrenderablePositionInfo {
-    pub pda: String,
+    pub pda: Address32,
     pub market: MarketId,
     /// Keyset-cursor key, so a page may end on an unrenderable row.
     #[serde_as(as = "UnixSeconds")]
@@ -87,31 +85,27 @@ pub struct UnrenderablePositionInfo {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MakerPositionInfo {
-    pub pda: String,
+    pub revision: crate::types::ids::PositionRevision,
+    pub pda: Address32,
     pub market: MarketId,
-    pub underlying_mint: String,
+    pub underlying_mint: Address32,
     pub underlying_symbol: String,
     pub underlying_decimals: u8,
-    pub quote_mint: String,
+    pub quote_mint: Address32,
     pub quote_symbol: String,
     pub quote_decimals: u8,
-    pub position_type: PositionType,
-    pub status: PositionStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reconciliation_status: Option<PositionReconciliationStatus>,
-    pub strike: Strike,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
+    #[serde(flatten)]
+    pub state: crate::ws::types::common::PositionState,
     pub quantity: Quantity,
     pub price: Price,
-    #[serde(default)]
-    pub total_premium: Price,
+    /// Net premium in quote atoms, after the protocol fee.
+    pub total_premium: crate::types::ids::Balance,
     #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
     #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub is_otm: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub settlement_price: Option<Price>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,13 +122,14 @@ pub struct MakerQuoteInfo {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
     pub market: MarketId,
-    pub underlying_mint: String,
+    pub underlying_mint: Address32,
     pub underlying_symbol: String,
     pub underlying_decimals: u8,
-    pub quote_mint: String,
+    pub quote_mint: Address32,
     pub quote_symbol: String,
     pub quote_decimals: u8,
-    pub strike: Strike,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
     pub price: Price,
     pub quantity: Quantity,
     pub valid_until: QuoteExpiry,
@@ -194,17 +189,16 @@ pub struct MakerMarketsMessage {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MakerMarketInfo {
-    pub market_pda: String,
-    pub underlying_mint: String,
-    pub quote_mint: String,
+    pub products: crate::types::ProductSet,
+    pub market_pda: Address32,
+    pub underlying_mint: Address32,
+    pub quote_mint: Address32,
     #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
     pub is_put: bool,
     pub is_finalized: bool,
     pub underlying_symbol: String,
     pub quote_symbol: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stats: Option<MarketStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,21 +213,21 @@ pub struct MyTradesMessage {
 pub struct MakerTradeInfo {
     pub id: Uuid,
     pub rfq_id: Uuid,
-    pub market_pda: String,
-    pub underlying_mint: String,
+    pub market_pda: Address32,
+    pub underlying_mint: Address32,
     pub underlying_symbol: String,
     pub underlying_decimals: u8,
-    pub quote_mint: String,
+    pub quote_mint: Address32,
     pub quote_symbol: String,
     pub quote_decimals: u8,
-    pub position_type: PositionType,
-    pub taker: String,
-    pub strike: Strike,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
+    pub taker: Address32,
     pub quantity: Quantity,
     pub price: Price,
     pub tx_signature: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position_pda: Option<String>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub position_pda: Option<Address32>,
     #[serde_as(as = "UnixSeconds")]
     pub confirmed_at: SystemTime,
 }
@@ -250,20 +244,17 @@ pub struct EarnSummaryData {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EarnAssetSummary {
-    pub underlying_mint: String,
+    pub underlying_mint: Address32,
     pub underlying_symbol: String,
-    pub quote_mint: String,
+    pub quote_mint: Address32,
     pub quote_symbol: String,
     pub position_type: PositionType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_apr: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_apr: Option<f64>,
+    pub apr: AprRange,
     pub cap_filled_pct: f64,
     pub cap_total: Quantity,
     pub cap_used: Quantity,
     pub strikes_count: u32,
-    pub nearest_market_pda: String,
+    pub nearest_market_pda: Address32,
     pub markets_count: u32,
     #[serde_as(as = "UnixSeconds")]
     pub nearest_expiry_ts: SystemTime,
@@ -285,7 +276,8 @@ pub struct TokenMarketsInfoData {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenMarketEntry {
-    pub market_pda: String,
+    pub products: crate::types::ProductSet,
+    pub market_pda: Address32,
     #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
     pub is_put: bool,
@@ -317,7 +309,7 @@ pub struct IndicativePricesMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndicativeStrikeBest {
     pub strike: Strike,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
     pub best_price: Option<Price>,
 }
 
@@ -325,10 +317,9 @@ pub struct IndicativeStrikeBest {
 pub struct TokenCapsData {
     pub request_id: Uuid,
     pub tokens: Vec<TokenCapInfo>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markets: Vec<MarketCapInfo>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quotes: Vec<QuoteCapInfo>,
+    pub quote_liabilities: Vec<QuoteLiabilityCapInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,16 +328,30 @@ pub struct MyCapsData {
     pub positions: MakerPositionCapInfo,
     pub notional: Vec<MakerNotionalCapInfo>,
     pub balances: Vec<MakerBalanceCapInfo>,
+    pub quote_liabilities: Vec<QuoteLiabilityCapInfo>,
 }
 
-/// Answer to `CheckQuote`. `cap_detail` is exactly what a `QuoteRejected`
-/// would carry; `caps_unavailable` means retry, not a cap.
+/// Answer to `CheckQuote`. A rejection carries exactly what a `QuoteRejected`
+/// would; `caps_unavailable` means retry, not a cap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuoteCheckData {
     pub request_id: Uuid,
-    pub admissible: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cap_detail: Option<crate::types::CapError>,
+    pub verdict: QuoteVerdict,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum QuoteVerdict {
+    Admissible {},
+    Rejected { cap_detail: crate::types::CapError },
+}
+
+/// APR is unavailable while no strike has a fresh indicative premium.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AprRange {
+    Unavailable {},
+    Available { min: f64, max: f64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -354,13 +359,14 @@ pub struct MakerCapsSnapshot {
     pub positions: MakerPositionCapInfo,
     pub notional: Vec<MakerNotionalCapInfo>,
     pub balances: Vec<MakerBalanceCapInfo>,
+    pub quote_liabilities: Vec<QuoteLiabilityCapInfo>,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MmSummaryData {
     pub request_id: Uuid,
-    pub maker_pda: String,
+    pub maker_pda: Address32,
     pub caps: MyCapsData,
     pub positions: Vec<MakerPositionInfo>,
     pub active_quotes: Vec<MakerQuoteInfo>,
@@ -369,10 +375,8 @@ pub struct MmSummaryData {
     #[serde_as(as = "UnixSeconds")]
     pub computed_at: SystemTime,
     /// Positions omitted from `positions` because their market projection is incomplete.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unrenderable_positions: Vec<UnrenderablePositionInfo>,
     /// True when the embedded `positions` were capped; page via `GetMakerPositions`.
-    #[serde(default)]
     pub positions_has_more: bool,
 }
 
@@ -380,20 +384,16 @@ pub struct MmSummaryData {
 pub struct SubscriptionsMessage {
     pub request_id: Uuid,
     pub channels: Vec<WsChannel>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mints: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote_mints: Option<Vec<String>>,
+    pub underlying_mints: Vec<Address32>,
+    pub quote_mints: Vec<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionUpdatedData {
     pub request_id: Uuid,
     pub channels: Vec<WsChannel>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underlying_mints: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quote_mints: Option<Vec<String>>,
+    pub underlying_mints: Vec<Address32>,
+    pub quote_mints: Vec<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,7 +410,7 @@ pub struct OrderStatusMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OrderExecutionState {
     Pending,
-    Confirmed { position_pda: String },
+    Confirmed { position_pda: Address32 },
     Unknown,
 }
 
@@ -422,15 +422,12 @@ pub struct SnapshotMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeExecutedMessage {
     pub trade: TradeInfo,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stats_delta: Option<StatsDelta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionUpdatedMessage {
     pub position: PositionInfo,
     pub update_type: PositionUpdateType,
-    pub caps_snapshot: MakerCapsSnapshot,
 }
 
 /// Owner-only capacity update, emitted after the new caps take effect.
@@ -448,9 +445,6 @@ pub struct MakerCapsUpdatedMessage {
 pub enum CapsUpdateReason {
     Lifecycle,
     Policy,
-    /// Forward-compat: a reason this SDK version does not know yet.
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -484,7 +478,7 @@ pub struct OrderSubmittedData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderConfirmedData {
     pub order_id: OrderId,
-    pub position_pda: String,
+    pub position_pda: Address32,
     pub order_version: OrderVersion,
 }
 
@@ -497,13 +491,12 @@ pub struct OrderFailedData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketFinalizedData {
-    pub market_pda: String,
+    pub market_pda: Address32,
     pub settlement_price: Price,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event_type")]
-#[non_exhaustive]
 pub enum ChainEventMessage {
     PositionOpened(PositionOpenedEvent),
     MarketCreated(MarketCreatedEvent),
@@ -511,8 +504,6 @@ pub enum ChainEventMessage {
     MakerRegistered(MakerRegisteredEvent),
     PositionSettled(PositionSettledEvent),
     PositionLiquidated(PositionLiquidatedEvent),
-    #[serde(other)]
-    Unknown,
 }
 
 /// Known on-chain events are keyed by transaction signature and instruction index.
@@ -524,7 +515,7 @@ pub struct ChainEventIdentity<'a> {
 
 impl ChainEventMessage {
     #[must_use]
-    pub fn identity(&self) -> Option<ChainEventIdentity<'_>> {
+    pub fn identity(&self) -> ChainEventIdentity<'_> {
         let (signature, instruction_index) = match self {
             Self::PositionOpened(event) => (&event.signature, event.instruction_index),
             Self::MarketCreated(event) => (&event.signature, event.instruction_index),
@@ -532,12 +523,11 @@ impl ChainEventMessage {
             Self::MakerRegistered(event) => (&event.signature, event.instruction_index),
             Self::PositionSettled(event) => (&event.signature, event.instruction_index),
             Self::PositionLiquidated(event) => (&event.signature, event.instruction_index),
-            Self::Unknown => return None,
         };
-        Some(ChainEventIdentity {
+        ChainEventIdentity {
             signature,
             instruction_index,
-        })
+        }
     }
 }
 
@@ -548,10 +538,10 @@ pub struct PositionOpenedEvent {
     pub instruction_index: i16,
     pub slot: Slot,
     pub market: MarketId,
-    pub maker: String,
-    pub taker: String,
-    pub position_type: PositionType,
-    pub strike: Strike,
+    pub maker: Address32,
+    pub taker: Address32,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
     pub quantity: Quantity,
     pub price: Price,
     pub order_id: OrderId,
@@ -564,8 +554,8 @@ pub struct MarketCreatedEvent {
     pub instruction_index: i16,
     pub slot: Slot,
     pub market: MarketId,
-    pub underlying_mint: String,
-    pub quote_mint: String,
+    pub underlying_mint: Address32,
+    pub quote_mint: Address32,
     #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
     pub is_put: bool,
@@ -585,9 +575,9 @@ pub struct MakerRegisteredEvent {
     pub signature: String,
     pub instruction_index: i16,
     pub slot: Slot,
-    pub owner: String,
-    pub maker_pda: String,
-    pub quote_signing: String,
+    pub owner: Address32,
+    pub maker_pda: Address32,
+    pub quote_signing: Address32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -595,7 +585,7 @@ pub struct PositionSettledEvent {
     pub signature: String,
     pub instruction_index: i16,
     pub slot: Slot,
-    pub position: String,
+    pub position: Address32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -603,5 +593,5 @@ pub struct PositionLiquidatedEvent {
     pub signature: String,
     pub instruction_index: i16,
     pub slot: Slot,
-    pub position: String,
+    pub position: Address32,
 }

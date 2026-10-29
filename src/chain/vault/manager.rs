@@ -49,6 +49,9 @@ pub(super) enum VaultIx {
     CancelVaultUpdate = 57,
     ProcessFinalWithdrawal = 60,
     OpenPositionBetweenVaults = 61,
+    OpenSpreadForVaultAsTaker = 78,
+    OpenSpreadForVaultAsMaker = 79,
+    OpenSpreadBetweenVaults = 80,
     DisableVaultDelegate = 62,
     ClosingConvertToMain = 68,
     VaultStagingSwap = 76,
@@ -213,6 +216,12 @@ pub struct VaultManager {
 }
 
 impl VaultManager {
+    /// The vault delegate or governance authority that co-signs vault actions.
+    #[must_use]
+    pub const fn actor(&self) -> Pubkey {
+        self.args.actor
+    }
+
     pub fn from_vault(
         program_id: Pubkey,
         actor: Pubkey,

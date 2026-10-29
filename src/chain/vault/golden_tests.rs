@@ -423,11 +423,6 @@ fn staging_swap_layout_and_staging_mint() {
         (stage.clone(), staging_ata, a.vault_main_ata),
         (stage, a.vault_main_ata, a.vault_second_ata),
         (
-            kind(VaultStagingStep::Stage, VaultLeg::Unknown, asset),
-            a.vault_main_ata,
-            staging_ata,
-        ),
-        (
             kind(
                 VaultStagingStep::Stage,
                 VaultLeg::Main,

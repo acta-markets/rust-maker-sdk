@@ -16,8 +16,8 @@ pub use server::*;
 
 pub use crate::types::{
     AuthRequiredAction, CapError, DbFeature, MakerBalanceCapInfo, MakerNotionalCapInfo,
-    MakerPositionCapInfo, MarketCapInfo, QuoteCancelReason, QuoteCapInfo, QuoteFinalStatus,
-    QuoteLockedReason, RateLimitReason, RfqAvailableAgainReason, RfqCloseReason, RfqStateError,
-    TokenCapInfo, UserRole, VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection,
-    VaultSwapMode,
+    MakerPositionCapInfo, MarketCapInfo, QuoteCancelReason, QuoteCapInfo, QuoteExpiryReason,
+    QuoteFinalStatus, QuoteLiabilityCapInfo, QuoteLockedReason, RateLimitReason,
+    RfqAvailableAgainReason, RfqCloseReason, RfqStateError, TokenCapInfo, UserRole,
+    VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection, VaultSwapMode,
 };

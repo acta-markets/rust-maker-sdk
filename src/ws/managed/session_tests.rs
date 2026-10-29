@@ -1,14 +1,13 @@
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::auth::{AuthOutcome, AuthenticationError};
+use super::auth::AuthOutcome;
 use super::{
-    AuthenticatedSessionEnd, InboundPublisher, SessionEnd, SessionFailure, auth::authenticate,
-    ready::establish,
+    AuthenticatedSessionEnd, InboundPublisher, SessionEnd, SessionFailure, ready::establish,
 };
 use crate::orders::{BytesSigner, SignerLike};
 use crate::ws::client::WsClient;
@@ -44,13 +43,13 @@ async fn invalid_auth_never_reaches_either_signer() {
         "ws://localhost/maker",
         base.hello(),
         Arc::new(ExplodingSigner),
-        "maker",
+        crate::Address32::new([135; 32]),
     );
     let asynchronous = ManagedWsConfig::new_async(
         "ws://localhost/maker",
         base.hello(),
         Arc::new(ExplodingSigner),
-        "maker",
+        crate::Address32::new([135; 32]),
     );
     for challenge in ["x".repeat(32), "é".repeat(16), "challenge".to_owned()] {
         for config in [&sync, &asynchronous] {
@@ -72,14 +71,20 @@ async fn canonical_auth_signs_original_bytes_for_delegated_owner() {
         "ws://localhost/maker",
         config("ws://localhost/maker".into()).hello(),
         Arc::new(signer.clone()),
-        owner.clone(),
+        crate::Address32::from_base58(&owner.clone()).expect("valid fixture"),
     );
     let challenge = crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE;
     let response = super::auth::build_auth_response(&config, challenge)
         .await
         .expect("canonical delegated auth");
-    assert_eq!(response.pubkey, owner);
-    assert_ne!(response.pubkey, signer.pubkey_base58());
+    assert_eq!(
+        response.pubkey,
+        crate::Address32::from_base58(&owner).expect("valid fixture")
+    );
+    assert_ne!(
+        response.pubkey,
+        crate::Address32::new(signer.pubkey_bytes())
+    );
     assert_eq!(response.challenge, challenge);
     let signature = crate::wire::decode_base58_64(&response.signature).expect("signature");
     VerifyingKey::from_bytes(&signer.pubkey_bytes())
@@ -102,16 +107,22 @@ async fn vault_auth_binds_both_identities_before_either_signer() {
         "ws://localhost/vault",
         base.hello(),
         Arc::new(ExplodingSigner),
-        operator.clone(),
+        crate::Address32::from_base58(&operator.clone()).expect("valid fixture"),
     )
-    .with_vault_auth(vault.clone());
+    .with_vault_auth(
+        crate::Address32::from_base58(&vault.clone()).expect("valid fixture"),
+        crate::ProductSet::ALL,
+    );
     let asynchronous = ManagedWsConfig::new_async(
         "ws://localhost/vault",
         base.hello(),
         Arc::new(ExplodingSigner),
-        operator.clone(),
+        crate::Address32::from_base58(&operator.clone()).expect("valid fixture"),
     )
-    .with_vault_auth(vault.clone());
+    .with_vault_auth(
+        crate::Address32::from_base58(&vault.clone()).expect("valid fixture"),
+        crate::ProductSet::ALL,
+    );
     let canonical = crate::ws::auth::test_vault_auth_challenge(&operator, &vault);
     let invalid = [
         "x".repeat(32),
@@ -146,15 +157,21 @@ async fn canonical_vault_auth_signs_original_operator_challenge() {
         "ws://localhost/vault",
         base.hello(),
         signer.clone(),
-        signer.pubkey_base58(),
+        crate::Address32::new(signer.pubkey_bytes()),
     )
-    .with_vault_auth(vault.clone());
+    .with_vault_auth(
+        crate::Address32::from_base58(&vault.clone()).expect("valid fixture"),
+        crate::ProductSet::ALL,
+    );
     let challenge = crate::ws::auth::test_vault_auth_challenge(&signer.pubkey_base58(), &vault);
     let response = super::auth::build_auth_response(&config, &challenge)
         .await
         .expect("canonical vault auth");
     assert_eq!(response.challenge, challenge);
-    assert_eq!(response.pubkey, signer.pubkey_base58());
+    assert_eq!(
+        response.pubkey,
+        crate::Address32::new(signer.pubkey_bytes())
+    );
     let signature = crate::wire::decode_base58_64(&response.signature).expect("signature");
     VerifyingKey::from_bytes(&signer.pubkey_bytes())
         .expect("key")
@@ -163,10 +180,10 @@ async fn canonical_vault_auth_signs_original_operator_challenge() {
 }
 
 use crate::ws::types::{
-    ActiveRfqsData, AuthErrorData, AuthRequestData, AuthSuccessData, ClientMessage,
-    FEATURE_CANCEL_ON_DISCONNECT, HelloData, MakerPositionCapInfo, MakerQuoteScope, MmSummaryData,
-    MyCapsData, MyQuotesMessage, ServerMessage, SubscribeAckData, SubscribeData,
-    SubscriptionsMessage, UnsubscribeAckData, WelcomeData, WsChannel, WsErrorCode,
+    ActiveRfqsData, AuthRequestData, AuthSuccessData, ClientMessage, HelloData,
+    MakerPositionCapInfo, MakerQuoteScope, MmSummaryData, MyCapsData, MyQuotesMessage,
+    ServerMessage, SubscribeAckData, SubscribeData, SubscriptionsMessage, UnsubscribeAckData,
+    WelcomeData, WsChannel, WsErrorCode,
 };
 
 fn maker_auth() -> AuthOutcome {
@@ -177,14 +194,21 @@ fn config(url: String) -> ManagedWsConfig {
     ManagedWsConfig::new(
         url,
         HelloData {
-            protocol_version: "1.0.0".to_string(),
-            features: Vec::new(),
-            client_name: Some("managed-test".to_string()),
-            client_version: None,
+            protocol_version: crate::WS_PROTOCOL_VERSION.to_string(),
+            on_disconnect: crate::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "managed-test".to_string(),
+            client_version: "test".to_string(),
         },
         Arc::new(BytesSigner::from_secret([1u8; 32])),
-        "maker",
+        crate::Address32::new([135; 32]),
     )
+    .with_initial_subscribe(SubscribeData {
+        products: crate::ProductSet::ALL,
+        request_id: uuid::Uuid::new_v4(),
+        channels: Vec::new(),
+        underlying_mints: vec![],
+        quote_mints: vec![],
+    })
 }
 
 #[tokio::test]
@@ -218,8 +242,8 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
             ServerMessage::Subscriptions(SubscriptionsMessage {
                 request_id: actual.request_id,
                 channels: Vec::new(),
-                underlying_mints: None,
-                quote_mints: None,
+                underlying_mints: vec![],
+                quote_mints: vec![],
             }),
         )
         .await;
@@ -227,8 +251,8 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
             panic!("expected desired Subscribe after GetSubscriptions");
         };
         assert_eq!(subscribe.channels, vec![WsChannel::Rfqs]);
-        assert_eq!(subscribe.underlying_mints, Some(Vec::new()));
-        assert_eq!(subscribe.quote_mints, Some(Vec::new()));
+        assert_eq!(subscribe.underlying_mints, Vec::new());
+        assert_eq!(subscribe.quote_mints, Vec::new());
         send_server(
             &mut socket,
             ServerMessage::SubscribeAck(SubscribeAckData {
@@ -266,10 +290,11 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
         .await
         .expect("connect managed client");
     let config = config(format!("ws://{address}")).with_initial_subscribe(SubscribeData {
+        products: crate::ProductSet::ALL,
         request_id: uuid::Uuid::new_v4(),
         channels: vec![WsChannel::Rfqs],
-        underlying_mints: None,
-        quote_mints: None,
+        underlying_mints: vec![],
+        quote_mints: vec![],
     });
     let (messages_tx, _messages_rx) = broadcast::channel(8);
     let mut sequence = 0;
@@ -305,8 +330,8 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
             ServerMessage::Subscriptions(SubscriptionsMessage {
                 request_id: actual.request_id,
                 channels: vec![WsChannel::Trades],
-                underlying_mints: Some(vec!["stale".to_string()]),
-                quote_mints: Some(vec!["stale".to_string()]),
+                underlying_mints: vec![crate::Address32::new([160; 32])],
+                quote_mints: vec![crate::Address32::new([160; 32])],
             }),
         )
         .await;
@@ -326,8 +351,8 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
             panic!("expected canonical desired Subscribe");
         };
         assert!(subscribe.channels.is_empty());
-        assert_eq!(subscribe.underlying_mints, Some(Vec::new()));
-        assert_eq!(subscribe.quote_mints, Some(Vec::new()));
+        assert_eq!(subscribe.underlying_mints, Vec::new());
+        assert_eq!(subscribe.quote_mints, Vec::new());
         send_server(
             &mut socket,
             ServerMessage::SubscribeAck(SubscribeAckData {
@@ -342,8 +367,7 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
         let ClientMessage::GetMyQuotes(my_quotes) = receive_client(&mut socket).await else {
             panic!("expected GetMyQuotes second");
         };
-        assert_eq!(my_quotes.scope, MakerQuoteScope::Live);
-        assert!(my_quotes.cursor.is_none());
+        assert_eq!(my_quotes.scope, MakerQuoteScope::Live {});
         send_server(
             &mut socket,
             ServerMessage::ActiveRfqs(ActiveRfqsData {
@@ -406,7 +430,7 @@ async fn data_readiness_reads_only_the_mm_summary() {
             &mut socket,
             ServerMessage::MmSummary(MmSummaryData {
                 request_id: summary.request_id,
-                maker_pda: String::new(),
+                maker_pda: crate::Address32::new([0; 32]),
                 caps: MyCapsData {
                     request_id: summary.request_id,
                     positions: MakerPositionCapInfo {
@@ -415,6 +439,7 @@ async fn data_readiness_reads_only_the_mm_summary() {
                     },
                     notional: Vec::new(),
                     balances: Vec::new(),
+                    quote_liabilities: Vec::new(),
                 },
                 positions: Vec::new(),
                 active_quotes: Vec::new(),
@@ -504,326 +529,21 @@ async fn send_welcome(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net
     send_server(
         socket,
         ServerMessage::Welcome(WelcomeData {
-            protocol_version: "1.0.0".to_string(),
+            protocol_version: crate::WS_PROTOCOL_VERSION.to_string(),
             server_version: "test".to_string(),
-            min_supported_version: "1.0.0".to_string(),
-            enabled_features: vec![FEATURE_CANCEL_ON_DISCONNECT.to_string()],
+            min_supported_version: crate::WS_PROTOCOL_VERSION.to_string(),
+
             server_time_unix_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 100,
             settlement_buffer_seconds: 90,
         }),
     )
     .await;
-}
-
-async fn send_welcome_without_cancel_on_disconnect(
-    socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-) {
-    send_server(
-        socket,
-        ServerMessage::Welcome(WelcomeData {
-            protocol_version: "1.0.0".to_string(),
-            server_version: "test".to_string(),
-            min_supported_version: "1.0.0".to_string(),
-            enabled_features: Vec::new(),
-            server_time_unix_ms: std::time::UNIX_EPOCH,
-            min_quote_validity_seconds: 100,
-            settlement_buffer_seconds: 90,
-        }),
-    )
-    .await;
-}
-
-async fn connect_and_authenticate<Server, ServerFuture>(
-    server: Server,
-    resume_session_id: &mut Option<String>,
-) where
-    Server: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> ServerFuture
-        + Send
-        + 'static,
-    ServerFuture: Future<Output = ()> + Send + 'static,
-{
-    try_connect_and_authenticate(|config| config, server, resume_session_id)
-        .await
-        .expect("authenticate managed client");
-}
-
-async fn try_connect_and_authenticate<Server, ServerFuture>(
-    configure: impl FnOnce(ManagedWsConfig) -> ManagedWsConfig,
-    server: Server,
-    resume_session_id: &mut Option<String>,
-) -> Result<(), AuthenticationError>
-where
-    Server: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> ServerFuture
-        + Send
-        + 'static,
-    ServerFuture: Future<Output = ()> + Send + 'static,
-{
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind test websocket");
-    let address = listener.local_addr().expect("test websocket address");
-    let server_task = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept websocket");
-        let socket = tokio_tungstenite::accept_async(stream)
-            .await
-            .expect("websocket handshake");
-        server(socket).await;
-    });
-
-    let mut client = WsClient::connect(&format!("ws://{address}"))
-        .await
-        .expect("connect managed client");
-    let config = configure(config(format!("ws://{address}")));
-    let (messages_tx, _messages_rx) = broadcast::channel(8);
-    let mut sequence = 0;
-    let mut inbound = InboundPublisher {
-        tx: &messages_tx,
-        connection_epoch: 1,
-        sequence: &mut sequence,
-    };
-
-    let result = authenticate(&mut client, &config, &mut inbound, resume_session_id)
-        .await
-        .map(|_| ());
-    server_task.await.expect("test server task");
-    result
-}
-
-#[tokio::test]
-async fn cancel_on_disconnect_is_requested_and_verified_in_welcome() {
-    let mut resume_session_id = None;
-    try_connect_and_authenticate(
-        |config| config.with_cancel_on_disconnect(true),
-        |mut socket| async move {
-            match receive_client(&mut socket).await {
-                ClientMessage::Hello(hello) => {
-                    assert_eq!(
-                        hello.features,
-                        vec![FEATURE_CANCEL_ON_DISCONNECT.to_string()]
-                    );
-                }
-                other => panic!("expected Hello, got {other:?}"),
-            }
-            send_server(
-                &mut socket,
-                ServerMessage::Welcome(WelcomeData {
-                    protocol_version: "1.0.0".to_string(),
-                    server_version: "test".to_string(),
-                    min_supported_version: "1.0.0".to_string(),
-                    enabled_features: vec![FEATURE_CANCEL_ON_DISCONNECT.to_string()],
-                    server_time_unix_ms: std::time::UNIX_EPOCH,
-                    min_quote_validity_seconds: 100,
-                    settlement_buffer_seconds: 90,
-                }),
-            )
-            .await;
-            assert!(matches!(
-                receive_client(&mut socket).await,
-                ClientMessage::StartAuth(_)
-            ));
-            send_server(
-                &mut socket,
-                ServerMessage::AuthRequest(AuthRequestData {
-                    challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
-                }),
-            )
-            .await;
-            assert!(matches!(
-                receive_client(&mut socket).await,
-                ClientMessage::AuthChallenge(_)
-            ));
-            send_server(
-                &mut socket,
-                ServerMessage::AuthSuccess(AuthSuccessData {
-                    session_id: "cod".to_string(),
-                    expires_at: std::time::UNIX_EPOCH
-                        + std::time::Duration::from_secs(1_900_000_000),
-                    maker_pda: None,
-                }),
-            )
-            .await;
-        },
-        &mut resume_session_id,
-    )
-    .await
-    .expect("server enabled the feature");
-    assert_eq!(resume_session_id.as_deref(), Some("cod"));
-}
-
-#[tokio::test]
-async fn welcome_without_required_feature_terminates_before_auth() {
-    let mut resume_session_id = None;
-    let error = try_connect_and_authenticate(
-        |config| config.with_cancel_on_disconnect(true),
-        |mut socket| async move {
-            assert!(matches!(
-                receive_client(&mut socket).await,
-                ClientMessage::Hello(_)
-            ));
-            send_welcome_without_cancel_on_disconnect(&mut socket).await;
-            assert!(
-                tokio::time::timeout(
-                    std::time::Duration::from_millis(50),
-                    receive_client(&mut socket)
-                )
-                .await
-                .is_err(),
-                "no StartAuth after a Welcome that lacks the feature"
-            );
-        },
-        &mut resume_session_id,
-    )
-    .await
-    .expect_err("missing feature is terminal");
-    assert!(matches!(
-        error.termination_reason(),
-        Some(ManagedWsTerminationReason::FeatureUnsupported { feature })
-            if feature == FEATURE_CANCEL_ON_DISCONNECT
-    ));
-}
-
-#[tokio::test]
-async fn managed_auth_resumes_then_falls_back_only_when_expired() {
-    let mut resume_session_id = None;
-    connect_and_authenticate(
-        |mut socket| async move {
-            match receive_client(&mut socket).await {
-                ClientMessage::Hello(hello) => {
-                    assert_eq!(hello.protocol_version, "1.0.0");
-                    assert_eq!(hello.client_name.as_deref(), Some("managed-test"));
-                    assert_eq!(hello.client_version, None);
-                    assert_eq!(
-                        hello.features,
-                        vec![FEATURE_CANCEL_ON_DISCONNECT.to_string()]
-                    );
-                }
-                other => panic!("expected Hello, got {other:?}"),
-            }
-            assert!(
-                tokio::time::timeout(
-                    std::time::Duration::from_millis(25),
-                    receive_client(&mut socket)
-                )
-                .await
-                .is_err(),
-                "authentication must wait for Welcome"
-            );
-            send_welcome(&mut socket).await;
-            match receive_client(&mut socket).await {
-                ClientMessage::StartAuth(start) => assert_eq!(start.pubkey, "maker"),
-                other => panic!("expected StartAuth, got {other:?}"),
-            }
-            send_server(
-                &mut socket,
-                ServerMessage::AuthRequest(AuthRequestData {
-                    challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
-                }),
-            )
-            .await;
-            assert!(matches!(
-                receive_client(&mut socket).await,
-                ClientMessage::AuthChallenge(_)
-            ));
-            send_server(
-                &mut socket,
-                ServerMessage::AuthSuccess(AuthSuccessData {
-                    session_id: "resume-me".to_string(),
-                    expires_at: std::time::UNIX_EPOCH
-                        + std::time::Duration::from_secs(1_900_000_000),
-                    maker_pda: None,
-                }),
-            )
-            .await;
-        },
-        &mut resume_session_id,
-    )
-    .await;
-    assert_eq!(resume_session_id.as_deref(), Some("resume-me"));
-
-    connect_and_authenticate(
-        |mut socket| async move {
-            assert!(matches!(
-                receive_client(&mut socket).await,
-                ClientMessage::Hello(_)
-            ));
-            send_welcome(&mut socket).await;
-            match receive_client(&mut socket).await {
-                ClientMessage::ResumeAuth(data) => {
-                    assert_eq!(data.session_id, "resume-me");
-                }
-                other => panic!("expected resume auth, got {other:?}"),
-            }
-            send_server(
-                &mut socket,
-                ServerMessage::AuthSuccess(AuthSuccessData {
-                    session_id: "resumed".to_string(),
-                    expires_at: std::time::UNIX_EPOCH
-                        + std::time::Duration::from_secs(1_900_000_000),
-                    maker_pda: None,
-                }),
-            )
-            .await;
-        },
-        &mut resume_session_id,
-    )
-    .await;
-    assert_eq!(resume_session_id.as_deref(), Some("resumed"));
-
-    connect_and_authenticate(
-        |mut socket| async move {
-            assert!(matches!(
-                receive_client(&mut socket).await,
-                ClientMessage::Hello(_)
-            ));
-            send_welcome(&mut socket).await;
-            send_server(
-                &mut socket,
-                ServerMessage::AuthRequest(AuthRequestData {
-                    challenge: crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE.to_string(),
-                }),
-            )
-            .await;
-            assert!(matches!(
-                receive_client(&mut socket).await,
-                ClientMessage::ResumeAuth(_)
-            ));
-            send_server(
-                &mut socket,
-                ServerMessage::AuthError(AuthErrorData {
-                    reason: WsErrorCode::SessionExpired,
-                    message: None,
-                }),
-            )
-            .await;
-            match receive_client(&mut socket).await {
-                ClientMessage::AuthChallenge(data) => {
-                    assert_eq!(data.challenge, crate::ws::auth::TEST_MAKER_AUTH_CHALLENGE);
-                }
-                other => panic!("expected auth challenge response, got {other:?}"),
-            }
-            send_server(
-                &mut socket,
-                ServerMessage::AuthSuccess(AuthSuccessData {
-                    session_id: "fresh".to_string(),
-                    expires_at: std::time::UNIX_EPOCH
-                        + std::time::Duration::from_secs(1_900_000_000),
-                    maker_pda: None,
-                }),
-            )
-            .await;
-        },
-        &mut resume_session_id,
-    )
-    .await;
-    assert_eq!(resume_session_id.as_deref(), Some("fresh"));
 }
 
 #[tokio::test]
 async fn a_panicked_session_task_publishes_session_panicked() {
-    use crate::ws::managed::{
-        ManagedWsError, ManagedWsState, ManagedWsTerminationReason, spawn_managed_ws,
-    };
+    use crate::ws::managed::{ManagedWsError, ManagedWsState, spawn_managed_ws};
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -856,13 +576,13 @@ async fn a_panicked_session_task_publishes_session_panicked() {
     let config = ManagedWsConfig::new(
         format!("ws://{address}"),
         HelloData {
-            protocol_version: "1.0.0".to_string(),
-            features: Vec::new(),
-            client_name: Some("managed-test".to_string()),
-            client_version: None,
+            protocol_version: crate::WS_PROTOCOL_VERSION.to_string(),
+            on_disconnect: crate::ws::types::OnDisconnect::KeepQuotes,
+            client_name: "managed-test".to_string(),
+            client_version: "test".to_string(),
         },
         Arc::new(ExplodingSigner),
-        "maker",
+        crate::Address32::new([135; 32]),
     );
     let handle = spawn_managed_ws(config).expect("spawn managed session");
     let mut states = handle.subscribe_state();
@@ -956,8 +676,8 @@ async fn complete_quote_readiness(
         ServerMessage::Subscriptions(SubscriptionsMessage {
             request_id: actual.request_id,
             channels: Vec::new(),
-            underlying_mints: None,
-            quote_mints: None,
+            underlying_mints: vec![],
+            quote_mints: vec![],
         }),
     )
     .await;
@@ -1054,8 +774,8 @@ async fn pending_subscription_does_not_block_cancellation() {
         handle.wait_until_ready().await.unwrap();
         let change = || ClientMessage::AddMints(AddMintsData {
             request_id: uuid::Uuid::new_v4(),
-            underlying_mints: Some(vec!["mint".to_owned()]),
-            quote_mints: None,
+            underlying_mints: vec![crate::Address32::new([220; 32])],
+            quote_mints: vec![],
         });
         handle.send(change()).await.unwrap();
         assert!(matches!(handle.send(change()).await, Err(ManagedWsError::SubscriptionPending)));
@@ -1064,7 +784,7 @@ async fn pending_subscription_does_not_block_cancellation() {
         let request_id = uuid::Uuid::new_v4();
         let reply = handle.send_await(ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
             request_id,
-            market: None,
+            market: crate::ws::types::QueryFilter::All {},
         }), Duration::from_secs(1)).await.unwrap();
         assert!(matches!(&*reply, ServerMessage::CancelAllQuotesAck(ack) if ack.request_id == request_id));
     }).await.expect("subscription must not stall trading commands");
@@ -1138,7 +858,7 @@ async fn a_dropped_session_reconnects_resumes_and_becomes_ready_again() {
 
 #[tokio::test]
 async fn invalid_signature_terminates_only_after_three_consecutive_rejections() {
-    use crate::ws::managed::{ManagedWsState, ManagedWsTerminationReason, spawn_managed_ws};
+    use crate::ws::managed::{ManagedWsState, spawn_managed_ws};
     use crate::ws::types::AuthErrorData;
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -1164,7 +884,7 @@ async fn invalid_signature_terminates_only_after_three_consecutive_rejections() 
                 &mut socket,
                 ServerMessage::AuthError(AuthErrorData {
                     reason: WsErrorCode::InvalidSignature,
-                    message: None,
+                    message: "rejected".to_string(),
                 }),
             )
             .await;
@@ -1196,7 +916,7 @@ async fn invalid_signature_terminates_only_after_three_consecutive_rejections() 
 
 #[tokio::test]
 async fn reconnect_limit_during_strikes_reports_the_auth_rejection() {
-    use crate::ws::managed::{ManagedWsState, ManagedWsTerminationReason, spawn_managed_ws};
+    use crate::ws::managed::{ManagedWsState, spawn_managed_ws};
     use crate::ws::types::AuthErrorData;
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -1222,7 +942,7 @@ async fn reconnect_limit_during_strikes_reports_the_auth_rejection() {
                 &mut socket,
                 ServerMessage::AuthError(AuthErrorData {
                     reason: WsErrorCode::InvalidSignature,
-                    message: None,
+                    message: "rejected".to_string(),
                 }),
             )
             .await;
@@ -1262,7 +982,7 @@ async fn invalid_mid_session_challenge_never_enters_writer_lane() {
         "ws://localhost/maker",
         base.hello(),
         Arc::new(ExplodingSigner),
-        "maker",
+        crate::Address32::new([135; 32]),
     );
     let (frames_tx, mut frames_rx) = tokio::sync::mpsc::unbounded_channel();
     let sink = Box::pin(futures_util::sink::unfold(frames_tx, |tx, frame| {
