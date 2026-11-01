@@ -998,6 +998,9 @@ fn quote(order_byte: u8) -> QuoteMessage {
 
 fn mm_summary() -> ClientMessage {
     ClientMessage::GetMmSummary(GetMmSummaryMessage {
+        limit: 200,
+        cursor: crate::ws::types::Cursor::Start {},
+
         request_id: Uuid::new_v4(),
     })
 }
@@ -1711,6 +1714,7 @@ async fn recover_test_peer(
         let reply = match request {
             ClientMessage::GetSubscriptions(m) => {
                 ServerMessage::Subscriptions(SubscriptionsMessage {
+                    next_cursor: None,
                     request_id: m.request_id,
                     channels: vec![],
                     underlying_mints: vec![],
@@ -1737,6 +1741,8 @@ async fn recover_test_peer(
             ClientMessage::GetActiveRfqs(m) => {
                 reads += 1;
                 ServerMessage::ActiveRfqs(ActiveRfqsData {
+                    next_cursor: None,
+
                     request_id: m.request_id,
                     rfqs: vec![],
                 })
@@ -1746,7 +1752,7 @@ async fn recover_test_peer(
                 ServerMessage::MyQuotes(MyQuotesMessage {
                     request_id: m.request_id,
                     quotes: vec![],
-                    has_more: false,
+                    next_cursor: None,
                 })
             }
             other => panic!("unexpected recovery request {other:?}"),

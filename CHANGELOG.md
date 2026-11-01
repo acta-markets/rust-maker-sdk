@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.1
+
+Requires a server with paged lists. The WS protocol version stays `1.0.0`, so an
+older SDK passes Hello and then fails on the changed list requests.
+
+### Changed
+
+- Every WS list takes a required `limit` (at most 200) and a tagged cursor, and returns
+  a required nullable `next_cursor`. Timestamp cursors, the nested quote scopes and the
+  dual MM cursors are gone.
+- `MakerDataClient::request` and the `HttpClient` catalog methods now collect all pages
+  through `paging::fetch_all`, so existing calls keep returning full lists.
+- REST lists take an optional `limit` (default 50, at most 200, 100 for vault requests)
+  and an optional opaque `cursor`.
+
+### Added
+
+- `MakerDataClient::request_page` for loading one page at a time.
+- `paging::fetch_all`, a shared helper that follows `next_cursor`.
+
 ## 0.6.0
 
 Breaking release for WS protocol `1.0.0`. Spreads and cash puts are part of the

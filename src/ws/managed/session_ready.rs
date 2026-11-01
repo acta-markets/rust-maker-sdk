@@ -10,11 +10,7 @@ use crate::ws::managed::{
     MakerWsEndpoint,
     desired_subscriptions::{DesiredSubscriptions, SubscriptionRecovery},
 };
-use crate::ws::types::{
-    ClientMessage, GetActiveRfqsMessage, GetMmSummaryMessage, GetMyActiveRfqsMessage,
-    GetMyQuotesMessage, GetPositionsMessage, GetSubscriptionsMessage, MakerQuoteScope,
-    ServerMessage, SubscriptionsMessage,
-};
+use crate::ws::types::*;
 
 /// Re-establish the desired subscription target and authoritative maker reads
 /// before a managed endpoint can report `Ready`.
@@ -26,17 +22,35 @@ pub(super) async fn establish(
     auth: &AuthOutcome,
 ) -> Result<(), SessionFailure> {
     if config.endpoint == MakerWsEndpoint::Quote {
-        let actual_request_id = Uuid::new_v4();
-        write_message(
-            client,
-            config,
-            &ClientMessage::GetSubscriptions(GetSubscriptionsMessage {
-                request_id: actual_request_id,
-            }),
-        )
-        .await
-        .map_err(|error| SessionFailure::Retryable(error.to_string()))?;
-        let actual = wait_for_subscriptions(client, inbound, actual_request_id).await?;
+        let mut request = GetSubscriptionsMessage::default();
+        let mut actual = SubscriptionsMessage {
+            request_id: request.request_id,
+            next_cursor: None,
+            channels: Vec::new(),
+            underlying_mints: Vec::new(),
+            quote_mints: Vec::new(),
+        };
+        let mut continuation = crate::paging::Continuation::default();
+        loop {
+            write_message(
+                client,
+                config,
+                &ClientMessage::GetSubscriptions(request.clone()),
+            )
+            .await
+            .map_err(|error| SessionFailure::Retryable(error.to_string()))?;
+            let page = wait_for_subscriptions(client, inbound, request.request_id).await?;
+            use crate::ws::maker::PagedRequest;
+            GetSubscriptionsMessage::append(&mut actual, page);
+            let Some(cursor) = continuation
+                .advance(actual.next_cursor.as_deref())
+                .map_err(|error| SessionFailure::Retryable(error.to_string()))?
+            else {
+                break;
+            };
+            request.cursor = cursor;
+            request.request_id = Uuid::new_v4();
+        }
 
         let recovery = subscriptions.recovery(&actual);
         recover_subscriptions(client, config, inbound, recovery).await?;
@@ -45,6 +59,7 @@ pub(super) async fn establish(
     if config.endpoint == MakerWsEndpoint::Vault && subscriptions.wants_vault_feed() {
         let mut recovery = subscriptions.recovery(&SubscriptionsMessage {
             request_id: Uuid::new_v4(),
+            next_cursor: None,
             channels: Vec::new(),
             underlying_mints: vec![],
             quote_mints: vec![],
@@ -75,13 +90,22 @@ pub(super) async fn establish(
         MakerWsEndpoint::Vault => {
             let mut reads = vec![
                 ClientMessage::GetMyActiveRfqs(GetMyActiveRfqsMessage {
+                    limit: 200,
+                    cursor: Cursor::Start {},
+
                     request_id: Uuid::new_v4(),
                 }),
                 ClientMessage::GetPositions(GetPositionsMessage {
+                    limit: 200,
+                    cursor: Cursor::Start {},
+
                     request_id: Uuid::new_v4(),
                     market: crate::ws::types::QueryFilter::All {},
                     underlying_mint: crate::ws::types::QueryFilter::All {},
-                    status: vec![],
+                    status: vec![
+                        crate::ws::types::PositionStatus::Open,
+                        crate::ws::types::PositionStatus::Funded,
+                    ],
                     min_expiry_ts: crate::ws::types::TimeBound::Unbounded {},
                 }),
             ];
@@ -101,23 +125,31 @@ pub(super) async fn establish(
             .await
             .map_err(|error| SessionFailure::Retryable(error.to_string()))?;
     }
-    wait_for_reconciliation(client, inbound, reads).await
+    wait_for_reconciliation(client, config, inbound, reads).await
 }
 
 fn quote_reads() -> Vec<ClientMessage> {
     vec![
         ClientMessage::GetActiveRfqs(GetActiveRfqsMessage {
+            limit: 200,
+            cursor: Cursor::Start {},
+
             request_id: Uuid::new_v4(),
         }),
         ClientMessage::GetMyQuotes(GetMyQuotesMessage {
             request_id: Uuid::new_v4(),
             scope: MakerQuoteScope::Live {},
+            limit: 200,
+            cursor: Cursor::Start {},
         }),
     ]
 }
 
 fn mm_summary_read() -> ClientMessage {
     ClientMessage::GetMmSummary(GetMmSummaryMessage {
+        limit: 200,
+        cursor: Cursor::Start {},
+
         request_id: Uuid::new_v4(),
     })
 }
@@ -201,9 +233,11 @@ async fn wait_for_unsubscribe_ack(
 
 async fn wait_for_reconciliation(
     client: &mut WsClient,
+    config: &ManagedWsConfig,
     inbound: &mut InboundPublisher<'_>,
     mut pending: Vec<ClientMessage>,
 ) -> Result<(), SessionFailure> {
+    let mut continuations = std::collections::HashMap::<&str, crate::paging::Continuation>::new();
     while !pending.is_empty() {
         let message = next_message(client, inbound).await?;
         if let ServerMessage::RequestError(error) = &*message
@@ -228,21 +262,40 @@ async fn wait_for_reconciliation(
                 (ClientMessage::GetMyActiveRfqs(request), ServerMessage::MyActiveRfqs(data)) => {
                     request.request_id == data.request_id
                 }
+                (
+                    ClientMessage::GetMakerPositions(request),
+                    ServerMessage::MakerPositions(data),
+                ) => request.request_id == data.request_id,
                 (ClientMessage::GetPositions(request), ServerMessage::Positions(data)) => {
+                    request.request_id == data.request_id
+                }
+                (ClientMessage::GetMyCaps(request), ServerMessage::MyCaps(data)) => {
+                    request.request_id == data.request_id
+                }
+                (ClientMessage::GetMarketsForMaker(request), ServerMessage::MakerMarkets(data)) => {
+                    request.request_id == data.request_id
+                }
+                (ClientMessage::GetTokens(request), ServerMessage::Tokens(data)) => {
                     request.request_id == data.request_id
                 }
                 _ => false,
             });
         if let Some(index) = index {
-            if let ServerMessage::MyQuotes(data) = &*message
-                && data.has_more
-            {
-                return Err(SessionFailure::Retryable(format!(
-                    "readiness Live quote snapshot {} was truncated",
-                    data.request_id
-                )));
+            let request = pending.remove(index);
+            for next in reconciliation_pages(request, &message, &mut continuations)? {
+                // Vault recovery already starts this live quote stream alongside
+                // its summary; only the data endpoint needs this follow-up.
+                if matches!(next, ClientMessage::GetMyQuotes(_))
+                    && matches!(message.as_ref(), ServerMessage::MmSummary(_))
+                    && config.endpoint != MakerWsEndpoint::Data
+                {
+                    continue;
+                }
+                write_message(client, config, &next)
+                    .await
+                    .map_err(|error| SessionFailure::Retryable(error.to_string()))?;
+                pending.push(next);
             }
-            pending.remove(index);
         }
     }
     Ok(())
@@ -270,4 +323,83 @@ async fn next_message(
 
 fn request_failed(request_id: Uuid, error: &impl std::fmt::Debug) -> SessionFailure {
     SessionFailure::Retryable(format!("readiness request {request_id} failed: {error:?}"))
+}
+
+fn reconciliation_pages(
+    request: ClientMessage,
+    response: &ServerMessage,
+    continuations: &mut std::collections::HashMap<&'static str, crate::paging::Continuation>,
+) -> Result<Vec<ClientMessage>, SessionFailure> {
+    let mut pages = Vec::new();
+    macro_rules! continue_page {
+        ($request:ident, $data:ident, $variant:ident) => {
+            if let Some(cursor) = continuations
+                .entry(stringify!($variant))
+                .or_default()
+                .advance($data.next_cursor.as_deref())
+                .map_err(|error| SessionFailure::Retryable(error.to_string()))?
+            {
+                $request.request_id = Uuid::new_v4();
+                $request.cursor = cursor;
+                pages.push(ClientMessage::$variant($request));
+            }
+        };
+    }
+    match (request, response) {
+        (ClientMessage::GetPositions(mut request), ServerMessage::Positions(data)) => {
+            continue_page!(request, data, GetPositions)
+        }
+        (ClientMessage::GetActiveRfqs(mut request), ServerMessage::ActiveRfqs(data)) => {
+            continue_page!(request, data, GetActiveRfqs)
+        }
+        (ClientMessage::GetMyActiveRfqs(mut request), ServerMessage::MyActiveRfqs(data)) => {
+            continue_page!(request, data, GetMyActiveRfqs)
+        }
+        (ClientMessage::GetMyQuotes(mut request), ServerMessage::MyQuotes(data)) => {
+            continue_page!(request, data, GetMyQuotes)
+        }
+        (ClientMessage::GetMakerPositions(mut request), ServerMessage::MakerPositions(data)) => {
+            continue_page!(request, data, GetMakerPositions)
+        }
+        (ClientMessage::GetMyCaps(mut request), ServerMessage::MyCaps(data)) => {
+            continue_page!(request, data, GetMyCaps)
+        }
+        (ClientMessage::GetMarketsForMaker(mut request), ServerMessage::MakerMarkets(data)) => {
+            continue_page!(request, data, GetMarketsForMaker)
+        }
+        (ClientMessage::GetTokens(mut request), ServerMessage::Tokens(data)) => {
+            continue_page!(request, data, GetTokens)
+        }
+        (ClientMessage::GetMmSummary(_), ServerMessage::MmSummary(data))
+            if data.next_cursor.is_some() =>
+        {
+            // Recovery needs all live rows and reference/cap collections. It must
+            // not traverse the wallet's terminal history just to reach those groups.
+            pages.push(ClientMessage::GetMakerPositions(GetMakerPositionsMessage {
+                request_id: Uuid::new_v4(),
+                market: QueryFilter::All {},
+                underlying_mint: QueryFilter::All {},
+                status: vec![PositionStatus::Open, PositionStatus::Funded],
+                min_expiry_ts: TimeBound::Unbounded {},
+                limit: 200,
+                cursor: Cursor::Start {},
+            }));
+            pages.push(ClientMessage::GetMyQuotes(GetMyQuotesMessage::default()));
+            pages.push(ClientMessage::GetMyCaps(GetMyCapsMessage {
+                request_id: Uuid::new_v4(),
+                limit: 200,
+                cursor: Cursor::Start {},
+            }));
+            pages.push(ClientMessage::GetMarketsForMaker(
+                GetMarketsForMakerMessage::default(),
+            ));
+            pages.push(ClientMessage::GetTokens(GetTokensMessage {
+                request_id: Uuid::new_v4(),
+                limit: 200,
+                cursor: Cursor::Start {},
+            }));
+        }
+        _ => {}
+    }
+    Ok(pages)
 }

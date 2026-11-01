@@ -213,6 +213,7 @@ mod tests {
         }));
 
         let recovery = desired.recovery(&SubscriptionsMessage {
+            next_cursor: None,
             request_id: Uuid::new_v4(),
             channels: Vec::new(),
             underlying_mints: vec![],
@@ -236,6 +237,7 @@ mod tests {
         desired.connection_lost();
 
         let recovery = desired.recovery(&SubscriptionsMessage {
+            next_cursor: None,
             request_id: Uuid::new_v4(),
             channels: Vec::new(),
             underlying_mints: vec![crate::Address32::new([160; 32])],
@@ -252,6 +254,7 @@ mod tests {
     fn recovery_removes_only_extra_channels_and_replaces_mint_scopes() {
         let desired = DesiredSubscriptions::from_initial(Some(&initial()));
         let recovery = desired.recovery(&SubscriptionsMessage {
+            next_cursor: None,
             request_id: Uuid::new_v4(),
             channels: vec![WsChannel::Rfqs, WsChannel::Trades],
             underlying_mints: vec![crate::Address32::new([99; 32])],

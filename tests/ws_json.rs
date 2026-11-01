@@ -240,7 +240,7 @@ fn server_message_parses_cases() {
 fn market_descriptors_parses_oracle_pdas() {
     let raw = json!({
         "type": "MarketDescriptors",
-        "data": {
+        "data": { "next_cursor": null,
             "request_id": "00000000-0000-0000-0000-000000000099",
             "markets": [
                 {
@@ -316,6 +316,8 @@ fn server_error_market_metadata_incomplete_roundtrip() {
 fn my_active_rfqs_data_requires_request_id() {
     let request_id = Uuid::new_v4();
     let msg = ServerMessage::MyActiveRfqs(MyActiveRfqsData {
+        next_cursor: None,
+
         request_id,
         rfqs: vec![],
     });
@@ -328,7 +330,7 @@ fn my_active_rfqs_data_requires_request_id() {
         _ => panic!("expected MyActiveRfqs"),
     }
 
-    let missing_request_id = r#"{"type":"MyActiveRfqs","data":{"rfqs":[]}}"#;
+    let missing_request_id = r#"{"type":"MyActiveRfqs","data":{ "next_cursor": null,"rfqs":[]}}"#;
     let err = serde_json::from_str::<ServerMessage>(missing_request_id)
         .expect_err("request_id must be mandatory");
     assert!(err.to_string().contains("request_id"));
@@ -338,13 +340,15 @@ fn my_active_rfqs_data_requires_request_id() {
 fn positions_response_requires_request_id() {
     let request_id = Uuid::new_v4();
     let msg = ServerMessage::Positions(PositionsData {
+        next_cursor: None,
+
         request_id,
         positions: vec![],
     });
     let json = serde_json::to_string(&msg).expect("serialize positions");
     assert!(json.contains("\"request_id\""));
 
-    let missing_request_id = r#"{"type":"Positions","data":{"positions":[]}}"#;
+    let missing_request_id = r#"{"type":"Positions","data":{ "next_cursor": null,"positions":[]}}"#;
     let err = serde_json::from_str::<ServerMessage>(missing_request_id)
         .expect_err("request_id must be mandatory");
     assert!(err.to_string().contains("request_id"));
@@ -356,6 +360,7 @@ fn indicative_prices_response_requires_request_id() {
 
     let request_id = Uuid::new_v4();
     let msg = ServerMessage::IndicativePrices(IndicativePricesMessage {
+        next_cursor: None,
         request_id,
         market: acta_maker_sdk::MarketId::new(acta_maker_sdk::Address32::new([
             228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127, 212,
@@ -369,7 +374,7 @@ fn indicative_prices_response_requires_request_id() {
     let json = serde_json::to_string(&msg).expect("serialize indicative prices");
     assert!(json.contains("\"request_id\""));
 
-    let missing_request_id = r#"{"type":"IndicativePrices","data":{"market":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9","position_type":"covered_call","updated_at":0,"is_stale":false,"strikes":[]}}"#;
+    let missing_request_id = r#"{"type":"IndicativePrices","data":{ "next_cursor": null,"market":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9","position_type":"covered_call","updated_at":0,"is_stale":false,"strikes":[]}}"#;
     let err = serde_json::from_str::<ServerMessage>(missing_request_id)
         .expect_err("request_id must be mandatory");
     assert!(err.to_string().contains("request_id"));
@@ -378,7 +383,11 @@ fn indicative_prices_response_requires_request_id() {
 #[test]
 fn get_my_active_rfqs_roundtrip() {
     let request_id = Uuid::new_v4();
-    let msg = ClientMessage::GetMyActiveRfqs(GetMyActiveRfqsMessage { request_id });
+    let msg = ClientMessage::GetMyActiveRfqs(GetMyActiveRfqsMessage {
+        limit: 200,
+        cursor: acta_maker_sdk::ws::types::Cursor::Start {},
+        request_id,
+    });
     let json = serde_json::to_string(&msg).expect("serialize request");
 
     let parsed: ClientMessage = serde_json::from_str(&json).expect("deserialize request");
@@ -776,6 +785,7 @@ fn rfq_created_and_position_payouts_require_their_strict_keys() {
     let positions = json!({
         "type": "Positions",
         "data": {
+            "next_cursor": null,
             "request_id": Uuid::nil(),
             "positions": [{
                 "pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
@@ -1309,7 +1319,7 @@ fn maker_positions_reports_rows_the_server_cannot_describe() {
     let request_id = Uuid::new_v4();
     let raw = json!({
         "type": "MakerPositions",
-        "data": {
+        "data": { "next_cursor": "opaque",
             "request_id": request_id,
             "positions": [],
             "unrenderable": [{
@@ -1318,7 +1328,6 @@ fn maker_positions_reports_rows_the_server_cannot_describe() {
                 "created_at": 1_710_000_000,
                 "missing": ["underlying_symbol", "quote_decimals"]
             }],
-            "has_more": true
         }
     });
 
@@ -1348,17 +1357,16 @@ fn maker_positions_reports_rows_the_server_cannot_describe() {
         data.unrenderable[0].missing,
         ["underlying_symbol", "quote_decimals"]
     );
-    assert!(data.has_more);
+    assert!(data.next_cursor.is_some());
 }
 
 #[test]
 fn maker_positions_require_the_unrenderable_list() {
     let raw = json!({
         "type": "MakerPositions",
-        "data": {
+        "data": { "next_cursor": null,
             "request_id": Uuid::new_v4(),
             "positions": [],
-            "has_more": false
         }
     });
     assert!(serde_json::from_value::<ServerMessage>(raw).is_err());
@@ -1366,43 +1374,25 @@ fn maker_positions_require_the_unrenderable_list() {
 
 #[test]
 fn listing_cursors_are_tagged_keyset_positions() {
-    let request = GetMakerPositionsMessage {
+    let request = GetMyQuotesMessage {
         request_id: Uuid::new_v4(),
-        market: acta_maker_sdk::ws::types::QueryFilter::All {},
-        underlying_mint: acta_maker_sdk::ws::types::QueryFilter::All {},
-        status: Vec::new(),
-        min_expiry_ts: acta_maker_sdk::ws::types::TimeBound::Unbounded {},
         limit: 100,
-        cursor: acta_maker_sdk::ws::types::PageCursor::After {
-            at: UNIX_EPOCH + Duration::from_secs(1_800_000_000),
-            id: acta_maker_sdk::Address32::new([5; 32]),
+        cursor: acta_maker_sdk::ws::types::Cursor::After {
+            id: "opaque".into(),
         },
+        scope: MakerQuoteScope::History {},
     };
     let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["cursor"]["type"], "after");
-    assert_eq!(json["cursor"]["at"], 1_800_000_000);
-
-    let order_id = OrderId([0xab; 32]);
-    let quotes = GetMyQuotesMessage {
-        request_id: Uuid::new_v4(),
-        scope: MakerQuoteScope::History {
-            limit: 100,
-            cursor: acta_maker_sdk::ws::types::PageCursor::After {
-                at: UNIX_EPOCH + Duration::from_secs(1_800_000_777),
-                id: order_id,
-            },
-        },
-    };
-    let json = serde_json::to_value(&quotes).unwrap();
-    assert_eq!(json["scope"]["cursor"]["at"], 1_800_000_777);
+    assert_eq!(json["cursor"], json!({"type": "after", "id": "opaque"}));
+    assert_eq!(json["scope"], json!({"type": "history"}));
     let back: GetMyQuotesMessage = serde_json::from_value(json).unwrap();
-    assert_eq!(back.scope, quotes.scope);
-
-    let missing_scope = serde_json::from_value::<GetMyQuotesMessage>(json!({
-        "request_id": Uuid::new_v4(),
-        "limit": 5
-    }));
-    assert!(missing_scope.is_err(), "scope is required on the wire");
+    assert_eq!(back.cursor, request.cursor);
+    assert!(
+        serde_json::from_value::<GetMyQuotesMessage>(
+            json!({"request_id": Uuid::new_v4(), "limit": 5})
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -1680,7 +1670,7 @@ fn required_wire_fields_preserve_values_and_reject_missing_or_null() {
 fn reference_frames_decode() {
     let tokens: ServerMessage = serde_json::from_value(json!({
         "type": "Tokens",
-        "data": {
+        "data": { "next_cursor": null,
             "request_id": "00000000-0000-0000-0000-000000000000",
             "tokens": [{ "mint": "bvgRxX4i3TVxu72eSGE1dkLjPMunReapc72mEmn3E6U", "symbol": "SOL", "decimals": 9, "oracle_feed_ids": [], "role": { "type": "underlying", "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "strike_tick": 500000000, "quote_mints": ["63QRh6CpNaGpV13A7eV99sdKhBE2z1Yh8knawNfMqqbm"] } }]
         }

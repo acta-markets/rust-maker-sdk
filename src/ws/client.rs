@@ -43,6 +43,8 @@ macro_rules! ws_method_request_id {
         pub async fn $name(&mut self) -> WsResult<()> {
             self.send(&ClientMessage::$variant($msg {
                 request_id: Uuid::new_v4(),
+                limit: 200,
+                cursor: crate::ws::types::Cursor::Start {},
             }))
             .await
         }
@@ -286,19 +288,18 @@ impl WsClient {
         GetMyReferralInfoData
     );
 
-    ws_method_request_id!(get_mm_summary, GetMmSummary, GetMmSummaryMessage);
+    ws_method!(get_mm_summary, GetMmSummary, GetMmSummaryMessage);
+    ws_method!(
+        get_position_summary,
+        GetPositionSummary,
+        crate::ws::types::GetPositionSummaryMessage
+    );
     ws_method_request_id!(get_subscriptions, GetSubscriptions, GetSubscriptionsMessage);
     ws_method_request_id!(get_markets, GetMarkets, GetMarketsMessage);
 
-    pub async fn get_positions(&mut self) -> WsResult<()> {
-        self.send(&ClientMessage::GetPositions(GetPositionsMessage {
-            request_id: Uuid::new_v4(),
-            ..Default::default()
-        }))
-        .await
-    }
-    ws_method_request_id!(get_my_active_rfqs, GetMyActiveRfqs, GetMyActiveRfqsMessage);
-    ws_method_request_id!(get_active_rfqs, GetActiveRfqs, GetActiveRfqsMessage);
+    ws_method!(get_positions, GetPositions, GetPositionsMessage);
+    ws_method!(get_my_active_rfqs, GetMyActiveRfqs, GetMyActiveRfqsMessage);
+    ws_method!(get_active_rfqs, GetActiveRfqs, GetActiveRfqsMessage);
 
     pub async fn ping(&mut self) -> WsResult<()> {
         self.send(&ClientMessage::Ping).await

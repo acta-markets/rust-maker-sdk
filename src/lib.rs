@@ -103,3 +103,5 @@ pub use wire::{
 pub mod spreads;
 
 pub use types::{InvalidProductSet, ProductSet};
+
+pub mod paging;

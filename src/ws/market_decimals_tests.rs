@@ -4,7 +4,7 @@ use super::*;
 fn descriptors_response_fills_decimals_by_market_pda() {
     let message: ServerMessage = serde_json::from_value(serde_json::json!({
         "type": "MarketDescriptors",
-        "data": {
+        "data": { "next_cursor": null,
             "request_id": "00000000-0000-0000-0000-000000000099",
             "markets": [{
                 "market": {

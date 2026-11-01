@@ -267,12 +267,12 @@ async fn client_reads_public_routes() {
     assert_eq!(
         server.join().unwrap(),
         [
-            "/api/v1/vaults",
+            "/api/v1/vaults?limit=200",
             "/api/v1/vaults/11111111111111111111111111111111",
-            "/api/v1/markets",
-            "/api/v1/tokens",
+            "/api/v1/markets?limit=200",
+            "/api/v1/tokens?limit=200",
             "/api/v1/venue",
-            "/api/v1/vaults/11111111111111111111111111111111/exposure",
+            "/api/v1/vaults/11111111111111111111111111111111/exposure?limit=200",
             "/api/v1/vaults/11111111111111111111111111111111",
         ]
     );
@@ -297,8 +297,8 @@ async fn vault_positions_follow_the_cursor() {
     assert_eq!(
         server.join().unwrap(),
         [
-            path.to_string(),
-            format!("{path}&cursor=412:3:1:7cVfgArCheMR6Cs4t6vz5rfnqd56vZq4ndaBrY5xkxXy"),
+            path.to_owned(),
+            format!("{path}&cursor=412%3A3%3A1%3A7cVfgArCheMR6Cs4t6vz5rfnqd56vZq4ndaBrY5xkxXy"),
         ]
     );
 }
@@ -333,7 +333,9 @@ async fn reference_reads_revalidate_with_etag() {
     let second = client.markets(&filter).await.unwrap();
     assert_eq!(first, second);
     let requests = server.join().unwrap();
-    assert!(requests[0].starts_with("get /api/v1/markets?is_put=false&active=true "));
+    assert!(
+        requests[0].starts_with("get /api/v1/markets?is_put=false&active=true&limit=200 http/")
+    );
     assert!(!requests[0].contains("if-none-match"));
     assert!(requests[1].contains("if-none-match: \"m1\""));
 }

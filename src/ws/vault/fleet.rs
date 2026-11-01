@@ -420,7 +420,7 @@ mod tests {
             .collect();
         (
             "200 OK",
-            serde_json::json!({ "vaults": vaults }).to_string(),
+            serde_json::json!({ "vaults": vaults, "next_cursor": null }).to_string(),
         )
     }
 
@@ -572,7 +572,7 @@ mod tests {
                 SECOND.to_owned()
             ])))
         );
-        let expected = format!("/api/v1/vaults?delegate={wallet}");
+        let expected = format!("/api/v1/vaults?delegate={wallet}&limit=200");
         for _ in 0..2 {
             assert_eq!(paths.recv().await.unwrap(), expected);
         }

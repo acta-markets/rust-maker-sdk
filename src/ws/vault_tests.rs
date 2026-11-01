@@ -23,9 +23,8 @@ use crate::wire::{decode_base58_64, encode_base58};
 use crate::ws::managed::{ManagedWsEvent, ManagedWsState, SendAwaitError};
 use crate::ws::types::{
     ActiveRfqsData, AuthRequestData, ClientMessage, HelloData, MakerPositionCapInfo, MmSummaryData,
-    MyActiveRfqsData, MyCapsData, MyQuotesMessage, PongData, PositionsData, ServerMessage,
-    SwapQuoteData, SwapQuoteResultData, VaultAuthSuccessData, VaultProjectionAdvancedData,
-    WelcomeData,
+    MyActiveRfqsData, MyQuotesMessage, PongData, PositionsData, ServerMessage, SwapQuoteData,
+    SwapQuoteResultData, VaultAuthSuccessData, VaultProjectionAdvancedData, WelcomeData,
 };
 
 type Socket = WebSocketStream<TcpStream>;
@@ -209,10 +208,14 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
         assert_eq!(actual, *expected_type, "unexpected reconcile read {read:?}");
         let reply = match read {
             ClientMessage::GetMyActiveRfqs(m) => ServerMessage::MyActiveRfqs(MyActiveRfqsData {
+                next_cursor: None,
+
                 request_id: m.request_id,
                 rfqs: Vec::new(),
             }),
             ClientMessage::GetPositions(m) => ServerMessage::Positions(PositionsData {
+                next_cursor: None,
+
                 request_id: m.request_id,
                 positions: vec![crate::ws::types::PositionInfo {
                     revision: crate::types::ids::PositionRevision {
@@ -245,8 +248,7 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
             ClientMessage::GetMmSummary(m) => ServerMessage::MmSummary(MmSummaryData {
                 request_id: m.request_id,
                 maker_pda: vault_pda(),
-                caps: MyCapsData {
-                    request_id: m.request_id,
+                caps: crate::ws::types::MakerCapsSnapshot {
                     positions: MakerPositionCapInfo {
                         current: 0,
                         limit: 10,
@@ -261,9 +263,11 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
                 tokens: Vec::new(),
                 computed_at: std::time::UNIX_EPOCH,
                 unrenderable_positions: Vec::new(),
-                positions_has_more: false,
+                next_cursor: None,
             }),
             ClientMessage::GetActiveRfqs(m) => ServerMessage::ActiveRfqs(ActiveRfqsData {
+                next_cursor: None,
+
                 request_id: m.request_id,
                 rfqs: Vec::new(),
             }),
@@ -272,7 +276,7 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
                 ServerMessage::MyQuotes(MyQuotesMessage {
                     request_id: m.request_id,
                     quotes: Vec::new(),
-                    has_more: false,
+                    next_cursor: None,
                 })
             }
             other => panic!("unexpected reconcile read {other:?}"),

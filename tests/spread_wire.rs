@@ -11,8 +11,10 @@ fn frames() -> serde_json::Map<String, Value> {
 
 #[test]
 fn vendored_wire_fixture_matches_the_backend_when_the_sibling_exists() {
-    let canonical = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../rust-backend/acta-ws-protocol/tests/fixtures/spreads_wire.json");
+    let backend = std::env::var_os("ACTA_BACKEND_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../rust-backend"));
+    let canonical = backend.join("acta-ws-protocol/tests/fixtures/spreads_wire.json");
     if canonical.is_file() {
         let canonical_bytes =
             std::fs::read(&canonical).expect("read canonical backend wire fixture");

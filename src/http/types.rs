@@ -311,6 +311,8 @@ pub enum VaultPositionStatus {
 /// Public `/api/v1/vaults/{pda}/exposure`: outstanding positions at the indicative spot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VaultExposure {
+    #[serde(deserialize_with = "crate::ws::types::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub vault_pda: String,
     /// Unix seconds the positions were read; never older than 15 s.
     pub as_of: String,
@@ -374,16 +376,22 @@ pub(super) struct VaultPositionsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct VaultsResponse {
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub next_cursor: Option<String>,
     pub(super) vaults: Vec<Vault>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct MarketsResponse {
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub next_cursor: Option<String>,
     pub(super) markets: Vec<MarketInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct TokensResponse {
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub next_cursor: Option<String>,
     pub(super) tokens: Vec<TokenInfo>,
 }
 

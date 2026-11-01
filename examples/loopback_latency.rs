@@ -106,6 +106,7 @@ async fn authenticate_peer(socket: &mut Socket) {
         let reply = match client_frame(socket).await.expect("recovery request") {
             ClientMessage::GetSubscriptions(m) => {
                 ServerMessage::Subscriptions(SubscriptionsMessage {
+                    next_cursor: None,
                     request_id: m.request_id,
                     channels: vec![],
                     underlying_mints: vec![],
@@ -119,6 +120,8 @@ async fn authenticate_peer(socket: &mut Socket) {
             ClientMessage::GetActiveRfqs(m) => {
                 reads += 1;
                 ServerMessage::ActiveRfqs(ActiveRfqsData {
+                    next_cursor: None,
+
                     request_id: m.request_id,
                     rfqs: vec![],
                 })
@@ -128,7 +131,7 @@ async fn authenticate_peer(socket: &mut Socket) {
                 ServerMessage::MyQuotes(MyQuotesMessage {
                     request_id: m.request_id,
                     quotes: vec![],
-                    has_more: false,
+                    next_cursor: None,
                 })
             }
             other => panic!("unexpected recovery request {other:?}"),
@@ -240,6 +243,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         enqueued.push(Instant::now());
         handle
             .try_send(ClientMessage::GetMarkets(GetMarketsMessage {
+                cursor: acta_maker_sdk::ws::types::Cursor::Start {},
+                limit: 200,
                 request_id: Uuid::nil(),
             }))?
             .wait()

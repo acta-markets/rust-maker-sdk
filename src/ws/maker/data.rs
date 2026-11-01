@@ -23,111 +23,163 @@ pub trait MakerDataRequest: private::Sealed + Sized {
     const RESPONSE_TYPE: &'static str;
 
     fn into_message(self) -> ClientMessage;
+    fn fetch(
+        self,
+        client: &MakerDataClient,
+        timeout: Duration,
+    ) -> impl std::future::Future<Output = Result<MakerResponse<Self::Response>, MakerDataRequestError>>
+    {
+        client.request_page(self, timeout)
+    }
     /// # Errors
     /// Returns the original message when its variant is not this request's
     /// response.
     fn into_response(message: ServerMessage) -> Result<Self::Response, Box<ServerMessage>>;
 }
 
-/// A cursor-paged request. Pages run newest first by (second, id).
+/// A list request using the common opaque continuation contract.
 pub trait PagedRequest: MakerDataRequest + Clone {
     fn first_page(&mut self);
-    /// Points the cursor past the rows in `so_far`; `false` once nothing is left.
-    fn next_page(&mut self, so_far: &Self::Response) -> bool;
-    fn append(so_far: &mut Self::Response, page: Self::Response);
+    fn next_page(&mut self, page: &Self::Response) -> bool;
+    fn append(all: &mut Self::Response, page: Self::Response);
+    fn has_more(page: &Self::Response) -> bool;
+    fn cursor(page: &Self::Response) -> Option<&str>;
+    fn request_cursor(&mut self, cursor: Cursor);
 }
 
-impl PagedRequest for GetMakerPositionsMessage {
-    fn first_page(&mut self) {
-        self.request_id = uuid::Uuid::new_v4();
-        self.limit = 500;
-        self.cursor = PageCursor::Start {};
-    }
-
-    fn next_page(&mut self, so_far: &MakerPositionsMessage) -> bool {
-        // the server orders a second's positions by their base58 PDA
-        let last = so_far
-            .positions
-            .iter()
-            .map(|p| (p.created_at, p.pda.to_base58(), p.pda))
-            .chain(
-                so_far
-                    .unrenderable
-                    .iter()
-                    .map(|p| (p.created_at, p.pda.to_base58(), p.pda)),
-            )
-            .min();
-        match (so_far.has_more, last) {
-            (true, Some((at, _, id))) => {
+macro_rules! paged_request {
+    ($request:ty, $response:ty, $($field:ident).+ $(, $($rest:ident).+)* $(,)?) => {
+        impl PagedRequest for $request {
+            fn first_page(&mut self) {
                 self.request_id = uuid::Uuid::new_v4();
-                self.cursor = PageCursor::After { at, id };
+                self.limit = 200;
+                self.cursor = Cursor::Start {};
+            }
+            fn next_page(&mut self, page: &$response) -> bool {
+                let Some(id) = &page.next_cursor else { return false; };
+                let cursor = Cursor::After { id: id.clone() };
+                if id.is_empty() || cursor == self.cursor { return false; }
+                self.cursor = cursor;
+                self.request_id = uuid::Uuid::new_v4();
                 true
             }
-            _ => false,
+            fn append(all: &mut $response, page: $response) {
+                all.$($field).+.extend(page.$($field).+);
+                $(all.$($rest).+.extend(page.$($rest).+);)*
+                all.next_cursor = page.next_cursor;
+            }
+            fn has_more(page: &$response) -> bool { page.next_cursor.is_some() }
+            fn cursor(page: &$response) -> Option<&str> { page.next_cursor.as_deref() }
+            fn request_cursor(&mut self, cursor: Cursor) { self.cursor = cursor; self.request_id = uuid::Uuid::new_v4(); }
         }
-    }
-
-    fn append(so_far: &mut MakerPositionsMessage, page: MakerPositionsMessage) {
-        so_far.positions.extend(page.positions);
-        so_far.unrenderable.extend(page.unrenderable);
-        so_far.has_more = page.has_more;
-    }
+    };
 }
 
-impl PagedRequest for GetMyTradesMessage {
+paged_request!(
+    GetMakerPositionsMessage,
+    MakerPositionsMessage,
+    positions,
+    unrenderable
+);
+paged_request!(GetMyTradesMessage, MyTradesMessage, trades);
+paged_request!(GetMyQuotesMessage, MyQuotesMessage, quotes);
+paged_request!(GetMarketsMessage, MarketsData, markets);
+paged_request!(GetMarketDescriptorsMessage, MarketDescriptorsData, markets);
+paged_request!(GetExpiriesMessage, ExpiriesData, expiries_ts);
+paged_request!(GetTokensMessage, TokensData, tokens);
+paged_request!(GetActiveRfqsMessage, ActiveRfqsData, rfqs);
+paged_request!(GetMyActiveRfqsMessage, MyActiveRfqsData, rfqs);
+paged_request!(GetPositionsMessage, PositionsData, positions);
+paged_request!(GetPositionSummaryMessage, PositionSummaryData, summaries);
+paged_request!(GetIndicativePricesMessage, IndicativePricesMessage, strikes);
+paged_request!(GetMarketsForMakerMessage, MakerMarketsMessage, markets);
+paged_request!(
+    GetTokenCapsMessage,
+    TokenCapsData,
+    tokens,
+    markets,
+    quotes,
+    quote_liabilities
+);
+paged_request!(
+    GetMyCapsMessage,
+    MyCapsData,
+    notional,
+    balances,
+    quote_liabilities
+);
+paged_request!(GetEarnSummaryMessage, EarnSummaryData, assets);
+paged_request!(
+    GetSubscriptionsMessage,
+    SubscriptionsMessage,
+    channels,
+    underlying_mints,
+    quote_mints
+);
+paged_request!(
+    GetMmSummaryMessage,
+    MmSummaryData,
+    positions,
+    unrenderable_positions,
+    active_quotes,
+    markets,
+    tokens,
+    caps.notional,
+    caps.balances,
+    caps.quote_liabilities
+);
+
+impl PagedRequest for GetTokenMarketsInfoMessage {
     fn first_page(&mut self) {
         self.request_id = uuid::Uuid::new_v4();
         self.limit = 200;
-        self.cursor = PageCursor::Start {};
+        self.cursor = Cursor::Start {};
     }
-
-    fn next_page(&mut self, so_far: &MyTradesMessage) -> bool {
-        match (so_far.has_more, so_far.trades.last()) {
-            (true, Some(last)) => {
-                self.request_id = uuid::Uuid::new_v4();
-                self.cursor = PageCursor::After {
-                    at: last.confirmed_at,
-                    id: last.id,
-                };
-                true
-            }
-            _ => false,
+    fn next_page(&mut self, page: &TokenMarketsInfoData) -> bool {
+        let Some(id) = &page.next_cursor else {
+            return false;
+        };
+        let cursor = Cursor::After { id: id.clone() };
+        if id.is_empty() || cursor == self.cursor {
+            return false;
         }
-    }
-
-    fn append(so_far: &mut MyTradesMessage, page: MyTradesMessage) {
-        so_far.trades.extend(page.trades);
-        so_far.has_more = page.has_more;
-    }
-}
-
-/// `Live` is a single snapshot; only `History` pages.
-impl PagedRequest for GetMyQuotesMessage {
-    fn first_page(&mut self) {
+        self.cursor = cursor;
         self.request_id = uuid::Uuid::new_v4();
-        if let MakerQuoteScope::History { limit, cursor } = &mut self.scope {
-            *limit = 1000;
-            *cursor = PageCursor::Start {};
-        }
+        true
     }
-
-    fn next_page(&mut self, so_far: &MyQuotesMessage) -> bool {
-        match (&mut self.scope, so_far.has_more, so_far.quotes.last()) {
-            (MakerQuoteScope::History { cursor, .. }, true, Some(last)) => {
-                *cursor = PageCursor::After {
-                    at: last.created_at,
-                    id: last.order_id,
-                };
-                self.request_id = uuid::Uuid::new_v4();
-                true
+    fn has_more(page: &TokenMarketsInfoData) -> bool {
+        page.next_cursor.is_some()
+    }
+    fn cursor(page: &TokenMarketsInfoData) -> Option<&str> {
+        page.next_cursor.as_deref()
+    }
+    fn request_cursor(&mut self, cursor: Cursor) {
+        self.cursor = cursor;
+        self.request_id = uuid::Uuid::new_v4();
+    }
+    fn append(all: &mut TokenMarketsInfoData, page: TokenMarketsInfoData) {
+        for market in page.markets {
+            if let Some(existing) = all
+                .markets
+                .iter_mut()
+                .find(|m| m.market_pda == market.market_pda)
+            {
+                for indicative in market.indicatives {
+                    if let Some(current) = existing
+                        .indicatives
+                        .iter_mut()
+                        .find(|i| i.position_type == indicative.position_type)
+                    {
+                        current.strikes.extend(indicative.strikes);
+                    } else {
+                        existing.indicatives.push(indicative);
+                    }
+                }
+            } else {
+                all.markets.push(market);
             }
-            _ => false,
         }
-    }
-
-    fn append(so_far: &mut MyQuotesMessage, page: MyQuotesMessage) {
-        so_far.quotes.extend(page.quotes);
-        so_far.has_more = page.has_more;
+        all.next_cursor = page.next_cursor;
     }
 }
 
@@ -158,6 +210,10 @@ impl<T> Deref for MakerResponse<T> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MakerDataRequestError {
+    #[error("page claims more rows but provides no advancing cursor")]
+    InvalidPage,
+    #[error(transparent)]
+    Continuation(#[from] crate::paging::InvalidPage),
     #[error(transparent)]
     Session(#[from] ManagedWsError),
     #[error(transparent)]
@@ -217,6 +273,15 @@ impl MakerDataClient {
         request: R,
         timeout: Duration,
     ) -> Result<MakerResponse<R::Response>, MakerDataRequestError> {
+        request.fetch(self, timeout).await
+    }
+
+    /// Fetch exactly one page. Use `request` for a complete collection.
+    pub async fn request_page<R: MakerDataRequest>(
+        &self,
+        request: R,
+        timeout: Duration,
+    ) -> Result<MakerResponse<R::Response>, MakerDataRequestError> {
         let message = self
             .inner
             .send_await_ready(request.into_message(), timeout)
@@ -248,12 +313,20 @@ impl MakerDataClient {
         timeout: Duration,
     ) -> Result<R::Response, MakerDataRequestError> {
         request.first_page();
-        let mut all = self.request(request.clone(), timeout).await?.into_payload();
-        while request.next_page(&all) {
-            let page = self.request(request.clone(), timeout).await?.into_payload();
-            R::append(&mut all, page);
-        }
-        Ok(all)
+        crate::paging::fetch_all(
+            |cursor| {
+                let mut next = request.clone();
+                next.request_cursor(cursor);
+                async move {
+                    self.request_page(next, timeout)
+                        .await
+                        .map(MakerResponse::into_payload)
+                }
+            },
+            R::cursor,
+            R::append,
+        )
+        .await
     }
 
     /// Receive owner-direct `PositionUpdated`, `TradeExecuted` and
@@ -297,12 +370,29 @@ impl MakerDataClient {
     }
 }
 
+macro_rules! paged_fetch {
+    (paged) => {
+        async fn fetch(
+            self,
+            client: &MakerDataClient,
+            timeout: Duration,
+        ) -> Result<MakerResponse<Self::Response>, MakerDataRequestError> {
+            client
+                .all_pages(self, timeout)
+                .await
+                .map(|payload| MakerResponse { payload })
+        }
+    };
+}
+
 macro_rules! data_request {
-    ($request:ty, $client_variant:ident, $response:ty, $server_variant:ident) => {
+    ($request:ty, $client_variant:ident, $response:ty, $server_variant:ident $(, $paged:ident)?) => {
         impl private::Sealed for $request {}
 
         impl MakerDataRequest for $request {
             type Response = $response;
+
+            $(paged_fetch!($paged);)?
 
             const RESPONSE_TYPE: &'static str = stringify!($server_variant);
 
@@ -324,30 +414,46 @@ data_request!(
     GetActiveRfqsMessage,
     GetActiveRfqs,
     ActiveRfqsData,
-    ActiveRfqs
+    ActiveRfqs,
+    paged
 );
-data_request!(GetMarketsMessage, GetMarkets, MarketsData, Markets);
+data_request!(GetMarketsMessage, GetMarkets, MarketsData, Markets, paged);
 data_request!(
     GetMarketDescriptorsMessage,
     GetMarketDescriptors,
     MarketDescriptorsData,
-    MarketDescriptors
+    MarketDescriptors,
+    paged
 );
-data_request!(GetExpiriesMessage, GetExpiries, ExpiriesData, Expiries);
-data_request!(GetTokensMessage, GetTokens, TokensData, Tokens);
+data_request!(
+    GetExpiriesMessage,
+    GetExpiries,
+    ExpiriesData,
+    Expiries,
+    paged
+);
+data_request!(GetTokensMessage, GetTokens, TokensData, Tokens, paged);
 data_request!(
     GetIndicativePricesMessage,
     GetIndicativePrices,
     IndicativePricesMessage,
-    IndicativePrices
+    IndicativePrices,
+    paged
 );
 data_request!(
     GetMakerPositionsMessage,
     GetMakerPositions,
     MakerPositionsMessage,
-    MakerPositions
+    MakerPositions,
+    paged
 );
-data_request!(GetMyQuotesMessage, GetMyQuotes, MyQuotesMessage, MyQuotes);
+data_request!(
+    GetMyQuotesMessage,
+    GetMyQuotes,
+    MyQuotesMessage,
+    MyQuotes,
+    paged
+);
 data_request!(
     GetOrderStatusMessage,
     GetOrderStatus,
@@ -358,24 +464,74 @@ data_request!(
     GetMarketsForMakerMessage,
     GetMarketsForMaker,
     MakerMarketsMessage,
-    MakerMarkets
+    MakerMarkets,
+    paged
 );
-data_request!(GetTokenCapsMessage, GetTokenCaps, TokenCapsData, TokenCaps);
-data_request!(GetMyCapsMessage, GetMyCaps, MyCapsData, MyCaps);
+data_request!(
+    GetTokenCapsMessage,
+    GetTokenCaps,
+    TokenCapsData,
+    TokenCaps,
+    paged
+);
+data_request!(GetMyCapsMessage, GetMyCaps, MyCapsData, MyCaps, paged);
 data_request!(CheckQuoteMessage, CheckQuote, QuoteCheckData, QuoteCheck);
-data_request!(GetMyTradesMessage, GetMyTrades, MyTradesMessage, MyTrades);
+data_request!(
+    GetMyTradesMessage,
+    GetMyTrades,
+    MyTradesMessage,
+    MyTrades,
+    paged
+);
 data_request!(
     GetEarnSummaryMessage,
     GetEarnSummary,
     EarnSummaryData,
-    EarnSummary
+    EarnSummary,
+    paged
 );
-data_request!(GetMmSummaryMessage, GetMmSummary, MmSummaryData, MmSummary);
+data_request!(
+    GetMmSummaryMessage,
+    GetMmSummary,
+    MmSummaryData,
+    MmSummary,
+    paged
+);
 data_request!(
     GetTokenMarketsInfoMessage,
     GetTokenMarketsInfo,
     TokenMarketsInfoData,
-    TokenMarketsInfo
+    TokenMarketsInfo,
+    paged
+);
+
+data_request!(
+    GetPositionsMessage,
+    GetPositions,
+    PositionsData,
+    Positions,
+    paged
+);
+data_request!(
+    GetPositionSummaryMessage,
+    GetPositionSummary,
+    PositionSummaryData,
+    PositionSummary,
+    paged
+);
+data_request!(
+    GetMyActiveRfqsMessage,
+    GetMyActiveRfqs,
+    MyActiveRfqsData,
+    MyActiveRfqs,
+    paged
+);
+data_request!(
+    GetSubscriptionsMessage,
+    GetSubscriptions,
+    SubscriptionsMessage,
+    Subscriptions,
+    paged
 );
 
 #[cfg(test)]
@@ -403,6 +559,9 @@ mod tests {
                 connection_epoch: 7,
             });
             ClientMessage::GetMmSummary(GetMmSummaryMessage {
+                limit: 200,
+                cursor: crate::ws::types::Cursor::Start {},
+
                 request_id: self.request_id,
             })
         }
@@ -442,79 +601,65 @@ mod tests {
     }
 
     #[test]
-    fn trade_pages_continue_after_the_last_row_until_has_more_is_false() {
-        let page = |id: u128, confirmed_at: u64, has_more: bool| -> MyTradesMessage {
-            serde_json::from_value(serde_json::json!({
-                "request_id": uuid::Uuid::nil(),
-                "trades": [{
-                    "id": uuid::Uuid::from_u128(id), "rfq_id": uuid::Uuid::nil(),
-                    "market_pda": crate::Address32::new([1; 32]),
-                    "underlying_mint": crate::Address32::new([2; 32]), "underlying_symbol": "SOL",
-                    "underlying_decimals": 9,
-                    "quote_mint": crate::Address32::new([3; 32]), "quote_symbol": "USDC",
-                    "quote_decimals": 6,
-                    "terms": {"type": "covered_call", "strike": 100}, "side": "sell",
-                    "taker": crate::Address32::new([4; 32]), "quantity": 1, "price": 1,
-                    "tx_signature": "sig", "position_pda": null, "confirmed_at": confirmed_at
-                }],
-                "has_more": has_more
-            }))
-            .expect("trades page")
-        };
-        let mut request = GetMyTradesMessage {
-            request_id: uuid::Uuid::nil(),
-            limit: 1,
-            cursor: PageCursor::After {
-                at: std::time::UNIX_EPOCH,
-                id: uuid::Uuid::nil(),
-            },
-            market: QueryFilter::All {},
-        };
+    fn continuations_use_the_server_key_even_without_renderable_rows() {
+        let mut request = GetMyQuotesMessage::default();
         request.first_page();
-        assert_eq!(
-            (request.limit, &request.cursor),
-            (200, &PageCursor::Start {})
-        );
-
-        let mut so_far = page(2, 20, true);
-        assert!(request.next_page(&so_far));
+        let mut all = MyQuotesMessage {
+            request_id: request.request_id,
+            quotes: Vec::new(),
+            next_cursor: Some("opaque".into()),
+        };
+        assert!(request.next_page(&all));
         assert_eq!(
             request.cursor,
-            PageCursor::After {
-                at: std::time::UNIX_EPOCH + Duration::from_secs(20),
-                id: uuid::Uuid::from_u128(2),
+            Cursor::After {
+                id: "opaque".into()
             }
         );
-        GetMyTradesMessage::append(&mut so_far, page(1, 10, false));
-        assert_eq!(so_far.trades.len(), 2);
-        assert!(!request.next_page(&so_far));
+        assert!(!request.next_page(&all));
+        GetMyQuotesMessage::append(
+            &mut all,
+            MyQuotesMessage {
+                request_id: request.request_id,
+                quotes: Vec::new(),
+                next_cursor: None,
+            },
+        );
+        assert!(!GetMyQuotesMessage::has_more(&all));
     }
 
     #[test]
-    fn live_quotes_are_one_page() {
+    fn empty_continuation_is_rejected() {
         let mut request = GetMyQuotesMessage::default();
-        request.first_page();
-        assert_eq!(request.scope, MakerQuoteScope::Live {});
-        let so_far = MyQuotesMessage {
+        let page = MyQuotesMessage {
             request_id: request.request_id,
             quotes: Vec::new(),
-            has_more: true,
+            next_cursor: Some(String::new()),
         };
-        assert!(!request.next_page(&so_far));
+        assert!(!request.next_page(&page));
     }
 
     #[test]
     fn data_request_maps_to_one_typed_response() {
         let request_id = uuid::Uuid::new_v4();
-        let request = GetActiveRfqsMessage { request_id };
+        let request = GetActiveRfqsMessage {
+            limit: 200,
+            cursor: crate::ws::types::Cursor::Start {},
+            request_id,
+        };
         assert!(matches!(
-            request.into_message(),
-            ClientMessage::GetActiveRfqs(GetActiveRfqsMessage {
-                request_id: actual
-            }) if actual == request_id
-        ));
+                request.into_message(),
+                ClientMessage::GetActiveRfqs(GetActiveRfqsMessage {
+        limit: 200,
+        cursor: crate::ws::types::Cursor::Start {},
+
+                    request_id: actual
+                }) if actual == request_id
+            ));
 
         let response = ServerMessage::ActiveRfqs(ActiveRfqsData {
+            next_cursor: None,
+
             request_id,
             rfqs: Vec::new(),
         });

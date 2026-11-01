@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.6.0", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.6.1", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -24,7 +24,7 @@ Rust 1.89 or later. The default feature set is empty.
 | `test-helpers` | `ManagedWsHandle::test_handle` and message injection |
 
 This release speaks WS protocol `1.0.0` (`WS_PROTOCOL_VERSION`). See
-[CHANGELOG.md](CHANGELOG.md) for the migration from 0.5.x.
+[CHANGELOG.md](CHANGELOG.md) for what changed since 0.6.0.
 
 ## Before you connect
 
@@ -211,11 +211,23 @@ SDK overhead only; network and server time are extra.
 | peer send to session parse | 150 µs | 281 µs | 424 µs |
 | session task to subscriber recv | 19 µs | 39 µs | 70 µs |
 
+## List paging
+
+List calls collect every page for you. `MakerDataClient::request` and the
+`HttpClient` catalog methods go through `paging::fetch_all`. For a "load more" view
+use `request_page` and keep the returned cursor as an opaque value.
+
+On the wire, WS lists take `limit` (at most 200) and `Cursor::Start {}` or
+`Cursor::After { id }`, and return `next_cursor`, `null` on the last page. REST lists
+take an optional `limit` (default 50, at most 200, 100 for vault requests) and an
+optional `cursor`: omit it for the first page, then pass `next_cursor` as is.
+
 ## Documentation
 
 - [Rust maker guide](https://beta.acta.markets/docs/quickstart/maker-rust-sdk)
 - [Maker API reference](https://beta.acta.markets/docs/reference/maker-api)
 - [WebSocket conventions](https://beta.acta.markets/docs/reference/ws-common)
+- [HTTP API](https://beta.acta.markets/docs/reference/http-api)
 - [Vault API, SDKs and swaps](https://beta.acta.markets/docs/protocol/vault-integration)
 - [API reference on docs.rs](https://docs.rs/acta-maker-sdk)
 

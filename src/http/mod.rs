@@ -22,7 +22,6 @@ use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsRespo
 use crate::ws::types::{MarketInfo, TokenInfo};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
-const POSITION_PAGE: u16 = 200;
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -33,6 +32,10 @@ pub enum HttpError {
     Status { status: u16, body: String },
     #[error("invalid response body: {0}")]
     Decode(#[from] serde_json::Error),
+    #[error("page cursor did not advance")]
+    InvalidCursor,
+    #[error(transparent)]
+    InvalidPage(#[from] crate::paging::InvalidPage),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -109,7 +112,16 @@ impl HttpClient {
     }
 
     pub async fn vaults(&self) -> Result<Vec<Vault>, HttpError> {
-        let response: VaultsResponse = self.get("/api/v1/vaults").await?;
+        let response: VaultsResponse = self
+            .collect(
+                "/api/v1/vaults",
+                |all: &VaultsResponse| all.next_cursor.as_deref(),
+                |all, page| {
+                    all.vaults.extend(page.vaults);
+                    all.next_cursor = page.next_cursor;
+                },
+            )
+            .await?;
         Ok(response.vaults)
     }
 
@@ -120,7 +132,14 @@ impl HttpClient {
         delegate: crate::Address32,
     ) -> Result<Vec<Vault>, HttpError> {
         let response: VaultsResponse = self
-            .get(&format!("/api/v1/vaults?delegate={delegate}"))
+            .collect(
+                &format!("/api/v1/vaults?delegate={delegate}"),
+                |all: &VaultsResponse| all.next_cursor.as_deref(),
+                |all, page| {
+                    all.vaults.extend(page.vaults);
+                    all.next_cursor = page.next_cursor;
+                },
+            )
             .await?;
         Ok(response.vaults)
     }
@@ -134,38 +153,109 @@ impl HttpClient {
         &self,
         pda: crate::Address32,
     ) -> Result<Vec<VaultPosition>, HttpError> {
-        let base = format!("/api/v1/vaults/{pda}/positions?settled=false&limit={POSITION_PAGE}");
-        let mut positions = Vec::new();
-        let mut path = base.clone();
-        loop {
-            let page: VaultPositionsResponse = self.get(&path).await?;
-            positions.extend(page.positions);
-            match page.next_cursor {
-                Some(cursor) => path = format!("{base}&cursor={cursor}"),
-                None => return Ok(positions),
-            }
-        }
+        let response: VaultPositionsResponse = self
+            .collect(
+                &format!("/api/v1/vaults/{pda}/positions?settled=false"),
+                |all: &VaultPositionsResponse| all.next_cursor.as_deref(),
+                |all, page| {
+                    all.positions.extend(page.positions);
+                    all.next_cursor = page.next_cursor;
+                },
+            )
+            .await?;
+        Ok(response.positions)
     }
 
     /// Open and funded positions with indicative spot, moneyness and intrinsic value.
     pub async fn vault_exposure(&self, pda: crate::Address32) -> Result<VaultExposure, HttpError> {
-        self.get(&format!("/api/v1/vaults/{pda}/exposure")).await
+        self.collect(
+            &format!("/api/v1/vaults/{pda}/exposure"),
+            |all: &VaultExposure| all.next_cursor.as_deref(),
+            |all, page| {
+                all.positions.extend(page.positions);
+                all.next_cursor = page.next_cursor;
+            },
+        )
+        .await
+    }
+
+    /// One exposure page. The totals describe the full cached snapshot.
+    pub async fn vault_exposure_page(
+        &self,
+        pda: crate::Address32,
+        limit: u16,
+        cursor: Option<&str>,
+    ) -> Result<VaultExposure, HttpError> {
+        let cursor = cursor.map_or(crate::ws::types::Cursor::Start {}, |id| {
+            crate::ws::types::Cursor::After { id: id.to_owned() }
+        });
+        let path = Self::page_path(&format!("/api/v1/vaults/{pda}/exposure"), limit, &cursor)?;
+        self.get(&path).await
     }
 
     pub async fn markets(&self, filter: &MarketFilter) -> Result<Vec<MarketInfo>, HttpError> {
         let response: MarketsResponse = self
-            .get(&format!("/api/v1/markets{}", filter.query()))
+            .collect(
+                &format!("/api/v1/markets{}", filter.query()),
+                |all: &MarketsResponse| all.next_cursor.as_deref(),
+                |all, page| {
+                    all.markets.extend(page.markets);
+                    all.next_cursor = page.next_cursor;
+                },
+            )
             .await?;
         Ok(response.markets)
     }
 
     pub async fn tokens(&self) -> Result<BTreeMap<crate::Address32, TokenInfo>, HttpError> {
-        let response: TokensResponse = self.get("/api/v1/tokens").await?;
+        let response: TokensResponse = self
+            .collect(
+                "/api/v1/tokens",
+                |all: &TokensResponse| all.next_cursor.as_deref(),
+                |all, page| {
+                    all.tokens.extend(page.tokens);
+                    all.next_cursor = page.next_cursor;
+                },
+            )
+            .await?;
         Ok(response
             .tokens
             .into_iter()
             .map(|token| (token.mint, token))
             .collect())
+    }
+
+    fn page_path(
+        path: &str,
+        limit: u16,
+        cursor: &crate::ws::types::Cursor,
+    ) -> Result<String, HttpError> {
+        let mut url = reqwest::Url::parse(&format!("http://localhost{path}"))
+            .map_err(|_| HttpError::InvalidCursor)?;
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        if let crate::ws::types::Cursor::After { id } = cursor {
+            url.query_pairs_mut().append_pair("cursor", id);
+        }
+        Ok(format!(
+            "{}?{}",
+            url.path(),
+            url.query().unwrap_or_default()
+        ))
+    }
+
+    async fn collect<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        next: impl Fn(&T) -> Option<&str>,
+        append: impl Fn(&mut T, T),
+    ) -> Result<T, HttpError> {
+        crate::paging::fetch_all(
+            |cursor| async move { self.get(&Self::page_path(path, 200, &cursor)?).await },
+            next,
+            append,
+        )
+        .await
     }
 
     pub async fn venue(&self) -> Result<Venue, HttpError> {

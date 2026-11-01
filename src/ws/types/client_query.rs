@@ -1,4 +1,4 @@
-use super::common::{PageCursor, PositionStatus, QueryFilter, TimeBound};
+use super::common::{Cursor, PositionStatus, QueryFilter, TimeBound};
 use crate::Address32;
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ pub struct GetPositionsMessage {
     pub underlying_mint: QueryFilter<Address32>,
     pub status: Vec<PositionStatus>,
     pub min_expiry_ts: TimeBound,
+    pub limit: u32,
+    pub cursor: Cursor,
 }
 
 impl Default for GetPositionsMessage {
@@ -24,6 +26,8 @@ impl Default for GetPositionsMessage {
             market: QueryFilter::All {},
             underlying_mint: QueryFilter::All {},
             status: Vec::new(),
+            limit: 50,
+            cursor: Cursor::Start {},
             min_expiry_ts: TimeBound::Unbounded {},
         }
     }
@@ -35,6 +39,8 @@ macro_rules! default_request {
             fn default() -> Self {
                 Self {
                     request_id: Uuid::new_v4(),
+                    limit: 200,
+                    cursor: Cursor::Start {},
                 }
             }
         }
@@ -43,6 +49,8 @@ macro_rules! default_request {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMarketsMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
 }
 default_request!(GetMarketsMessage);
@@ -50,17 +58,31 @@ default_request!(GetMarketsMessage);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetActiveRfqsMessage {
     pub request_id: Uuid,
+    pub limit: u32,
+    pub cursor: Cursor,
 }
-default_request!(GetActiveRfqsMessage);
+impl Default for GetActiveRfqsMessage {
+    fn default() -> Self {
+        Self {
+            request_id: Uuid::new_v4(),
+            limit: 200,
+            cursor: Cursor::Start {},
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTokenCapsMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
     pub include_markets: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMyCapsMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
 }
 
@@ -79,22 +101,30 @@ pub struct CheckQuoteMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSubscriptionsMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
 }
 default_request!(GetSubscriptionsMessage);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMarketDescriptorsMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTokensMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetExpiriesMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
     pub underlying_mint: QueryFilter<Address32>,
     pub quote_mint: QueryFilter<Address32>,
@@ -110,8 +140,18 @@ pub struct GetOrderStatusMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMyActiveRfqsMessage {
     pub request_id: Uuid,
+    pub limit: u32,
+    pub cursor: Cursor,
 }
-default_request!(GetMyActiveRfqsMessage);
+impl Default for GetMyActiveRfqsMessage {
+    fn default() -> Self {
+        Self {
+            request_id: Uuid::new_v4(),
+            limit: 200,
+            cursor: Cursor::Start {},
+        }
+    }
+}
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,14 +161,16 @@ pub struct GetMakerPositionsMessage {
     pub underlying_mint: QueryFilter<Address32>,
     pub status: Vec<PositionStatus>,
     pub min_expiry_ts: TimeBound,
-    /// Page size in `1..=500`; anything else is rejected with `invalid_limit`.
+    /// Page size in `1..=200`; anything else is rejected with `invalid_limit`.
     pub limit: u32,
-    pub cursor: PageCursor<Address32>,
+    pub cursor: Cursor,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMyQuotesMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
     pub scope: MakerQuoteScope,
 }
@@ -138,6 +180,8 @@ impl Default for GetMyQuotesMessage {
         Self {
             request_id: Uuid::new_v4(),
             scope: MakerQuoteScope::Live {},
+            limit: 200,
+            cursor: Cursor::Start {},
         }
     }
 }
@@ -146,15 +190,14 @@ impl Default for GetMyQuotesMessage {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MakerQuoteScope {
     Live {},
-    History {
-        limit: u32,
-        cursor: PageCursor<OrderId>,
-    },
+    History {},
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMarketsForMakerMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
     pub underlying_mints: Vec<Address32>,
     pub quote_mints: Vec<Address32>,
@@ -167,6 +210,8 @@ impl Default for GetMarketsForMakerMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
+            limit: 200,
+            cursor: Cursor::Start {},
             underlying_mints: Vec::new(),
             quote_mints: Vec::new(),
             min_expiry_ts: TimeBound::Unbounded {},
@@ -193,6 +238,8 @@ impl Default for CancelAllQuotesMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetIndicativePricesMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
     pub market: MarketId,
     pub position_type: PositionType,
@@ -203,22 +250,45 @@ pub struct GetIndicativePricesMessage {
 pub struct GetMyTradesMessage {
     pub request_id: Uuid,
     pub limit: u32,
-    pub cursor: PageCursor<Uuid>,
+    pub cursor: Cursor,
     pub market: QueryFilter<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetEarnSummaryMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMmSummaryMessage {
     pub request_id: Uuid,
+    pub limit: u32,
+    pub cursor: Cursor,
+}
+impl Default for GetMmSummaryMessage {
+    fn default() -> Self {
+        Self {
+            request_id: Uuid::new_v4(),
+            limit: 200,
+            cursor: Cursor::Start {},
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetPositionSummaryMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
+    pub request_id: Uuid,
+}
+default_request!(GetPositionSummaryMessage);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTokenMarketsInfoMessage {
+    pub limit: u32,
+    pub cursor: Cursor,
     pub request_id: Uuid,
     pub underlying_mint: Address32,
 }

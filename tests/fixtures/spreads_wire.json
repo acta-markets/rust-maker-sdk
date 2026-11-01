@@ -152,7 +152,8 @@
           },
           "state": "settled"
         }
-      ]
+      ],
+      "next_cursor": null
     }
   },
   "QuoteRejected": {

@@ -36,6 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ServerMessage::AuthSuccess(_) => {
                 client
                     .get_my_quotes(GetMyQuotesMessage {
+                        cursor: acta_maker_sdk::ws::types::Cursor::Start {},
+                        limit: 200,
                         request_id: uuid::Uuid::new_v4(),
                         scope: MakerQuoteScope::Live {},
                     })
@@ -49,12 +51,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         status: vec![PositionStatus::Open, PositionStatus::Funded],
                         min_expiry_ts: TimeBound::Unbounded {},
                         limit: 100,
-                        cursor: PageCursor::Start {},
+                        cursor: acta_maker_sdk::ws::types::Cursor::Start {},
                     })
                     .await?;
 
                 client
                     .get_markets_for_maker(GetMarketsForMakerMessage {
+                        cursor: acta_maker_sdk::ws::types::Cursor::Start {},
+                        limit: 200,
                         request_id: uuid::Uuid::new_v4(),
                         underlying_mints: vec![],
                         quote_mints: vec![],
@@ -64,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .await?;
 
-                client.get_mm_summary().await?;
+                client.get_mm_summary(Default::default()).await?;
             }
             ServerMessage::AuthError(error) => return Err(format!("{error:?}").into()),
             ServerMessage::VersionMismatch(error) => return Err(error.message.into()),

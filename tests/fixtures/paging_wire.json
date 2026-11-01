@@ -1,0 +1,751 @@
+[
+  {
+    "type": "GetPositions",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "market": {
+        "type": "all"
+      },
+      "underlying_mint": {
+        "type": "all"
+      },
+      "status": [
+        "open",
+        "funded"
+      ],
+      "min_expiry_ts": {
+        "type": "unbounded"
+      },
+      "limit": 50,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "Positions",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "positions": [],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetPositionSummary",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "PositionSummary",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "summaries": [],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetActiveRfqs",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "limit": 50,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "ActiveRfqs",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "rfqs": [],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetMyActiveRfqs",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "limit": 50,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "MyActiveRfqs",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "rfqs": [],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetMyQuotes",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "scope": {
+        "type": "live"
+      },
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetMmSummary",
+    "data": {
+      "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
+      "limit": 50,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetSubscriptions",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000004",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetMakerPositions",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000011",
+      "market": {
+        "type": "all"
+      },
+      "underlying_mint": {
+        "type": "all"
+      },
+      "status": [],
+      "min_expiry_ts": {
+        "type": "unbounded"
+      },
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetMarketDescriptors",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000009",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetExpiries",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-00000000000b",
+      "underlying_mint": {
+        "type": "all"
+      },
+      "quote_mint": {
+        "type": "all"
+      },
+      "is_put": {
+        "type": "all"
+      },
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetTokens",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetMarketsForMaker",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000012",
+      "underlying_mints": [],
+      "quote_mints": [],
+      "min_expiry_ts": {
+        "type": "unbounded"
+      },
+      "max_expiry_ts": {
+        "type": "unbounded"
+      },
+      "is_put": {
+        "type": "all"
+      },
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "Subscriptions",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000004",
+      "channels": [
+        "rfqs",
+        "trades"
+      ],
+      "underlying_mints": [],
+      "quote_mints": [],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "MakerPositions",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000011",
+      "positions": [
+        {
+          "revision": {
+            "slot": 250000000,
+            "transaction_index": 12,
+            "instruction_index": 1
+          },
+          "pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
+          "market": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+          "underlying_mint": "So11111111111111111111111111111111111111112",
+          "underlying_symbol": "SOL",
+          "underlying_decimals": 9,
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "quote_symbol": "USDC",
+          "quote_decimals": 6,
+          "terms": {
+            "type": "covered_call",
+            "strike": 160000000000
+          },
+          "side": "sell",
+          "state": "open",
+          "quantity": 1000000000,
+          "price": 5000000000,
+          "total_premium": 4975000,
+          "created_at": 1710000042,
+          "expiry_ts": 1710600000
+        }
+      ],
+      "unrenderable": [],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetMyTrades",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000031",
+      "limit": 50,
+      "cursor": {
+        "type": "start"
+      },
+      "market": {
+        "type": "all"
+      }
+    }
+  },
+  {
+    "type": "MyTrades",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000031",
+      "trades": [
+        {
+          "id": "7c2e9a41-6b3d-4f58-9e1a-0d4b6f8a2c35",
+          "rfq_id": "8f3e7e6a-4f5c-4b7c-9f1d-1f2a3b4c5d6e",
+          "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+          "underlying_mint": "So11111111111111111111111111111111111111112",
+          "underlying_symbol": "SOL",
+          "underlying_decimals": 9,
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "quote_symbol": "USDC",
+          "quote_decimals": 6,
+          "terms": {
+            "type": "covered_call",
+            "strike": 160000000000
+          },
+          "side": "sell",
+          "taker": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
+          "quantity": 1000000000,
+          "price": 5000000000,
+          "tx_signature": "1111111111111111111111111111111111111111111111111111111111111111",
+          "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
+          "confirmed_at": 1710000042
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "MarketDescriptors",
+    "data": {
+      "request_id": "2c7e4a91-5d3b-4f60-9a8e-1b4c6d2f7e05",
+      "markets": [
+        {
+          "products": [
+            "covered_call",
+            "call_spread"
+          ],
+          "market": {
+            "chain_id": 0,
+            "program_id": "33Ezs5eoa16QyPW8wifnyz2nCyMEcq2crqkVBNjnTE8U",
+            "market_pda": "11111111111111111111111111111111",
+            "underlying_mint": "So11111111111111111111111111111111111111112",
+            "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "expiry_ts": 1710600000,
+            "is_put": false,
+            "collateral_mint": "So11111111111111111111111111111111111111112",
+            "settlement_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+          },
+          "underlying_oracle_pda": "11111111111111111111111111111111",
+          "quote_oracle_pda": "11111111111111111111111111111111",
+          "underlying_decimals": 9,
+          "quote_decimals": 6,
+          "size_rule": {
+            "min_size": 1000000000,
+            "max_size": 100000000000,
+            "step": 1000000000
+          },
+          "underlying_symbol": "SOL",
+          "quote_symbol": "USDC"
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetTokenCaps",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "include_markets": true,
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "TokenCaps",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "tokens": [
+        {
+          "underlying_mint": "So11111111111111111111111111111111111111112",
+          "symbol": "SOL",
+          "current_oi": 500000000000,
+          "max_oi": 1000000000000,
+          "utilization": 0.5
+        }
+      ],
+      "markets": [
+        {
+          "market_id": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+          "current_oi": 100000000000,
+          "max_oi": 250000000000,
+          "utilization": 0.4
+        }
+      ],
+      "quotes": [
+        {
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "symbol": "USDC",
+          "current_notional": 2000000000,
+          "max_notional": 10000000000,
+          "utilization": 0.2
+        }
+      ],
+      "quote_liabilities": [
+        {
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "symbol": "USDC",
+          "current_liability": 50000000,
+          "policy": {
+            "type": "limited",
+            "max_liability": 100000000,
+            "headroom": 50000000
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetMyCaps",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "MyCaps",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "positions": {
+        "current": 12,
+        "limit": 50
+      },
+      "notional": [
+        {
+          "underlying_mint": "So11111111111111111111111111111111111111112",
+          "symbol": "SOL",
+          "current": 800000000000,
+          "limit": 2000000000000
+        }
+      ],
+      "balances": [
+        {
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "symbol": "USDC",
+          "decimals": 6,
+          "deposited": 5000000000,
+          "committed": 3200000000,
+          "available": 1800000000
+        }
+      ],
+      "quote_liabilities": [
+        {
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "symbol": "USDC",
+          "current_liability": 20000000,
+          "policy": {
+            "type": "limited",
+            "max_liability": 100000000,
+            "headroom": 80000000
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetMarkets",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000008",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "Markets",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000008",
+      "markets": [
+        {
+          "pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+          "underlying": "So11111111111111111111111111111111111111112",
+          "quote": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "expiry_ts": 1710600000,
+          "is_put": false,
+          "products": [
+            "covered_call",
+            "call_spread"
+          ],
+          "status": "active",
+          "settlement_price": null
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "Expiries",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-00000000000b",
+      "expiries_ts": [
+        1710600000,
+        1711200000
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "Tokens",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-00000000000a",
+      "tokens": [
+        {
+          "mint": "So11111111111111111111111111111111111111112",
+          "symbol": "SOL",
+          "decimals": 9,
+          "oracle_feed_ids": [
+            "<oracle feed id>"
+          ],
+          "role": {
+            "type": "underlying",
+            "size_rule": {
+              "min_size": 100000000,
+              "max_size": 1000000000000,
+              "step": 100000000
+            },
+            "strike_tick": 500000000,
+            "quote_mints": [
+              "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            ]
+          }
+        },
+        {
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "symbol": "USDC",
+          "decimals": 6,
+          "oracle_feed_ids": [
+            "<oracle feed id>"
+          ],
+          "role": {
+            "type": "quote"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "MyQuotes",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000001",
+      "quotes": [
+        {
+          "rfq_id": "8f3e7e6a-4f5c-4b7c-9f1d-1f2a3b4c5d6e",
+          "order_id": "9d1c2a6a0c2f5e7d9b4d8d8f2a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "market": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+          "underlying_mint": "So11111111111111111111111111111111111111112",
+          "underlying_symbol": "SOL",
+          "underlying_decimals": 9,
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "quote_symbol": "USDC",
+          "quote_decimals": 6,
+          "terms": {
+            "type": "covered_call",
+            "strike": 160000000000
+          },
+          "side": "sell",
+          "price": 5000000000,
+          "quantity": 1000000000,
+          "valid_until": 1710000120,
+          "state": {
+            "type": "active",
+            "rank": "best",
+            "rfq_version": 1
+          },
+          "created_at": 1710000010
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "MakerMarkets",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000012",
+      "markets": [
+        {
+          "products": [
+            "covered_call",
+            "call_spread"
+          ],
+          "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+          "underlying_mint": "So11111111111111111111111111111111111111112",
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "expiry_ts": 1710600000,
+          "is_put": false,
+          "is_finalized": false,
+          "underlying_symbol": "SOL",
+          "quote_symbol": "USDC"
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "MmSummary",
+    "data": {
+      "request_id": "a1b2c3d4-0000-4000-8000-000000000003",
+      "maker_pda": "HYe9CryCnQ3ZviCwoG8X7REFoSBK7HCjrhWWMpNtTah1",
+      "caps": {
+        "positions": {
+          "current": 5,
+          "limit": 100
+        },
+        "notional": [
+          {
+            "underlying_mint": "So11111111111111111111111111111111111111112",
+            "symbol": "SOL",
+            "current": 50000000000,
+            "limit": 200000000000
+          }
+        ],
+        "balances": [
+          {
+            "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "symbol": "USDC",
+            "decimals": 6,
+            "deposited": 1000000000,
+            "committed": 500000000,
+            "available": 500000000
+          }
+        ],
+        "quote_liabilities": [
+          {
+            "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "symbol": "USDC",
+            "current_liability": 20000000,
+            "policy": {
+              "type": "limited",
+              "max_liability": 100000000,
+              "headroom": 80000000
+            }
+          }
+        ]
+      },
+      "positions": [],
+      "active_quotes": [],
+      "markets": [],
+      "tokens": [],
+      "computed_at": 1710000042,
+      "unrenderable_positions": [],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "GetIndicativePrices",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "market": "11111111111111111111111111111111",
+      "position_type": "covered_call",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetEarnSummary",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "GetTokenMarketsInfo",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "underlying_mint": "11111111111111111111111111111111",
+      "limit": 200,
+      "cursor": {
+        "type": "start"
+      }
+    }
+  },
+  {
+    "type": "TokenMarketsInfo",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "underlying_symbol": "SOL",
+      "underlying_decimals": 9,
+      "quote_symbol": "USDC",
+      "quote_decimals": 6,
+      "size_rule": {
+        "min_size": 100000000,
+        "max_size": 10000000000,
+        "step": 100000000
+      },
+      "reference_price": 150000000000,
+      "markets": [
+        {
+          "products": [
+            "covered_call",
+            "call_spread"
+          ],
+          "market_pda": "11111111111111111111111111111111",
+          "expiry_ts": 1710600000,
+          "is_put": false,
+          "indicatives": [
+            {
+              "position_type": "covered_call",
+              "updated_at": 1710000000,
+              "is_stale": false,
+              "strikes": [
+                {
+                  "strike": 160000000000,
+                  "best_price": 50000000
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "IndicativePrices",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "market": "11111111111111111111111111111111",
+      "position_type": "covered_call",
+      "updated_at": 1710000000,
+      "is_stale": false,
+      "strikes": [
+        {
+          "strike": 450000000000,
+          "best_price": 5000000
+        },
+        {
+          "strike": 460000000000,
+          "best_price": null
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "type": "EarnSummary",
+    "data": {
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "assets": [
+        {
+          "underlying_mint": "So11111111111111111111111111111111111111112",
+          "underlying_symbol": "SOL",
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "quote_symbol": "USDC",
+          "position_type": "covered_call",
+          "apr": {
+            "type": "available",
+            "min": 5.2,
+            "max": 18.7
+          },
+          "cap_filled_pct": 0.45,
+          "cap_total": 100000000000,
+          "cap_used": 45000000000,
+          "strikes_count": 3,
+          "nearest_market_pda": "11111111111111111111111111111111",
+          "markets_count": 2,
+          "nearest_expiry_ts": 1710600000
+        }
+      ],
+      "computed_at": 1710000000,
+      "next_cursor": null
+    }
+  }
+]

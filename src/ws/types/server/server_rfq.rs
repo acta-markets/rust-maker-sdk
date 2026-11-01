@@ -121,6 +121,8 @@ pub struct ActiveRfqInfo {
 pub struct ActiveRfqsData {
     pub request_id: Uuid,
     pub rfqs: Vec<ActiveRfqInfo>,
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,4 +157,6 @@ pub struct MyActiveRfqInfo {
 pub struct MyActiveRfqsData {
     pub request_id: Uuid,
     pub rfqs: Vec<MyActiveRfqInfo>,
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
 }

@@ -53,6 +53,7 @@ pub enum WsErrorCode {
     SubscriptionScopeTooLarge,
     HistoryProjectionIncomplete,
     InvalidLimit,
+    InvalidCursor,
     InvalidTimeout,
     MarketNotFound,
     InvalidProgramId,

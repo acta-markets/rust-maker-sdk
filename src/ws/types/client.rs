@@ -37,6 +37,7 @@ pub enum ClientMessage {
     CancelRfq(CancelRfqData),
     GetIndicativePrices(GetIndicativePricesMessage),
     GetPositions(GetPositionsMessage),
+    GetPositionSummary(GetPositionSummaryMessage),
     GetMyActiveRfqs(GetMyActiveRfqsMessage),
     GetOrderStatus(GetOrderStatusMessage),
     GetMarkets(GetMarketsMessage),
@@ -249,6 +250,7 @@ impl ClientMessage {
     pub const fn request_id(&self) -> Option<Uuid> {
         match self {
             Self::GetPositions(m) => Some(m.request_id),
+            Self::GetPositionSummary(m) => Some(m.request_id),
             Self::GetMyActiveRfqs(m) => Some(m.request_id),
             Self::GetOrderStatus(m) => Some(m.request_id),
             Self::GetMarkets(m) => Some(m.request_id),

@@ -181,9 +181,9 @@ async fn canonical_vault_auth_signs_original_operator_challenge() {
 
 use crate::ws::types::{
     ActiveRfqsData, AuthRequestData, AuthSuccessData, ClientMessage, HelloData,
-    MakerPositionCapInfo, MakerQuoteScope, MmSummaryData, MyCapsData, MyQuotesMessage,
-    ServerMessage, SubscribeAckData, SubscribeData, SubscriptionsMessage, UnsubscribeAckData,
-    WelcomeData, WsChannel, WsErrorCode,
+    MakerPositionCapInfo, MakerQuoteScope, MmSummaryData, MyQuotesMessage, ServerMessage,
+    SubscribeAckData, SubscribeData, SubscriptionsMessage, UnsubscribeAckData, WelcomeData,
+    WsChannel, WsErrorCode,
 };
 
 fn maker_auth() -> AuthOutcome {
@@ -240,6 +240,7 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
         send_server(
             &mut socket,
             ServerMessage::Subscriptions(SubscriptionsMessage {
+                next_cursor: None,
                 request_id: actual.request_id,
                 channels: Vec::new(),
                 underlying_mints: vec![],
@@ -270,6 +271,8 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
         send_server(
             &mut socket,
             ServerMessage::ActiveRfqs(ActiveRfqsData {
+                next_cursor: None,
+
                 request_id: active.request_id,
                 rfqs: Vec::new(),
             }),
@@ -280,7 +283,7 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
             ServerMessage::MyQuotes(MyQuotesMessage {
                 request_id: my_quotes.request_id,
                 quotes: Vec::new(),
-                has_more: false,
+                next_cursor: None,
             }),
         )
         .await;
@@ -312,7 +315,7 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
 }
 
 #[tokio::test]
-async fn readiness_rejects_a_partial_live_quote_snapshot() {
+async fn readiness_rejects_an_empty_live_quote_page_with_more_rows() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test websocket");
@@ -328,6 +331,7 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
         send_server(
             &mut socket,
             ServerMessage::Subscriptions(SubscriptionsMessage {
+                next_cursor: None,
                 request_id: actual.request_id,
                 channels: vec![WsChannel::Trades],
                 underlying_mints: vec![crate::Address32::new([160; 32])],
@@ -371,6 +375,8 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
         send_server(
             &mut socket,
             ServerMessage::ActiveRfqs(ActiveRfqsData {
+                next_cursor: None,
+
                 request_id: active.request_id,
                 rfqs: Vec::new(),
             }),
@@ -379,9 +385,9 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
         send_server(
             &mut socket,
             ServerMessage::MyQuotes(MyQuotesMessage {
+                next_cursor: Some(String::new()),
                 request_id: my_quotes.request_id,
                 quotes: Vec::new(),
-                has_more: true,
             }),
         )
         .await;
@@ -404,16 +410,25 @@ async fn readiness_rejects_a_partial_live_quote_snapshot() {
     let error = establish(&mut client, &config, &mut inbound, &desired, &maker_auth())
         .await
         .expect_err("a partial Live quote response fails the barrier");
-    let my_quotes_id = server_task.await.expect("test server task");
+    let _ = server_task.await.expect("test server task");
     assert!(matches!(
         &error,
         SessionFailure::Retryable(detail)
-            if detail.contains(&my_quotes_id.to_string()) && detail.contains("truncated")
+            if detail.contains("continuation")
     ));
 }
 
 #[tokio::test]
 async fn data_readiness_reads_only_the_mm_summary() {
+    data_readiness(false).await;
+}
+
+#[tokio::test]
+async fn data_readiness_does_not_drain_terminal_history() {
+    data_readiness(true).await;
+}
+
+async fn data_readiness(history_has_more: bool) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test websocket");
@@ -429,10 +444,11 @@ async fn data_readiness_reads_only_the_mm_summary() {
         send_server(
             &mut socket,
             ServerMessage::MmSummary(MmSummaryData {
+                next_cursor: history_has_more.then(|| "opaque".into()),
+
                 request_id: summary.request_id,
                 maker_pda: crate::Address32::new([0; 32]),
-                caps: MyCapsData {
-                    request_id: summary.request_id,
+                caps: crate::ws::types::MakerCapsSnapshot {
                     positions: MakerPositionCapInfo {
                         current: 0,
                         limit: 0,
@@ -447,10 +463,51 @@ async fn data_readiness_reads_only_the_mm_summary() {
                 tokens: Vec::new(),
                 computed_at: std::time::SystemTime::UNIX_EPOCH,
                 unrenderable_positions: Vec::new(),
-                positions_has_more: false,
             }),
         )
         .await;
+        if history_has_more {
+            let ClientMessage::GetMakerPositions(read) = receive_client(&mut socket).await else {
+                panic!("expected live position recovery");
+            };
+            assert_eq!(
+                read.status,
+                vec![
+                    crate::ws::types::PositionStatus::Open,
+                    crate::ws::types::PositionStatus::Funded
+                ]
+            );
+            assert_eq!(read.cursor, crate::ws::types::Cursor::Start {});
+            send_server(
+                &mut socket,
+                ServerMessage::MakerPositions(crate::ws::types::MakerPositionsMessage {
+                    request_id: read.request_id,
+                    positions: Vec::new(),
+                    unrenderable: Vec::new(),
+                    next_cursor: None,
+                }),
+            )
+            .await;
+            for _ in 0..4 {
+                let request = receive_client(&mut socket).await;
+                let response = match request {
+                    ClientMessage::GetMyQuotes(read) => {
+                        serde_json::json!({"type": "MyQuotes", "data": {"request_id": read.request_id, "quotes": [], "next_cursor": null}})
+                    }
+                    ClientMessage::GetMyCaps(read) => {
+                        serde_json::json!({"type": "MyCaps", "data": {"request_id": read.request_id, "positions": {"current": 0, "limit": 10}, "notional": [], "balances": [], "quote_liabilities": [], "next_cursor": null}})
+                    }
+                    ClientMessage::GetMarketsForMaker(read) => {
+                        serde_json::json!({"type": "MakerMarkets", "data": {"request_id": read.request_id, "markets": [], "next_cursor": null}})
+                    }
+                    ClientMessage::GetTokens(read) => {
+                        serde_json::json!({"type": "Tokens", "data": {"request_id": read.request_id, "tokens": [], "next_cursor": null}})
+                    }
+                    other => panic!("unexpected recovery read: {other:?}"),
+                };
+                send_server(&mut socket, serde_json::from_value(response).unwrap()).await;
+            }
+        }
         socket
     });
 
@@ -674,6 +731,7 @@ async fn complete_quote_readiness(
     send_server(
         socket,
         ServerMessage::Subscriptions(SubscriptionsMessage {
+            next_cursor: None,
             request_id: actual.request_id,
             channels: Vec::new(),
             underlying_mints: vec![],
@@ -701,6 +759,8 @@ async fn complete_quote_readiness(
     send_server(
         socket,
         ServerMessage::ActiveRfqs(ActiveRfqsData {
+            next_cursor: None,
+
             request_id: active.request_id,
             rfqs: Vec::new(),
         }),
@@ -711,7 +771,7 @@ async fn complete_quote_readiness(
         ServerMessage::MyQuotes(MyQuotesMessage {
             request_id: my_quotes.request_id,
             quotes: Vec::new(),
-            has_more: false,
+            next_cursor: None,
         }),
     )
     .await;

@@ -25,16 +25,22 @@ use super::super::market::MarketInfo;
 pub struct PositionsData {
     pub request_id: Uuid,
     pub positions: Vec<PositionInfo>,
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketsData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub markets: Vec<MarketInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketDescriptorsData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub markets: Vec<MarketDescriptorInfo>,
 }
@@ -42,6 +48,8 @@ pub struct MarketDescriptorsData {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpiriesData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     #[serde_as(as = "Vec<UnixSeconds>")]
     pub expiries_ts: Vec<SystemTime>,
@@ -49,6 +57,8 @@ pub struct ExpiriesData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokensData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub tokens: Vec<TokenInfo>,
 }
@@ -61,12 +71,12 @@ pub struct ReferenceChangedData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MakerPositionsMessage {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub positions: Vec<MakerPositionInfo>,
     /// Positions omitted from `positions` because their market projection is incomplete.
     pub unrenderable: Vec<UnrenderablePositionInfo>,
-    /// More rows exist past this page's cursor.
-    pub has_more: bool,
 }
 
 /// A stored position whose market projection is incomplete.
@@ -110,10 +120,10 @@ pub struct MakerPositionInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MyQuotesMessage {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub quotes: Vec<MakerQuoteInfo>,
-    /// More historical rows exist past this page's cursor.
-    pub has_more: bool,
 }
 
 #[serde_as]
@@ -182,6 +192,8 @@ pub enum HistoricalQuoteStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MakerMarketsMessage {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub markets: Vec<MakerMarketInfo>,
 }
@@ -203,9 +215,10 @@ pub struct MakerMarketInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MyTradesMessage {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub trades: Vec<MakerTradeInfo>,
-    pub has_more: bool,
 }
 
 #[serde_as]
@@ -235,6 +248,8 @@ pub struct MakerTradeInfo {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EarnSummaryData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub assets: Vec<EarnAssetSummary>,
     #[serde_as(as = "UnixSeconds")]
@@ -263,6 +278,8 @@ pub struct EarnAssetSummary {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenMarketsInfoData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub underlying_symbol: String,
     pub underlying_decimals: Decimals,
@@ -297,6 +314,8 @@ pub struct TokenMarketIndicatives {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndicativePricesMessage {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub market: MarketId,
     pub position_type: PositionType,
@@ -315,6 +334,8 @@ pub struct IndicativeStrikeBest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenCapsData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub tokens: Vec<TokenCapInfo>,
     pub markets: Vec<MarketCapInfo>,
@@ -324,6 +345,8 @@ pub struct TokenCapsData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MyCapsData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub positions: MakerPositionCapInfo,
     pub notional: Vec<MakerNotionalCapInfo>,
@@ -365,9 +388,11 @@ pub struct MakerCapsSnapshot {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MmSummaryData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub maker_pda: Address32,
-    pub caps: MyCapsData,
+    pub caps: MakerCapsSnapshot,
     pub positions: Vec<MakerPositionInfo>,
     pub active_quotes: Vec<MakerQuoteInfo>,
     pub markets: Vec<MakerMarketInfo>,
@@ -376,12 +401,12 @@ pub struct MmSummaryData {
     pub computed_at: SystemTime,
     /// Positions omitted from `positions` because their market projection is incomplete.
     pub unrenderable_positions: Vec<UnrenderablePositionInfo>,
-    /// True when the embedded `positions` were capped; page via `GetMakerPositions`.
-    pub positions_has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionsMessage {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
     pub request_id: Uuid,
     pub channels: Vec<WsChannel>,
     pub underlying_mints: Vec<Address32>,
@@ -594,4 +619,28 @@ pub struct PositionLiquidatedEvent {
     pub instruction_index: i16,
     pub slot: Slot,
     pub position: Address32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositionSummaryData {
+    #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
+    pub next_cursor: Option<String>,
+    pub request_id: Uuid,
+    pub summaries: Vec<PositionSummaryInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositionSummaryInfo {
+    pub quote_mint: Address32,
+    pub quote_decimals: u8,
+    pub premium_all_time: String,
+    pub premium_30d: String,
+    pub open_positions: u64,
+    pub daily: Vec<DailyPositionPremium>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyPositionPremium {
+    pub day: String,
+    pub premium: String,
 }

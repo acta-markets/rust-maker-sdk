@@ -279,6 +279,8 @@ mod tests {
 
     fn data_frame() -> PreparedClientMessage {
         PreparedClientMessage::new(&ClientMessage::GetMarkets(GetMarketsMessage {
+            limit: 200,
+            cursor: crate::ws::types::Cursor::Start {},
             request_id: Uuid::nil(),
         }))
         .expect("serialize data frame")

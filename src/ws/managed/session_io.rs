@@ -224,6 +224,9 @@ mod tests {
         let mut tracker = AwaitTracker::new(4);
         let mut subscriptions = DesiredSubscriptions::from_initial(None);
         let message = ClientMessage::GetMmSummary(GetMmSummaryMessage {
+            limit: 200,
+            cursor: crate::ws::types::Cursor::Start {},
+
             request_id: uuid::Uuid::new_v4(),
         });
         let (tx, rx) = oneshot::channel();

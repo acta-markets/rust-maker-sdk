@@ -27,5 +27,6 @@
       ],
       "settlement_price": null
     }
-  ]
+  ],
+  "next_cursor": null
 }
