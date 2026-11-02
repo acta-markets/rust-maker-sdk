@@ -40,7 +40,7 @@ pub(super) fn prepare_outbound(
     max_batch_quotes: usize,
     max_message_size: usize,
 ) -> Result<PreparedClientMessage, OutboundMessageError> {
-    if has_taker_buy(message) {
+    if has_unsupported_buy(message) {
         return Err(OutboundMessageError::TakerBuyUnsupported);
     }
     if let ClientMessage::BatchQuotes(batch) = message
@@ -61,15 +61,7 @@ pub(super) fn prepare_outbound(
     Ok(prepared)
 }
 
-fn has_taker_buy(message: &ClientMessage) -> bool {
-    match message {
-        ClientMessage::RfqRequest(request) => request.side.is_taker_buy(),
-        ClientMessage::Quote(quote) => quote.side.is_taker_buy(),
-        ClientMessage::ReplaceQuote(quote) => quote.side.is_taker_buy(),
-        ClientMessage::BatchQuotes(batch) => {
-            batch.quotes.iter().any(|quote| quote.side.is_taker_buy())
-        }
-        ClientMessage::CheckQuote(request) => request.side.is_taker_buy(),
-        _ => false,
-    }
+/// Vaults never request buys; makers quote them.
+fn has_unsupported_buy(message: &ClientMessage) -> bool {
+    matches!(message, ClientMessage::RfqRequest(request) if request.side.is_taker_buy())
 }

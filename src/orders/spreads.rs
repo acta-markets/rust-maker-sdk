@@ -66,9 +66,6 @@ pub fn sign_spread_order<S: SignerLike + ?Sized>(
     args: &SpreadOrderPreimageArgs,
     signer: &S,
 ) -> Result<([u8; ORDER_ID_LEN], [u8; 64]), SpreadError> {
-    if args.side.is_taker_buy() {
-        return Err(SpreadError::TakerBuyUnsupported);
-    }
     let order_id = compute_spread_order_id(args)?;
     Ok((order_id, sign_order_id_with_signer(&order_id, signer)))
 }

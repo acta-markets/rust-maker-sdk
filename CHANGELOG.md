@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0 - 2026-11-03
+
+- Breaking rename, wire unchanged: `deposit_premium`/`withdraw_premium` are `maker_deposit`/
+  `maker_withdraw`, with `MakerDepositArgs`, `MakerWithdrawArgs`, `build_maker_deposit_ixs` and
+  `build_maker_withdraw_ixs`. Instruction bytes and account order are identical.
+- Makers quote taker buys of physical options and spreads: subscribe to
+  `WsChannel::TakerBuyRfqs`. Writing a buy moves collateral from Maker PDA custody.
+  Vault RFQs stay sell only.
+- `OpenSpread` carries a side byte (83 bytes). `decode_spread_event` reads the new
+  `OpenTakerBuySpread` event and `OpenSpreadEvent::side` tells it apart.
+- `PositionInfo::side` reads the `TAKER_BUY` flag. On a buy the wallet buyer is the
+  `holder` and the maker the `writer`.
+- Breaking rename, bytes unchanged: `PositionInfo` `taker_owner`/`maker_owner` are
+  `writer`/`holder`; `FundPositionIxArgs`/`FundPositionArgs` take `holder`;
+  `CashSettleDestinations { writer, holder }`; spread splits and `SettleSpreadEvent` carry
+  `holder_payoff`/`writer_return`, and the event `writer`/`holder`. WS
+  cash settlement fields are `holder_payoff` and `writer_return`.
+- `PositionSettlement::NotExercised` reports an unfunded ITM buy.
+- `PositionState::TerminalPending { slot, outcome }`: the chain has settled or liquidated the
+  position but the server has not sealed that slot. It replaces the brief `unrenderable` entry
+  a settling position used to show; caps and balances still follow the sealed state.
+
 ## 0.6.3
 
 - A server frame this SDK cannot decode no longer drops the session. A pending request
@@ -175,7 +197,7 @@ rejects unknown message types, error codes, enum values and missing fields.
 - `MakerDataClient::subscribe_messages()` receives owner-direct `PositionUpdated`, `TradeExecuted` and `MakerCapsUpdated` after summary recovery, without replacing the quote session. Up to four data sessions per owner.
 
 - `chain`: typed `PositionSnapshot` funding/settlement builders, explicit `wsol::build_wrap_sol_ixs` wrapping and checked premium-token balance decoding. `chain-rpc`: `maker_snapshot` batches positions, premium ATAs and unique markets in chunks of 100; `maker_open_positions` discovers Open/Funded positions directly on chain for startup/manual recovery. `fetch_accounts` and `rpc()` expose batched and advanced reads.
-- `chain-rpc`: `deposit_premium`, `withdraw_premium`, `fund_position` and `send_instructions_with_options` retain confirmation semantics: `Ok` requires confirmation at the client commitment and on-chain failure returns `Err`. `with_confirmation_ws_url` (`ws-client`) selects signature subscriptions; without it, conveniences retain the legacy RPC confirmation fallback. Only `send_instructions_with_blockhash` is submit-only and accepts a shared batch blockhash; `signature_statuses` checks chunks of 256. With `ws-client`, `confirm_signatures` waits on Solana signature subscriptions and reconciles unresolved signatures with one batched status pass on WS failure/deadline; pending remains unknown.
+- `chain-rpc`: `maker_deposit`, `maker_withdraw`, `fund_position` and `send_instructions_with_options` retain confirmation semantics: `Ok` requires confirmation at the client commitment and on-chain failure returns `Err`. `with_confirmation_ws_url` (`ws-client`) selects signature subscriptions; without it, conveniences retain the legacy RPC confirmation fallback. Only `send_instructions_with_blockhash` is submit-only and accepts a shared batch blockhash; `signature_statuses` checks chunks of 256. With `ws-client`, `confirm_signatures` waits on Solana signature subscriptions and reconciles unresolved signatures with one batched status pass on WS failure/deadline; pending remains unknown.
 
 - `ws::maker::QuoteOutcomeTracker` tracks a sent order from `subscribe_messages()` without a task: pending, acknowledged, selected, typed rejection, fill details, expiry, cancellation or RFQ loss. Epoch changes, deadlines and stream gaps/closure yield `Unknown`; reconcile through `GetMyQuotes` / `GetOrderStatus` after reconnect. A filled `RfqClosed` can precede `QuoteFilled`.
 - Breaking, `http`: optional `reqwest` moves from 0.12 to 0.13 (`json`, `query`, `rustls`). Rustls uses the platform verifier for system trust and the reqwest 0.13 crypto-provider selection. `HttpClient::with_client` now takes a 0.13 client.

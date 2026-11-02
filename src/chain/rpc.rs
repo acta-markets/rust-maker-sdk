@@ -8,8 +8,8 @@ use solana_sdk::{
 use crate::chain::ChainError;
 use crate::chain::accounts::{GlobalConfigInfo, MarketInfo, PositionInfo};
 use crate::chain::ix::{
-    DepositPremiumIxArgs, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WithdrawPremiumIxArgs,
-    build_deposit_premium_ixs, build_withdraw_premium_ixs,
+    MakerDepositIxArgs, MakerWithdrawIxArgs, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    build_maker_deposit_ixs, build_maker_withdraw_ixs,
 };
 use crate::chain::settlement::required_settlement;
 use crate::chain::wsol::{
@@ -70,7 +70,7 @@ pub struct SendOptions {
 }
 
 #[derive(Debug, Clone)]
-pub struct DepositPremiumArgs {
+pub struct MakerDepositArgs {
     pub maker_owner: Pubkey,
     pub amount: u64,
     pub premium_mint: Pubkey,
@@ -79,7 +79,7 @@ pub struct DepositPremiumArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct WithdrawPremiumArgs {
+pub struct MakerWithdrawArgs {
     pub maker_owner: Pubkey,
     pub amount: u64,
     pub premium_mint: Pubkey,
@@ -89,7 +89,7 @@ pub struct WithdrawPremiumArgs {
 
 #[derive(Debug, Clone)]
 pub struct FundPositionArgs {
-    pub maker_owner: Pubkey,
+    pub holder: Pubkey,
     pub position_pda: Pubkey,
     pub create_atas: bool,
     pub native_sol: NativeSolFunding,
@@ -140,31 +140,27 @@ impl ChainClient {
     }
 
     /// Submit and wait for confirmation at the client commitment; execution failure is an error.
-    pub async fn deposit_premium(
+    pub async fn maker_deposit(
         &self,
-        args: DepositPremiumArgs,
+        args: MakerDepositArgs,
         maker_owner: &(dyn Signer + Sync),
         fee_payer: Option<&(dyn Signer + Sync)>,
     ) -> Result<Signature, ChainError> {
         let payer = fee_payer.map_or(maker_owner, |payer| payer);
-        let ixs = self
-            .build_deposit_premium_ixs(&args, payer.pubkey())
-            .await?;
+        let ixs = self.build_maker_deposit_ixs(&args, payer.pubkey()).await?;
         self.send_instructions_with_options(ixs, payer, &[maker_owner], SendOptions::default())
             .await
     }
 
     /// Submit and wait for confirmation at the client commitment; execution failure is an error.
-    pub async fn withdraw_premium(
+    pub async fn maker_withdraw(
         &self,
-        args: WithdrawPremiumArgs,
+        args: MakerWithdrawArgs,
         maker_owner: &(dyn Signer + Sync),
         fee_payer: Option<&(dyn Signer + Sync)>,
     ) -> Result<Signature, ChainError> {
         let payer = fee_payer.map_or(maker_owner, |payer| payer);
-        let ixs = self
-            .build_withdraw_premium_ixs(&args, payer.pubkey())
-            .await?;
+        let ixs = self.build_maker_withdraw_ixs(&args, payer.pubkey()).await?;
         self.send_instructions_with_options(ixs, payer, &[maker_owner], SendOptions::default())
             .await
     }
@@ -191,17 +187,17 @@ impl ChainClient {
         self.confirm_submitted(signature, blockhash).await
     }
 
-    pub async fn build_deposit_premium_ixs(
+    pub async fn build_maker_deposit_ixs(
         &self,
-        args: &DepositPremiumArgs,
+        args: &MakerDepositArgs,
         fee_payer: Pubkey,
     ) -> Result<Vec<Instruction>, ChainError> {
         let token_program = self
             .resolve_token_program(&args.premium_mint, args.token_program)
             .await?;
-        build_deposit_premium_ixs(
+        build_maker_deposit_ixs(
             &self.program_id,
-            &DepositPremiumIxArgs {
+            &MakerDepositIxArgs {
                 maker_owner: args.maker_owner,
                 amount: args.amount,
                 premium_mint: args.premium_mint,
@@ -213,17 +209,17 @@ impl ChainClient {
         .map_err(ChainError::from)
     }
 
-    pub async fn build_withdraw_premium_ixs(
+    pub async fn build_maker_withdraw_ixs(
         &self,
-        args: &WithdrawPremiumArgs,
+        args: &MakerWithdrawArgs,
         fee_payer: Pubkey,
     ) -> Result<Vec<Instruction>, ChainError> {
         let token_program = self
             .resolve_token_program(&args.premium_mint, args.token_program)
             .await?;
-        build_withdraw_premium_ixs(
+        build_maker_withdraw_ixs(
             &self.program_id,
-            &WithdrawPremiumIxArgs {
+            &MakerWithdrawIxArgs {
                 maker_owner: args.maker_owner,
                 amount: args.amount,
                 premium_mint: args.premium_mint,
@@ -264,7 +260,7 @@ impl ChainClient {
         };
         let mut fund_ixs = snapshot.fund_instructions(
             &self.program_id,
-            args.maker_owner,
+            args.holder,
             fee_payer,
             args.create_atas,
         )?;
@@ -304,7 +300,7 @@ impl ChainClient {
             return Err(ChainError::InvalidNativeTokenProgram(settlement_program));
         }
         let funding_ata = crate::chain::ix::derive_associated_token_address(
-            &args.maker_owner,
+            &args.holder,
             &settlement_mint,
             &settlement_program,
         );
@@ -314,7 +310,7 @@ impl ChainClient {
             &settlement_program,
         );
         let (funding_account, additional_ata_rent_lamports) =
-            if args.create_atas && fee_payer == args.maker_owner {
+            if args.create_atas && fee_payer == args.holder {
                 let [position_account, funding_account]: [Option<Account>; 2] = self
                     .rpc
                     .get_multiple_accounts_with_commitment(
@@ -344,7 +340,7 @@ impl ChainClient {
             &self.rpc,
             funding_account,
             WsolWrapRequest {
-                owner: args.maker_owner,
+                owner: args.holder,
                 funding_ata,
                 token_program: settlement_program,
                 expected_settlement,

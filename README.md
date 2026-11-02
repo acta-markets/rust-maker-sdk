@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.6.3", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.7.0", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -32,12 +32,12 @@ Maker registration is not self-service. Acta registers the maker owner and its
 quote-signing key on chain; until then authentication fails with
 `maker_not_registered`.
 
-- The owner holds funds and signs maker transactions such as `DepositPremium`
+- The owner holds funds and signs maker transactions such as `MakerDeposit`
   and `DepositFundsToPosition`.
 - The quote-signing key authenticates the session and signs quotes. It can be
   the owner key.
 - A fill debits its premium from the owner's premium balance, so deposit with
-  `DepositPremium` before quoting.
+  `MakerDeposit` before quoting.
 
 The [Rust maker guide](https://beta.acta.markets/docs/quickstart/maker-rust-sdk)
 covers registration and environment setup.
@@ -142,6 +142,7 @@ in-the-money funded position to the owner's ATA; no SDK call is needed.
 |---|---|---|
 | `hello_auth` | `ws-client` | Authenticate and close |
 | `managed_quote` | `ws-client`, `http` | Recover state and send epoch-bound quotes |
+| `taker_buy_quote` | `ws-client`, `http`, `chain-rpc` | Write taker buys from Maker PDA custody and keep it funded |
 | `quote` | `ws-client`, `http` | Raw `/maker` handshake and one signed quote |
 | `spread_quote` | `ws-client`, `http` | Price and sign call spreads, put spreads and cash puts |
 | `discovery` | `ws-client` | Read quotes, positions, markets and summary on `/maker/data` |
@@ -152,10 +153,35 @@ in-the-money funded position to the owner's ATA; no SDK call is needed.
 | `curator_pt` | `chain-rpc`, `http` | Plan a PT route and simulate it; never sends |
 
 Maker examples read `ACTA_KEYPAIR_PATH`, `ACTA_MAKER_OWNER` and `ACTA_WS_URL`.
+`taker_buy_quote` also reads `ACTA_OWNER_KEYPAIR_PATH`, `ACTA_CUSTODY_MINT`,
+`ACTA_CUSTODY_TOKEN_PROGRAM`, `ACTA_CUSTODY_TARGET` (atoms) and `ACTA_RPC_URL`.
 `vault_operator` also reads `ACTA_VAULT_PDA`. `vault_capital` reads
 `ACTA_KEYPAIR_PATH`, `ACTA_VAULT_PDA` and `ACTA_RPC_URL` (devnet by default).
 `curator_pt` reads `RPC_URL`, `JUPITER_API_KEY`, `CURATOR_KEYPAIR`, `VAULT` and
 `AMOUNT_ATOMS`, and takes `buy`, `sell` or `redeem` as its argument.
+
+## Writing taker buys
+
+A buy RFQ (`side: buy`) asks you to write the option the taker holds: the taker is
+the holder, you are the writer. Subscribe to `WsChannel::TakerBuyRfqs`; the channel
+is separate from `Rfqs`, so a maker that only sells never receives buys.
+
+- **Custody.** The collateral leaves your Maker PDA custody at open, not your
+  wallet: the underlying for a call, the quote mint for a put, a spread or a cash
+  put. The net premium lands in custody in the same transaction. Fund custody with
+  `ChainClient::maker_deposit` (`MakerDeposit`) from your wallet ATA; a wSOL
+  underlying must already be wrapped in that ATA.
+- **Admission.** The server checks custody before it sends you the RFQ. A short
+  custody turns into `RfqSkipped` with `maker_insufficient_balance` and the RFQ never
+  reaches quoting, so top up when you see the skip, after every fill, or on a timer.
+- **Price.** The taker pays your price; quote an ask. The order id signs the side,
+  so a buy quote cannot fill a sell.
+- **Settlement.** The holder deposits strictly before expiry to exercise a physical
+  buy. An unfunded in-the-money buy returns all collateral to you and settles as
+  `not_exercised`; spreads and cash puts settle in cash with no deposit. `PositionInfo`
+  names the roles `writer` (you) and `holder` (the buyer).
+
+See [`examples/taker_buy_quote.rs`](examples/taker_buy_quote.rs).
 
 ## Rules that matter
 
@@ -178,9 +204,10 @@ Maker examples read `ACTA_KEYPAIR_PATH`, `ACTA_MAKER_OWNER` and `ACTA_WS_URL`.
   missing fields. A rejected frame after `Ready` keeps the session up and reaches
   you as `ManagedWsEvent::UnreadableFrame` and a receiver gap: reconcile as after
   any gap. Match error codes, not messages.
-- **Sell only.** Every RFQ, quote, position and trade carries `terms: OptionTerms`
-  and `side`. The venue accepts only `sell`; the builders reject `buy` with
-  `taker_buy_unsupported`.
+- **Side.** Every RFQ, quote, position and trade carries `terms: OptionTerms` and
+  `side`. Makers subscribe to `WsChannel::TakerBuyRfqs` to receive `buy` RFQs, physical
+  or spread, and quote them from custody. Vaults stay `sell` only; the builders
+  reject those buys with `taker_buy_unsupported`.
 
 ## Where to start in the API
 

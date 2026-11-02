@@ -457,8 +457,7 @@ pub fn funding_needs(
         ..FundingNeeds::default()
     };
     for position in positions {
-        if position.maker_owner != vault_address
-            || position.status != crate::chain::PositionStatus::Open
+        if position.holder != vault_address || position.status != crate::chain::PositionStatus::Open
         {
             continue;
         }

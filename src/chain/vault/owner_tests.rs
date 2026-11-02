@@ -215,8 +215,8 @@ fn settlement(put: bool, vault: bool) -> (PositionInfo, MarketInfo) {
         flags2: 0,
         flags3: 0,
         status: PositionStatus::Open,
-        taker_owner: key(2),
-        maker_owner: key(1),
+        writer: key(2),
+        holder: key(1),
         market_pda: crate::quote::market_pda(&key(9), &key(6), &key(5), 100, put),
         quantity: Quantity::new(1),
         order_id: OrderId::new([8; 32]),
@@ -266,12 +266,29 @@ fn general_position_decoder_preserves_unknown_flags_but_settlement_rejects_them(
     data[0] = 1;
     data[1] = 2;
     data[4] = 1;
-    data[8..40].copy_from_slice(p.taker_owner.as_ref());
-    data[40..72].copy_from_slice(p.maker_owner.as_ref());
+    data[8..40].copy_from_slice(p.writer.as_ref());
+    data[40..72].copy_from_slice(p.holder.as_ref());
     data[72..104].copy_from_slice(p.market_pda.as_ref());
     data[104..112].copy_from_slice(&100u64.to_le_bytes());
     data[128..160].copy_from_slice(p.order_id.as_bytes());
-    for (index, value) in [(5, 4), (6, 1), (7, 1)] {
+    let mut buy = data.clone();
+    buy[5] = 4;
+    let buy = PositionInfo::from_account(
+        &solana_sdk::account::Account {
+            data: buy,
+            owner: key(9),
+            lamports: 1,
+            executable: false,
+            rent_epoch: 0,
+        },
+        &key(9),
+    )
+    .unwrap();
+    assert!(matches!(
+        build_settle_position_ix(key(9), key(1), &buy, &m),
+        Err(crate::chain::ChainError::TakerBuyUnsupported)
+    ));
+    for (index, value) in [(5, 8), (6, 1), (7, 1)] {
         let mut bytes = data.clone();
         bytes[index] = value;
         let account = solana_sdk::account::Account {
@@ -640,8 +657,8 @@ mod rpc {
         data[0] = 1;
         data[1] = 2;
         data[4] = 2;
-        data[8..40].copy_from_slice(p.taker_owner.as_ref());
-        data[40..72].copy_from_slice(p.maker_owner.as_ref());
+        data[8..40].copy_from_slice(p.writer.as_ref());
+        data[40..72].copy_from_slice(p.holder.as_ref());
         data[72..104].copy_from_slice(p.market_pda.as_ref());
         data[104..112].copy_from_slice(&100u64.to_le_bytes());
         data[128..160].copy_from_slice(p.order_id.as_bytes());

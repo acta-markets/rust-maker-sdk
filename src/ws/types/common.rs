@@ -68,6 +68,7 @@ pub enum WsChannel {
     ChainEvents,
     Markets,
     Vaults,
+    TakerBuyRfqs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoStaticStr)]
@@ -192,10 +193,12 @@ pub enum PositionSettlement {
         settlement_price: Price,
         is_otm: bool,
     },
+    /// An unfunded ITM buy: all collateral returned to the writer.
+    NotExercised { settlement_price: Price },
     Cash {
         settlement_price: Price,
-        maker_payoff: crate::types::Balance,
-        taker_return: crate::types::Balance,
+        holder_payoff: crate::types::Balance,
+        writer_return: crate::types::Balance,
     },
 }
 
@@ -205,7 +208,22 @@ pub enum PositionState {
     Open {},
     Funded {},
     Liquidated {},
-    Settled { settlement: PositionSettlement },
+    Settled {
+        settlement: PositionSettlement,
+    },
+    /// The chain has ended the position at `slot`; the server has not sealed that slot yet.
+    /// Display only: caps and balances still follow the sealed state.
+    TerminalPending {
+        slot: u64,
+        outcome: PendingTerminalOutcome,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PendingTerminalOutcome {
+    Liquidated {},
+    Settled { is_otm: bool },
 }
 
 #[serde_as]

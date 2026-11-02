@@ -115,22 +115,15 @@ fn shared_type_tagged_preimages_hashes_and_mismatches_match_exactly() {
         if !valid {
             continue;
         }
-        if side == TakerSide::Buy {
-            assert!(matches!(
-                sign_spread_order(&args, &BytesSigner::from_secret([7; 32])),
-                Err(SpreadError::TakerBuyUnsupported)
-            ));
-        } else {
-            let signer = BytesSigner::from_secret([7; 32]);
-            let (order_id, signature) = sign_spread_order(&args, &signer).expect("sell signs");
-            verify_order_id_signature_bytes(&order_id, &signature, &signer.pubkey_bytes())
-                .expect("signature verifies");
-        }
+        let signer = BytesSigner::from_secret([7; 32]);
+        let (order_id, signature) = sign_spread_order(&args, &signer).expect("order signs");
+        verify_order_id_signature_bytes(&order_id, &signature, &signer.pubkey_bytes())
+            .expect("signature verifies");
     }
 }
 
 #[test]
-fn buy_spread_preimages_remain_encodable_but_policy_refuses_signing() {
+fn buy_spread_order_binds_the_side() {
     let args = SpreadOrderPreimageArgs {
         chain_id: 0,
         program_id: [4; 32],
@@ -146,13 +139,18 @@ fn buy_spread_preimages_remain_encodable_but_policy_refuses_signing() {
         taker: [3; 32],
         nonce: 999,
     };
-    let preimage = build_spread_order_preimage(&args).expect("raw V2 preimage supports buy");
+    let preimage = build_spread_order_preimage(&args).expect("buy preimage");
     assert_eq!(preimage[44], 1);
-    assert!(compute_spread_order_id(&args).is_ok());
-    assert!(matches!(
-        sign_spread_order(&args, &BytesSigner::from_secret([7; 32])),
-        Err(SpreadError::TakerBuyUnsupported)
-    ));
+    let sell = SpreadOrderPreimageArgs {
+        side: TakerSide::Sell,
+        ..args.clone()
+    };
+    assert_ne!(
+        compute_spread_order_id(&args).unwrap(),
+        compute_spread_order_id(&sell).unwrap()
+    );
+    let (order_id, _) = sign_spread_order(&args, &BytesSigner::from_secret([7; 32])).unwrap();
+    assert_eq!(order_id, compute_spread_order_id(&args).unwrap());
 }
 
 fn terms(kind: SpreadType) -> SpreadTerms {
@@ -180,8 +178,8 @@ fn cash_math_rounding_donations_and_fee_composition() {
     ] {
         for t in [call, put] {
             let split = t.settle(price, 20_010).unwrap();
-            assert_eq!(split.maker_payoff + split.taker_return, 20_010);
-            assert!(split.maker_payoff <= 20_001);
+            assert_eq!(split.holder_payoff + split.writer_return, 20_010);
+            assert!(split.holder_payoff <= 20_001);
         }
     }
     assert_eq!(call.payoff(100_000_000_001).unwrap(), 1);
@@ -251,8 +249,8 @@ proptest::proptest! {
             let t = SpreadTerms { quantity: qty, ..terms(kind) };
             let collateral = t.collateral().unwrap();
             let split = t.settle(spot, collateral + 7).unwrap();
-            proptest::prop_assert!(split.maker_payoff <= collateral);
-            proptest::prop_assert_eq!(split.maker_payoff + split.taker_return, collateral + 7);
+            proptest::prop_assert!(split.holder_payoff <= collateral);
+            proptest::prop_assert_eq!(split.holder_payoff + split.writer_return, collateral + 7);
         }
     }
 }
@@ -312,16 +310,27 @@ fn chain_layout_events_open_and_settle() {
     let (id, sig) = sign_spread_order(&args, &signer).unwrap();
     let mut buy = args.clone();
     buy.side = TakerSide::Buy;
-    assert!(matches!(
+    let (_, buy_sig) = sign_spread_order(&buy, &signer).unwrap();
+    assert!(
         build_open_spread_ixs(&OpenSpreadIxArgs {
             order: &buy,
             market: &market,
             keeper: maker,
             quote_signer: signer.pubkey_bytes(),
             signature: sig,
-        }),
-        Err(ChainError::TakerBuyUnsupported)
-    ));
+        })
+        .is_err()
+    );
+    let bought = build_open_spread_ixs(&OpenSpreadIxArgs {
+        order: &buy,
+        market: &market,
+        keeper: maker,
+        quote_signer: signer.pubkey_bytes(),
+        signature: buy_sig,
+    })
+    .unwrap();
+    assert_eq!(bought[1].data.len(), 83);
+    assert_eq!(bought[1].data[82], 1);
     let ixs = build_open_spread_ixs(&OpenSpreadIxArgs {
         order: &args,
         market: &market,
@@ -331,12 +340,13 @@ fn chain_layout_events_open_and_settle() {
     })
     .unwrap();
     let open = &ixs[1];
-    assert_eq!(open.data.len(), 82);
+    assert_eq!(open.data.len(), 83);
+    assert_eq!(open.data[82], 0);
     assert_eq!(open.data[0], 77);
     assert_eq!(open.accounts.len(), 16);
     assert_eq!(open.accounts[2], open.accounts[3]);
     assert_eq!(&open.data[42..74], &id);
-    assert_eq!(&open.data[74..], &args.upper_strike.to_le_bytes());
+    assert_eq!(&open.data[74..82], &args.upper_strike.to_le_bytes());
     assert_eq!(&ixs[0].data[112..], &id);
     let mut data = vec![0; 424];
     data[0] = 1;
@@ -374,24 +384,23 @@ fn chain_layout_events_open_and_settle() {
     assert_eq!(settle.accounts[3].pubkey, open.accounts[8].pubkey);
     let mut buy_position = position.clone();
     buy_position.side = TakerSide::Buy;
-    assert!(matches!(
-        build_cash_settle_ix(program, maker, &buy_position, &market),
-        Err(ChainError::TakerBuyUnsupported)
-    ));
+    buy_position.flags = 4;
+    let bought = build_cash_settle_ix(program, maker, &buy_position, &market).unwrap();
+    assert_eq!(bought.accounts[5..7], settle.accounts[5..7]);
     // One owner on both sides settles both amounts into one shared quote account.
     let mut same_owner = position.clone();
-    same_owner.taker_owner = same_owner.maker_owner;
+    same_owner.writer = same_owner.holder;
     let shared = build_cash_settle_ix(program, maker, &same_owner, &market).unwrap();
     assert_eq!(shared.accounts[5].pubkey, shared.accounts[6].pubkey);
     let custom = CashSettleDestinations {
-        taker: Pubkey::new_unique(),
-        maker: Pubkey::new_unique(),
+        writer: Pubkey::new_unique(),
+        holder: Pubkey::new_unique(),
     };
     let custom_ix =
         build_cash_settle_ix_with_destinations(program, maker, &same_owner, &market, custom)
             .unwrap();
-    assert_eq!(custom_ix.accounts[5].pubkey, custom.taker);
-    assert_eq!(custom_ix.accounts[6].pubkey, custom.maker);
+    assert_eq!(custom_ix.accounts[5].pubkey, custom.writer);
+    assert_eq!(custom_ix.accounts[6].pubkey, custom.holder);
     assert!(
         build_cash_settle_ix_with_destinations(
             program,
@@ -399,8 +408,8 @@ fn chain_layout_events_open_and_settle() {
             &position,
             &market,
             CashSettleDestinations {
-                taker: custom.maker,
-                maker: custom.maker
+                writer: custom.holder,
+                holder: custom.holder
             }
         )
         .is_err()
@@ -412,18 +421,21 @@ fn chain_layout_events_open_and_settle() {
     position.flags = 1;
     let vault_settle = build_cash_settle_ix(program, maker, &position, &market).unwrap();
     assert_eq!(vault_settle.accounts.len(), 12);
-    assert_eq!(vault_settle.accounts[11].pubkey, position.taker_owner);
+    assert_eq!(vault_settle.accounts[11].pubkey, position.writer);
     assert!(vault_settle.accounts[11].is_writable);
     assert!(
         build_cash_settle_ix_with_destinations(program, maker, &position, &market, custom).is_err()
     );
+    // A bought spread settles; an unknown flag bit does not.
     position.flags = 4;
+    assert!(build_cash_settle_ix(program, maker, &position, &market).is_ok());
+    position.flags = 8;
     assert!(build_cash_settle_ix(program, maker, &position, &market).is_err());
     assert!(
         ix::build_fund_position_ixs(
             &program,
             &ix::FundPositionIxArgs {
-                maker_owner: maker,
+                holder: maker,
                 position_pda: open.accounts[7].pubkey,
                 market_pda,
                 position_type: 3,
@@ -474,6 +486,15 @@ fn chain_layout_events_open_and_settle() {
             ..
         }))
     ));
+    event[5] = 86;
+    assert!(matches!(
+        events::decode_spread_event(&event).unwrap(),
+        Some(events::SpreadEvent::Open(events::OpenSpreadEvent {
+            side: TakerSide::Buy,
+            upper_strike: 120,
+            ..
+        }))
+    ));
     event.push(0);
     assert!(events::decode_spread_event(&event).is_err());
     // settler, taker, maker owner, position, market; status, is_otm, payoff, return.
@@ -488,7 +509,7 @@ fn chain_layout_events_open_and_settle() {
         panic!("settle event");
     };
     assert_eq!(
-        (settle.taker, settle.maker_payoff, settle.taker_return),
+        (settle.writer, settle.holder_payoff, settle.writer_return),
         ([7; 32], 9, 12)
     );
 }

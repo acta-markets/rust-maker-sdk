@@ -22,8 +22,6 @@ impl TryFrom<u8> for SpreadType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SpreadError {
-    #[error("taker_buy_unsupported")]
-    TakerBuyUnsupported,
     #[error("expected CallSpread or PutSpread")]
     InvalidType,
     #[error("spread requires lower < upper")]
@@ -130,8 +128,8 @@ pub struct SpreadPremium {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpreadSettlement {
-    pub maker_payoff: u64,
-    pub taker_return: u64,
+    pub holder_payoff: u64,
+    pub writer_return: u64,
 }
 
 impl SpreadTerms {
@@ -163,13 +161,13 @@ impl SpreadTerms {
         if actual_collateral < self.collateral()? {
             return Err(SpreadError::InsufficientCollateral);
         }
-        let maker_payoff = self.payoff(settlement_price)?;
-        let taker_return = actual_collateral
-            .checked_sub(maker_payoff)
+        let holder_payoff = self.payoff(settlement_price)?;
+        let writer_return = actual_collateral
+            .checked_sub(holder_payoff)
             .ok_or(SpreadError::InsufficientCollateral)?;
         Ok(SpreadSettlement {
-            maker_payoff,
-            taker_return,
+            holder_payoff,
+            writer_return,
         })
     }
 

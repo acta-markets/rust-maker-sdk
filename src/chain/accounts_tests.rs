@@ -22,24 +22,28 @@ fn position_layout_decodes_canonical_offsets() {
     data[ACCOUNT_OFFSET_VERSION] = POSITION_VERSION;
     data[POSITION_OFFSET_POSITION_TYPE] = 1;
     data[POSITION_OFFSET_STATUS] = PositionStatus::Open as u8;
-    data[POSITION_OFFSET_TAKER_OWNER..POSITION_OFFSET_TAKER_OWNER + 32]
-        .copy_from_slice(taker.as_ref());
-    data[POSITION_OFFSET_MAKER_OWNER..POSITION_OFFSET_MAKER_OWNER + 32]
-        .copy_from_slice(maker.as_ref());
+    data[POSITION_OFFSET_WRITER..POSITION_OFFSET_WRITER + 32].copy_from_slice(taker.as_ref());
+    data[POSITION_OFFSET_HOLDER..POSITION_OFFSET_HOLDER + 32].copy_from_slice(maker.as_ref());
     data[POSITION_OFFSET_MARKET..POSITION_OFFSET_MARKET + 32].copy_from_slice(market.as_ref());
     data[POSITION_OFFSET_STRIKE..POSITION_OFFSET_STRIKE + 8].copy_from_slice(&7u64.to_le_bytes());
     data[POSITION_OFFSET_QUANTITY..POSITION_OFFSET_QUANTITY + 8]
         .copy_from_slice(&9u64.to_le_bytes());
     data[POSITION_OFFSET_ORDER_ID..POSITION_OFFSET_ORDER_ID + 32].fill(11);
 
+    let position_data = data.clone();
     let position = PositionInfo::from_account(&account(program_id, data), &program_id).unwrap();
     assert_eq!(position.terms.position_type(), PositionType::CashSecuredPut);
     assert_eq!(position.status, PositionStatus::Open);
-    assert_eq!(position.taker_owner, taker);
-    assert_eq!(position.maker_owner, maker);
+    assert_eq!(position.writer, taker);
+    assert_eq!(position.holder, maker);
     assert_eq!(position.market_pda, market);
     assert_eq!(position.terms.strike(), Strike::new(7));
     assert_eq!(position.side, TakerSide::Sell);
+    let mut buy = account(program_id, position_data.clone());
+    buy.data[5] = POSITION_FLAG_TAKER_BUY;
+    let buy = PositionInfo::from_account(&buy, &program_id).unwrap();
+    assert_eq!(buy.side, TakerSide::Buy);
+    assert_eq!(buy.flags, POSITION_FLAG_TAKER_BUY);
     assert_eq!(position.quantity, Quantity::new(9));
     assert_eq!(position.order_id, OrderId::new([11; 32]));
 }

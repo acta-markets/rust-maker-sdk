@@ -1443,54 +1443,56 @@ async fn managed_handle_rejects_oversized_quote_batch_before_queueing() {
 }
 
 #[tokio::test]
-async fn managed_handle_rejects_taker_buy_for_rfq_quote_and_check_quote() {
+async fn managed_handle_sends_a_physical_buy_quote() {
+    let (handle, mut commands) = super::ManagedWsHandle::test_handle(1, 1);
+    handle.inject_state(ManagedWsState::Ready {
+        connection_epoch: 1,
+    });
+    let mut quote = quote(1);
+    quote.side = TakerSide::Buy;
+
+    let sent = tokio::spawn(async move { handle.send(ClientMessage::Quote(quote)).await });
+
+    assert!(commands.recv().await.is_some());
+    sent.abort();
+}
+
+#[tokio::test]
+async fn managed_handle_rejects_rfq_buys_and_passes_spread_buy_quotes() {
     let (handle, mut commands) = super::ManagedWsHandle::test_handle(1, 1);
     handle.inject_state(ManagedWsState::Ready {
         connection_epoch: 1,
     });
 
+    let spread = OptionTerms::PutSpread {
+        lower_strike: Strike::new(100),
+        upper_strike: Strike::new(120),
+    };
+    let rfq = ClientMessage::RfqRequest(RfqRequestMessage {
+        request_id: Uuid::new_v4(),
+        market: MarketId::new(crate::Address32::new([
+            228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127, 212,
+            14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
+        ])),
+        terms: spread,
+        side: TakerSide::Buy,
+        quantity: Quantity::new(1),
+        timeout_seconds: TimeoutSeconds::new(30),
+    });
+    assert!(matches!(
+        handle.send(rfq).await,
+        Err(super::ManagedWsError::InvalidMessage(
+            OutboundMessageError::TakerBuyUnsupported
+        ))
+    ));
+    assert!(commands.try_recv().is_err());
+
     let mut quote = quote(1);
     quote.side = TakerSide::Buy;
-    let messages = [
-        ClientMessage::RfqRequest(RfqRequestMessage {
-            request_id: Uuid::new_v4(),
-            market: MarketId::new(crate::Address32::new([
-                228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127,
-                212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
-            ])),
-            terms: OptionTerms::PutSpread {
-                lower_strike: Strike::new(100),
-                upper_strike: Strike::new(120),
-            },
-            side: TakerSide::Buy,
-            quantity: Quantity::new(1),
-            timeout_seconds: TimeoutSeconds::new(30),
-        }),
-        ClientMessage::Quote(quote),
-        ClientMessage::CheckQuote(crate::ws::types::CheckQuoteMessage {
-            request_id: Uuid::new_v4(),
-            market_id: MarketId::new(crate::Address32::new([
-                228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127,
-                212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
-            ])),
-            quantity: Quantity::new(1),
-            price: Price::new(1),
-            terms: OptionTerms::CoveredCall {
-                strike: Strike::new(100),
-            },
-            side: TakerSide::Buy,
-        }),
-    ];
-
-    for message in messages {
-        assert!(matches!(
-            handle.send(message).await,
-            Err(super::ManagedWsError::InvalidMessage(
-                OutboundMessageError::TakerBuyUnsupported
-            ))
-        ));
-    }
-    assert!(commands.try_recv().is_err());
+    quote.terms = spread;
+    let sent = tokio::spawn(async move { handle.send(ClientMessage::Quote(quote)).await });
+    assert!(commands.recv().await.is_some());
+    sent.abort();
 }
 
 #[tokio::test]

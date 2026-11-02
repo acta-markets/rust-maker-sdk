@@ -23,7 +23,7 @@ pub fn build_settle_position_ix(
         return Err(ChainError::TakerBuyUnsupported);
     }
     if position.terms.is_spread() {
-        if position.maker_owner != maker_owner {
+        if position.holder != maker_owner {
             return Err(ChainError::Identity("wallet maker owner"));
         }
         return crate::chain::spreads::build_cash_settle_ix(
@@ -36,7 +36,7 @@ pub fn build_settle_position_ix(
     if position.flags & !3 != 0 || position.flags2 != 0 || position.flags3 != 0 {
         return Err(ChainError::InvalidAccountData);
     }
-    if position.maker_owner != maker_owner || position.flags & 2 != 0 {
+    if position.holder != maker_owner || position.flags & 2 != 0 {
         return Err(ChainError::Identity("wallet maker owner"));
     }
     let market_pda = crate::quote::market_pda(
@@ -94,7 +94,7 @@ pub fn build_settle_position_ix(
         } else {
             AccountMeta::new(ata(&position_pda, &settlement.0, &settlement.1), false)
         },
-        AccountMeta::new(ata(&position.taker_owner, &writer.0, &writer.1), false),
+        AccountMeta::new(ata(&position.writer, &writer.0, &writer.1), false),
         if open {
             AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false)
         } else {
@@ -107,7 +107,7 @@ pub fn build_settle_position_ix(
         accounts.extend([
             AccountMeta::new_readonly(underlying.0, false),
             AccountMeta::new_readonly(quote.0, false),
-            AccountMeta::new(position.taker_owner, false),
+            AccountMeta::new(position.writer, false),
         ]);
     }
     Ok(Instruction {
@@ -127,7 +127,7 @@ pub fn settle_position_sequence(
         return Err(ChainError::TakerBuyUnsupported);
     }
     if position.terms.is_spread() {
-        if position.maker_owner != maker_owner {
+        if position.holder != maker_owner {
             return Err(ChainError::Identity("wallet maker owner"));
         }
         return crate::chain::spreads::cash_settle_sequence(
@@ -155,7 +155,7 @@ pub fn settle_position_sequence(
         if position.flags & 1 == 0 {
             instructions.push(super::lifecycle::create_destination_ata(
                 maker_owner,
-                position.taker_owner,
+                position.writer,
                 writer.0,
                 writer.1,
             ));

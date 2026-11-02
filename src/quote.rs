@@ -61,9 +61,6 @@ pub enum QuoteBuildError {
 
     #[error("signing failed: {0}")]
     Signing(#[from] SigningError),
-
-    #[error("taker_buy_unsupported")]
-    TakerBuyUnsupported,
 }
 
 /// An RFQ with its identities decoded and its offered terms resolved.
@@ -102,9 +99,6 @@ impl RfqBinding {
         expected_program: [u8; 32],
     ) -> Result<Self, QuoteBuildError> {
         let side = rfq.side;
-        if side.is_taker_buy() {
-            return Err(QuoteBuildError::TakerBuyUnsupported);
-        }
         let terms = rfq.terms;
         if terms.is_spread() {
             let upper = terms

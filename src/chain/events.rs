@@ -1,8 +1,10 @@
 use super::ChainError;
 use crate::spreads::SpreadType;
+use crate::types::TakerSide;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenSpreadEvent {
+    pub side: TakerSide,
     pub user: [u8; 32],
     pub maker_pda: [u8; 32],
     pub market_pda: [u8; 32],
@@ -21,14 +23,14 @@ pub struct OpenSpreadEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettleSpreadEvent {
     pub settler: [u8; 32],
-    pub taker: [u8; 32],
-    pub maker_owner: [u8; 32],
+    pub writer: [u8; 32],
+    pub holder: [u8; 32],
     pub position_pda: [u8; 32],
     pub market_pda: [u8; 32],
     pub final_status: u8,
     pub is_otm: bool,
-    pub maker_payoff: u64,
-    pub taker_return: u64,
+    pub holder_payoff: u64,
+    pub writer_return: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,11 +59,16 @@ pub fn decode_spread_event(data: &[u8]) -> Result<Option<SpreadEvent>, ChainErro
         Ok(u64::from_le_bytes(value))
     };
     Ok(Some(match data[5] {
-        79 => {
+        kind @ (79 | 86) => {
             if bytes.len() != 217 {
                 return Err(ChainError::InvalidAccountData);
             }
             SpreadEvent::Open(OpenSpreadEvent {
+                side: if kind == 86 {
+                    TakerSide::Buy
+                } else {
+                    TakerSide::Sell
+                },
                 user: array(0)?,
                 maker_pda: array(32)?,
                 market_pda: array(64)?,
@@ -83,14 +90,14 @@ pub fn decode_spread_event(data: &[u8]) -> Result<Option<SpreadEvent>, ChainErro
             }
             SpreadEvent::Settle(SettleSpreadEvent {
                 settler: array(0)?,
-                taker: array(32)?,
-                maker_owner: array(64)?,
+                writer: array(32)?,
+                holder: array(64)?,
                 position_pda: array(96)?,
                 market_pda: array(128)?,
                 final_status: bytes[160],
                 is_otm: bytes[161] == 1,
-                maker_payoff: word(162)?,
-                taker_return: word(170)?,
+                holder_payoff: word(162)?,
+                writer_return: word(170)?,
             })
         }
         _ => return Ok(None),

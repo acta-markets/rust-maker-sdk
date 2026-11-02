@@ -225,7 +225,7 @@ async fn native_funding_batches_only_the_required_accounts() {
         let result = client
             .prepare_fund_position(
                 &FundPositionArgs {
-                    maker_owner: maker,
+                    holder: maker,
                     position_pda: position,
                     create_atas,
                     native_sol: NativeSolFunding::WrapIfNeeded {
@@ -249,7 +249,7 @@ async fn native_funding_batches_only_the_required_accounts() {
         let mut expected = build_fund_position_ixs(
             &program,
             &FundPositionIxArgs {
-                maker_owner: maker,
+                holder: maker,
                 position_pda: position,
                 market_pda: market,
                 position_type: 0,
@@ -339,8 +339,8 @@ async fn confirming_conveniences_surface_on_chain_failure() {
         }));
         let result = if deposit {
             client
-                .deposit_premium(
-                    DepositPremiumArgs {
+                .maker_deposit(
+                    MakerDepositArgs {
                         maker_owner: owner.pubkey(),
                         amount: 1,
                         premium_mint: Pubkey::new_unique(),

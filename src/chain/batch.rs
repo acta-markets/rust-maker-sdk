@@ -75,7 +75,7 @@ impl PositionSnapshot {
         if self.market_address != self.position.market_pda {
             return Err(ChainError::Identity("market"));
         }
-        if self.position.maker_owner != maker_owner {
+        if self.position.holder != maker_owner {
             return Err(ChainError::Identity("maker owner"));
         }
         if self.position.status != PositionStatus::Open
@@ -90,7 +90,7 @@ impl PositionSnapshot {
         Ok(ix::build_fund_position_ixs(
             program_id,
             &ix::FundPositionIxArgs {
-                maker_owner,
+                holder: maker_owner,
                 position_pda: self.address,
                 market_pda: self.position.market_pda,
                 position_type: self.position.terms.to_chain().position_type().into(),
@@ -134,13 +134,13 @@ mod rpc {
 
     pub fn maker_position_filters(owner: &Pubkey) -> Vec<RpcFilterType> {
         use super::super::accounts::{
-            POSITION_DISCRIMINATOR, POSITION_LEN, POSITION_OFFSET_MAKER_OWNER,
+            POSITION_DISCRIMINATOR, POSITION_LEN, POSITION_OFFSET_HOLDER,
         };
         vec![
             RpcFilterType::DataSize(POSITION_LEN as u64),
             RpcFilterType::Memcmp(Memcmp::new_base58_encoded(0, &[POSITION_DISCRIMINATOR])),
             RpcFilterType::Memcmp(Memcmp::new_base58_encoded(
-                POSITION_OFFSET_MAKER_OWNER,
+                POSITION_OFFSET_HOLDER,
                 owner.as_ref(),
             )),
         ]
@@ -175,7 +175,7 @@ mod rpc {
             let mut result = Vec::new();
             for (key, account) in self.program_accounts(maker_position_filters(owner)).await? {
                 let position = PositionInfo::from_account(&account, &self.program_id())?;
-                if position.maker_owner != *owner {
+                if position.holder != *owner {
                     return Err(ChainError::Identity("maker owner"));
                 }
                 if matches!(
@@ -221,7 +221,7 @@ mod rpc {
                 match &accounts[key] {
                     Some(account) => {
                         let position = PositionInfo::from_account(account, &self.program_id())?;
-                        if position.maker_owner != *owner {
+                        if position.holder != *owner {
                             return Err(ChainError::Identity("maker owner"));
                         }
                         decoded.push((*key, position));

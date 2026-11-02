@@ -645,12 +645,35 @@ fn spread_quotes_bind_pair_and_sign_v2() {
 }
 
 #[test]
-fn buy_terms_are_refused_before_quote_assembly() {
+fn physical_buy_binds_its_side() {
     let mut rfq = broadcast(covered_call(100), &[]);
     rfq.side = TakerSide::Buy;
 
-    assert!(matches!(
-        RfqBinding::from_broadcast(&rfq),
-        Err(QuoteBuildError::TakerBuyUnsupported)
-    ));
+    let binding = RfqBinding::from_broadcast(&rfq).expect("physical buy");
+
+    assert_eq!(binding.side(), TakerSide::Buy);
+}
+
+#[test]
+fn spread_buy_quote_signs_with_the_buy_side() {
+    let terms = OptionTerms::CallSpread {
+        lower_strike: Strike::new(100_000_000_000),
+        upper_strike: Strike::new(120_000_000_000),
+    };
+    let mut rfq = broadcast(terms, &[]);
+    rfq.side = TakerSide::Buy;
+    rfq.quantity = Quantity::new(1_000_000);
+    rfq.order_options = vec![terms];
+    rfq.market.collateral_mint = rfq.market.quote_mint;
+    rfq.market.settlement_mint = rfq.market.quote_mint;
+
+    let binding = RfqBinding::from_broadcast(&rfq).expect("spread buy");
+    let quote = quote_on(&binding)
+        .price(Price::new(1_000_000_000))
+        .valid_until(QuoteExpiry::from_unix_seconds(1_800_000_000))
+        .nonce(Nonce::new(1))
+        .sign(&signer())
+        .unwrap();
+
+    assert_eq!((quote.terms, quote.side), (terms, TakerSide::Buy));
 }

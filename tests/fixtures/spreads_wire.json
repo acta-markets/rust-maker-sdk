@@ -142,8 +142,8 @@
           "settlement": {
             "type": "cash",
             "settlement_price": 110000000000,
-            "maker_payoff": 10000000,
-            "taker_return": 10000000
+            "holder_payoff": 10000000,
+            "writer_return": 10000000
           },
           "revision": {
             "slot": 100,

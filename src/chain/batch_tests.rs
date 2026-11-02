@@ -1,4 +1,5 @@
 use super::*;
+use crate::TakerSide;
 use crate::chain::rpc::ChainClient;
 
 fn account(owner: Pubkey, data: Vec<u8>) -> Account {
@@ -60,6 +61,12 @@ async fn snapshots_chunk_deduplicate_markets_and_preserve_missing() {
             .fund_instructions(&program, Pubkey::new_unique(), owner, false)
             .is_err()
     );
+    let mut bought = position.clone();
+    bought.position.side = TakerSide::Buy;
+    assert!(matches!(
+        bought.fund_instructions(&program, owner, owner, false),
+        Err(ChainError::TakerBuyUnsupported)
+    ));
     let mut mismatched = position.clone();
     mismatched.market_address = Pubkey::new_unique();
     assert!(

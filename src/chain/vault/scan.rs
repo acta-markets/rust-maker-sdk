@@ -7,7 +7,7 @@ use crate::chain::{ChainClient, ChainError, PositionInfo};
 const POSITION_DISCRIMINATOR: u8 = 1;
 const POSITION_LEN: u64 = 424;
 const POSITION_OFFSET_STATUS: usize = 4;
-const POSITION_OFFSET_MAKER_OWNER: usize = 40;
+const POSITION_OFFSET_HOLDER: usize = 40;
 const POSITION_OPEN: u8 = 1;
 
 /// Queued capital requests: (user, main-mint atoms) deposits and (user, shares) withdrawals.
@@ -33,7 +33,7 @@ impl ChainClient {
                     &[POSITION_OPEN],
                 )),
                 RpcFilterType::Memcmp(Memcmp::new_base58_encoded(
-                    POSITION_OFFSET_MAKER_OWNER,
+                    POSITION_OFFSET_HOLDER,
                     vault.as_ref(),
                 )),
             ])
@@ -110,8 +110,7 @@ mod tests {
         let mut data = vec![0; POSITION_LEN as usize];
         data[..2].copy_from_slice(&[POSITION_DISCRIMINATOR, version]);
         data[POSITION_OFFSET_STATUS] = status;
-        data[POSITION_OFFSET_MAKER_OWNER..POSITION_OFFSET_MAKER_OWNER + 32]
-            .copy_from_slice(maker.as_ref());
+        data[POSITION_OFFSET_HOLDER..POSITION_OFFSET_HOLDER + 32].copy_from_slice(maker.as_ref());
         account(program, data)
     }
 
@@ -155,7 +154,7 @@ mod tests {
         };
         assert_eq!(*address, open);
         assert_eq!(info.status, PositionStatus::Open);
-        assert_eq!(info.maker_owner, vault);
+        assert_eq!(info.holder, vault);
 
         let stale_layout = ChainClient::with_accounts(
             program,

@@ -42,14 +42,14 @@ impl TryFrom<u8> for PositionStatus {
 #[derive(Debug, Clone)]
 pub struct PositionInfo {
     pub terms: OptionTerms,
-    /// The current account layout has no side byte; the current contract only opens sell-side positions.
+    /// On a buy the wallet buyer is the `holder` and the maker the `writer`.
     pub side: TakerSide,
     pub flags: u8,
     pub flags2: u8,
     pub flags3: u8,
     pub status: PositionStatus,
-    pub taker_owner: Pubkey,
-    pub maker_owner: Pubkey,
+    pub writer: Pubkey,
+    pub holder: Pubkey,
     pub market_pda: Pubkey,
     pub quantity: Quantity,
     pub order_id: OrderId,
@@ -108,8 +108,8 @@ impl GlobalConfigInfo {
 
 const POSITION_OFFSET_POSITION_TYPE: usize = 3;
 const POSITION_OFFSET_STATUS: usize = 4;
-const POSITION_OFFSET_TAKER_OWNER: usize = 8;
-pub(crate) const POSITION_OFFSET_MAKER_OWNER: usize = 40;
+const POSITION_OFFSET_WRITER: usize = 8;
+pub(crate) const POSITION_OFFSET_HOLDER: usize = 40;
 const POSITION_OFFSET_MARKET: usize = 72;
 const POSITION_OFFSET_STRIKE: usize = 104;
 const POSITION_OFFSET_QUANTITY: usize = 112;
@@ -148,13 +148,17 @@ impl PositionInfo {
         });
         Ok(Self {
             terms,
-            side: TakerSide::Sell,
+            side: if account.data[5] & POSITION_FLAG_TAKER_BUY != 0 {
+                TakerSide::Buy
+            } else {
+                TakerSide::Sell
+            },
             flags: account.data[5],
             flags2: account.data[6],
             flags3: account.data[7],
             status: PositionStatus::try_from(account.data[POSITION_OFFSET_STATUS])?,
-            taker_owner: read_pubkey(&account.data, POSITION_OFFSET_TAKER_OWNER)?,
-            maker_owner: read_pubkey(&account.data, POSITION_OFFSET_MAKER_OWNER)?,
+            writer: read_pubkey(&account.data, POSITION_OFFSET_WRITER)?,
+            holder: read_pubkey(&account.data, POSITION_OFFSET_HOLDER)?,
             market_pda: read_pubkey(&account.data, POSITION_OFFSET_MARKET)?,
             quantity: Quantity::new(read_u64(&account.data, POSITION_OFFSET_QUANTITY)?),
             order_id: OrderId::new(order_id),
@@ -171,6 +175,7 @@ const MARKET_OFFSET_QUOTE_MINT: usize = 64;
 const MARKET_OFFSET_UNDERLYING_TOKEN_PROGRAM: usize = 96;
 const MARKET_OFFSET_QUOTE_TOKEN_PROGRAM: usize = 128;
 const MARKET_LEN: usize = 416;
+const POSITION_FLAG_TAKER_BUY: u8 = 1 << 2;
 const MARKET_FLAG_PUT: u8 = 1;
 const MARKET_FLAG_FINALIZED: u8 = 2;
 

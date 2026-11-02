@@ -11,7 +11,7 @@ pub enum ChainIxError {
 }
 
 #[derive(Debug, Clone)]
-pub struct DepositPremiumIxArgs {
+pub struct MakerDepositIxArgs {
     pub maker_owner: Pubkey,
     pub amount: u64,
     pub premium_mint: Pubkey,
@@ -20,7 +20,7 @@ pub struct DepositPremiumIxArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct WithdrawPremiumIxArgs {
+pub struct MakerWithdrawIxArgs {
     pub maker_owner: Pubkey,
     pub amount: u64,
     pub premium_mint: Pubkey,
@@ -30,7 +30,7 @@ pub struct WithdrawPremiumIxArgs {
 
 #[derive(Debug, Clone)]
 pub struct FundPositionIxArgs {
-    pub maker_owner: Pubkey,
+    pub holder: Pubkey,
     pub position_pda: Pubkey,
     pub market_pda: Pubkey,
     pub position_type: u8,
@@ -47,15 +47,15 @@ pub struct UpdateQuoteSigningIxArgs {
     pub new_quote_signing: Pubkey,
 }
 
-pub fn build_deposit_premium_ixs(
+pub fn build_maker_deposit_ixs(
     program_id: &Pubkey,
-    args: &DepositPremiumIxArgs,
+    args: &MakerDepositIxArgs,
     fee_payer: Pubkey,
 ) -> Result<Vec<Instruction>, ChainIxError> {
     let (maker_pda, _) = maker_pda_with_program_id(program_id, &args.maker_owner);
     let maker_owner_premium_ata =
         derive_associated_token_address(&args.maker_owner, &args.premium_mint, &args.token_program);
-    let maker_premium_ata =
+    let maker_custody_ata =
         derive_associated_token_address(&maker_pda, &args.premium_mint, &args.token_program);
 
     let mut ixs = Vec::new();
@@ -69,7 +69,7 @@ pub fn build_deposit_premium_ixs(
         ));
         ixs.push(create_associated_token_account_idempotent_ix(
             &fee_payer,
-            &maker_premium_ata,
+            &maker_custody_ata,
             &maker_pda,
             &args.premium_mint,
             &args.token_program,
@@ -82,25 +82,25 @@ pub fn build_deposit_premium_ixs(
             AccountMeta::new(args.maker_owner, true),
             AccountMeta::new_readonly(maker_pda, false),
             AccountMeta::new(maker_owner_premium_ata, false),
-            AccountMeta::new(maker_premium_ata, false),
+            AccountMeta::new(maker_custody_ata, false),
             AccountMeta::new_readonly(args.token_program, false),
         ],
-        data: build_amount_instruction(InstructionKind::DepositPremium, args.amount),
+        data: build_amount_instruction(InstructionKind::MakerDeposit, args.amount),
     };
 
     ixs.push(ix);
     Ok(ixs)
 }
 
-pub fn build_withdraw_premium_ixs(
+pub fn build_maker_withdraw_ixs(
     program_id: &Pubkey,
-    args: &WithdrawPremiumIxArgs,
+    args: &MakerWithdrawIxArgs,
     fee_payer: Pubkey,
 ) -> Result<Vec<Instruction>, ChainIxError> {
     let (maker_pda, _) = maker_pda_with_program_id(program_id, &args.maker_owner);
     let maker_owner_premium_ata =
         derive_associated_token_address(&args.maker_owner, &args.premium_mint, &args.token_program);
-    let maker_premium_ata =
+    let maker_custody_ata =
         derive_associated_token_address(&maker_pda, &args.premium_mint, &args.token_program);
 
     let mut ixs = Vec::new();
@@ -119,11 +119,11 @@ pub fn build_withdraw_premium_ixs(
         accounts: vec![
             AccountMeta::new(args.maker_owner, true),
             AccountMeta::new(maker_pda, false),
-            AccountMeta::new(maker_premium_ata, false),
+            AccountMeta::new(maker_custody_ata, false),
             AccountMeta::new(maker_owner_premium_ata, false),
             AccountMeta::new_readonly(args.token_program, false),
         ],
-        data: build_amount_instruction(InstructionKind::WithdrawPremium, args.amount),
+        data: build_amount_instruction(InstructionKind::MakerWithdraw, args.amount),
     };
 
     ixs.push(ix);
@@ -154,15 +154,15 @@ pub fn build_fund_position_ixs(
     args: &FundPositionIxArgs,
     fee_payer: Pubkey,
 ) -> Result<Vec<Instruction>, ChainIxError> {
-    let (maker_pda, _) = maker_pda_with_program_id(program_id, &args.maker_owner);
+    let (maker_pda, _) = maker_pda_with_program_id(program_id, &args.holder);
     let (settlement_mint, settlement_program) = match args.position_type {
         0 => (args.quote_mint, args.quote_token_program_id),
         1 => (args.underlying_mint, args.underlying_token_program_id),
         other => return Err(ChainIxError::InvalidPositionType(other)),
     };
 
-    let maker_funding_ata =
-        derive_associated_token_address(&args.maker_owner, &settlement_mint, &settlement_program);
+    let holder_funding_ata =
+        derive_associated_token_address(&args.holder, &settlement_mint, &settlement_program);
     let pos_settlement_ata =
         derive_associated_token_address(&args.position_pda, &settlement_mint, &settlement_program);
 
@@ -170,8 +170,8 @@ pub fn build_fund_position_ixs(
     if args.create_atas {
         ixs.push(create_associated_token_account_idempotent_ix(
             &fee_payer,
-            &maker_funding_ata,
-            &args.maker_owner,
+            &holder_funding_ata,
+            &args.holder,
             &settlement_mint,
             &settlement_program,
         ));
@@ -187,11 +187,11 @@ pub fn build_fund_position_ixs(
     let ix = Instruction {
         program_id: *program_id,
         accounts: vec![
-            AccountMeta::new(args.maker_owner, true),
+            AccountMeta::new(args.holder, true),
             AccountMeta::new_readonly(maker_pda, false),
             AccountMeta::new(args.position_pda, false),
             AccountMeta::new_readonly(args.market_pda, false),
-            AccountMeta::new(maker_funding_ata, false),
+            AccountMeta::new(holder_funding_ata, false),
             AccountMeta::new(pos_settlement_ata, false),
             AccountMeta::new_readonly(settlement_program, false),
         ],
@@ -205,8 +205,8 @@ pub fn build_fund_position_ixs(
 #[repr(u8)]
 enum InstructionKind {
     UpdateMakerQuoteSigning = 3,
-    DepositPremium = 4,
-    WithdrawPremium = 5,
+    MakerDeposit = 4,
+    MakerWithdraw = 5,
     DepositFundsToPosition = 9,
 }
 

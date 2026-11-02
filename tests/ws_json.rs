@@ -1706,16 +1706,16 @@ fn settlement_variants_require_exact_fields() {
     use acta_maker_sdk::ws::types::PositionSettlement;
     for value in [
         json!({"type":"physical","settlement_price":100,"is_otm":true}),
-        json!({"type":"cash","settlement_price":100,"maker_payoff":0,"taker_return":12}),
+        json!({"type":"cash","settlement_price":100,"holder_payoff":0,"writer_return":12}),
     ] {
         let decoded: PositionSettlement = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(decoded).unwrap(), value);
     }
     for value in [
-        json!({"type":"open","maker_payoff":null}),
+        json!({"type":"open","holder_payoff":null}),
         json!({"type":"physical","settlement_price":100}),
-        json!({"type":"cash","settlement_price":100,"maker_payoff":0}),
-        json!({"type":"cash","settlement_price":100,"maker_payoff":null,"taker_return":1}),
+        json!({"type":"cash","settlement_price":100,"holder_payoff":0}),
+        json!({"type":"cash","settlement_price":100,"holder_payoff":null,"writer_return":1}),
         json!({"type":"unknown"}),
     ] {
         assert!(serde_json::from_value::<PositionSettlement>(value).is_err());
@@ -1749,7 +1749,9 @@ fn position_state_has_one_required_tag_and_no_open_settlement() {
         json!({"state":"funded"}),
         json!({"state":"liquidated"}),
         json!({"state":"settled","settlement":{"type":"physical","settlement_price":100,"is_otm":true}}),
-        json!({"state":"settled","settlement":{"type":"cash","settlement_price":100,"maker_payoff":0,"taker_return":12}}),
+        json!({"state":"settled","settlement":{"type":"cash","settlement_price":100,"holder_payoff":0,"writer_return":12}}),
+        json!({"state":"terminal_pending","slot":9,"outcome":{"type":"settled","is_otm":true}}),
+        json!({"state":"terminal_pending","slot":4,"outcome":{"type":"liquidated"}}),
     ] {
         let decoded: PositionState = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(decoded).unwrap(), value);
@@ -1757,7 +1759,9 @@ fn position_state_has_one_required_tag_and_no_open_settlement() {
     for value in [
         json!({"status":"open"}),
         json!({"state":"settled"}),
-        json!({"state":"open","settlement":{"type":"cash","settlement_price":1,"maker_payoff":0,"taker_return":1}}),
+        json!({"state":"terminal_pending","slot":9}),
+        json!({"state":"terminal_pending","outcome":{"type":"liquidated"}}),
+        json!({"state":"open","settlement":{"type":"cash","settlement_price":1,"holder_payoff":0,"writer_return":1}}),
     ] {
         assert!(serde_json::from_value::<PositionState>(value).is_err());
     }

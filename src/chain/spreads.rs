@@ -25,9 +25,6 @@ pub struct OpenSpreadIxArgs<'a> {
 pub fn build_open_spread_ixs(args: &OpenSpreadIxArgs<'_>) -> Result<Vec<Instruction>, ChainError> {
     let order = args.order;
     let market = args.market;
-    if order.side.is_taker_buy() {
-        return Err(ChainError::TakerBuyUnsupported);
-    }
     let program_id = Pubkey::new_from_array(order.program_id);
     let market_pda = crate::quote::market_pda(
         &program_id,
@@ -78,6 +75,7 @@ pub fn build_open_spread_ixs(args: &OpenSpreadIxArgs<'_>) -> Result<Vec<Instruct
     }
     data.extend_from_slice(&order_id);
     data.extend_from_slice(&order.upper_strike.to_le_bytes());
+    data.push(u8::from(order.side.is_taker_buy()));
     let open = Instruction {
         program_id,
         data,
@@ -119,8 +117,8 @@ pub fn build_open_spread_ixs(args: &OpenSpreadIxArgs<'_>) -> Result<Vec<Instruct
 
 #[derive(Debug, Clone, Copy)]
 pub struct CashSettleDestinations {
-    pub taker: Pubkey,
-    pub maker: Pubkey,
+    pub writer: Pubkey,
+    pub holder: Pubkey,
 }
 
 pub fn build_cash_settle_ix(
@@ -136,8 +134,8 @@ pub fn build_cash_settle_ix(
         position,
         market,
         CashSettleDestinations {
-            taker: quote_ata(&position.taker_owner),
-            maker: quote_ata(&position.maker_owner),
+            writer: quote_ata(&position.writer),
+            holder: quote_ata(&position.holder),
         },
     )
 }
@@ -149,11 +147,8 @@ pub fn build_cash_settle_ix_with_destinations(
     market: &MarketInfo,
     destinations: CashSettleDestinations,
 ) -> Result<Instruction, ChainError> {
-    if position.side.is_taker_buy() {
-        return Err(ChainError::TakerBuyUnsupported);
-    }
     let kind = SpreadType::try_from(u8::from(position.terms.to_chain().position_type()))?;
-    if position.flags & !3 != 0
+    if position.flags & !7 != 0
         || position.flags2 != 0
         || position.flags3 != 0
         || position.status != PositionStatus::Open
@@ -183,15 +178,14 @@ pub fn build_cash_settle_ix_with_destinations(
         Pubkey::find_program_address(&[b"position", position.order_id.as_bytes()], &program_id).0;
     let quote_ata = |owner: &Pubkey| ata(owner, &market.quote_mint, &market.quote_token_program_id);
     // One owner on both sides may receive both amounts into one account.
-    let shared =
-        position.taker_owner == position.maker_owner && destinations.taker == destinations.maker;
+    let shared = position.writer == position.holder && destinations.writer == destinations.holder;
     let unique = [
         position_pda,
         market_pda,
         quote_ata(&position_pda),
         SYSTEM_PROGRAM_ID,
-        destinations.taker,
-        destinations.maker,
+        destinations.writer,
+        destinations.holder,
     ];
     let unique = &unique[..unique.len() - usize::from(shared)];
     for (index, key) in unique.iter().enumerate() {
@@ -201,8 +195,8 @@ pub fn build_cash_settle_ix_with_destinations(
     }
     // A vault side settles only into its vault's canonical quote ATA, with the vault tail.
     let vaults: Vec<Pubkey> = [
-        (1, position.taker_owner, destinations.taker),
-        (2, position.maker_owner, destinations.maker),
+        (1, position.writer, destinations.writer),
+        (2, position.holder, destinations.holder),
     ]
     .into_iter()
     .filter(|(flag, ..)| position.flags & flag != 0)
@@ -235,8 +229,8 @@ pub fn build_cash_settle_ix_with_destinations(
             AccountMeta::new(market_pda, false),
             AccountMeta::new(quote_ata(&position_pda), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-            AccountMeta::new(destinations.taker, false),
-            AccountMeta::new(destinations.maker, false),
+            AccountMeta::new(destinations.writer, false),
+            AccountMeta::new(destinations.holder, false),
             AccountMeta::new_readonly(market.underlying_token_program_id, false),
             AccountMeta::new_readonly(market.quote_token_program_id, false),
         ]
@@ -254,7 +248,7 @@ pub fn cash_settle_sequence(
 ) -> Result<Vec<Instruction>, ChainError> {
     let settle = build_cash_settle_ix(program_id, settler, position, market)?;
     let mut ixs = Vec::with_capacity(3);
-    for owner in [position.taker_owner, position.maker_owner] {
+    for owner in [position.writer, position.holder] {
         let destination = ata(&owner, &market.quote_mint, &market.quote_token_program_id);
         ixs.push(super::ix::create_associated_token_account_idempotent_ix(
             &settler,
