@@ -7,9 +7,11 @@ use super::auth;
 use super::writer::WriterLanes;
 use super::{
     AuthenticatedSessionEnd, AwaitTracker, InboundPublisher, ManagedWsConfig, ManagedWsEvent,
-    SessionFailure, send_event,
+    ManagedWsFailure, ManagedWsFailureKind, SessionFailure, send_event,
 };
 use crate::ws::client::PreparedClientMessage;
+use crate::ws::error::WsClientError;
+use crate::ws::managed::SendAwaitError;
 use crate::ws::types::{ClientMessage, ServerMessage};
 
 pub(super) async fn handle_ws_read(
@@ -31,14 +33,29 @@ pub(super) async fn handle_ws_read(
                 handle_session_message(lanes, config, &message, events_tx, shutdown_rx).await
             {
                 if !matches!(error, SessionFailure::Shutdown) {
-                    send_event(events_tx, ManagedWsEvent::Error(error.to_string()));
+                    let kind = if error.is_server_rejection() {
+                        ManagedWsFailureKind::Server
+                    } else {
+                        ManagedWsFailureKind::Network
+                    };
+                    send_event(events_tx, ManagedWsFailure::event(kind, &error));
                 }
                 let rejected = error.is_server_rejection();
                 return Some((error.into_session_end(), rejected));
             }
         }
+        Some(Err(WsClientError::UnreadableFrame(frame))) => {
+            if let Some(sender) = frame.request_id.and_then(|id| tracker.take_for_request(id)) {
+                let _ = sender.send(Err(SendAwaitError::UnreadableResponse(frame.clone())));
+            }
+            inbound.publish_unreadable();
+            send_event(events_tx, ManagedWsEvent::UnreadableFrame(*frame));
+        }
         Some(Err(error)) => {
-            send_event(events_tx, ManagedWsEvent::Error(error.to_string()));
+            send_event(
+                events_tx,
+                ManagedWsFailure::event(ManagedWsFailureKind::Network, error),
+            );
             return Some((AuthenticatedSessionEnd::Disconnected, false));
         }
         None => return Some((AuthenticatedSessionEnd::Disconnected, false)),

@@ -816,6 +816,80 @@ async fn sustained_outbound_commands_do_not_starve_inbound_messages() {
     peer.await.expect("join saturated websocket peer");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreadable_frame_is_a_gap_and_the_session_stays_up() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind websocket peer");
+    let address = listener.local_addr().expect("peer address");
+    let (send_tx, send_rx) = oneshot::channel();
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept managed connection");
+        let mut socket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("websocket handshake");
+        authenticate_test_peer(&mut socket).await;
+        recover_test_peer(&mut socket, false).await;
+        send_rx.await.expect("request frames");
+        socket
+            .send(Message::Text(
+                r#"{"type":"BrandNewFrame","data":{}}"#.to_string().into(),
+            ))
+            .await
+            .expect("send unknown frame");
+        send_server_message(
+            &mut socket,
+            ServerMessage::Pong(crate::ws::types::PongData {
+                server_time_unix_ms: UNIX_EPOCH,
+            }),
+        )
+        .await;
+        while let Some(message) = socket.next().await {
+            if message.is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut config = managed_config();
+    config.url = format!("ws://{address}");
+    let handle = spawn_managed_ws(config).expect("spawn managed websocket");
+    let mut messages = handle.subscribe_messages();
+    let mut events = handle.subscribe_events();
+    let epoch = handle.wait_until_ready().await.expect("ready session");
+    send_tx.send(()).expect("ask peer to send frames");
+
+    let gap = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Err(error) = messages.recv().await {
+                return error;
+            }
+        }
+    })
+    .await
+    .expect("gap arrives");
+    assert!(matches!(gap, ManagedReceiveError::Gap { skipped: 1 }));
+    let inbound = tokio::time::timeout(Duration::from_secs(2), messages.recv())
+        .await
+        .expect("next frame arrives")
+        .expect("session survives the unreadable frame");
+    assert!(matches!(inbound.message(), ServerMessage::Pong(_)));
+    let unreadable = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(ManagedWsEvent::UnreadableFrame(frame)) = events.recv().await {
+                return frame;
+            }
+        }
+    })
+    .await
+    .expect("unreadable event arrives");
+    assert_eq!(unreadable.frame_type.as_deref(), Some("BrandNewFrame"));
+    assert_eq!(handle.wait_until_ready().await.expect("still ready"), epoch);
+
+    handle.close().await.expect("close managed websocket");
+    peer.await.expect("join websocket peer");
+}
+
 #[test]
 fn low_latency_profile_validates_and_reconnects_on_gap() {
     let config = managed_config().low_latency();

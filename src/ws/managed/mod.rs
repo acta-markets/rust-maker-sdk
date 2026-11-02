@@ -20,7 +20,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::ws::client::{PreparedClientMessage, ServerClose};
-use crate::ws::error::WsClientError;
+use crate::ws::error::{UnreadableFrame, WsClientError};
 use crate::ws::types::{ClientMessage, ServerMessage, VaultAuthSuccessData};
 
 pub use config::{GapPolicy, ManagedWsConfig, ManagedWsConfigError};
@@ -30,6 +30,7 @@ pub use endpoint::{
     MakerWsEndpoint, normalize_maker_data_ws_url, normalize_maker_ws_url,
     normalize_maker_ws_url_for_endpoint,
 };
+pub(crate) use inbound::InboundItem;
 pub use inbound::{
     ManagedInbound, ManagedMessageReceiver, ManagedReceiveError, ReferenceChangeReceiver,
 };
@@ -72,8 +73,40 @@ pub enum ManagedWsEvent {
     Disconnected {
         close: Option<ServerClose>,
     },
-    Error(String),
+    Error(ManagedWsFailure),
+    /// A frame this SDK cannot decode was skipped and the session stays up. Message
+    /// receivers see `ManagedReceiveError::Gap`, so rebuild state as after any gap.
+    UnreadableFrame(UnreadableFrame),
     Terminated(ManagedWsTerminationReason),
+}
+
+/// Which part of the session failed. Decide on `kind`; `detail` is for logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedWsFailureKind {
+    /// Socket, timeout or reconnect trouble. The session retries on its own.
+    Network,
+    /// Authentication failed or was rejected.
+    Auth,
+    /// The session could not reach `Ready`.
+    Readiness,
+    /// The server rejected the session or an unexpected reply arrived.
+    Server,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{detail}")]
+pub struct ManagedWsFailure {
+    pub kind: ManagedWsFailureKind,
+    pub detail: String,
+}
+
+impl ManagedWsFailure {
+    pub(super) fn event(kind: ManagedWsFailureKind, detail: impl ToString) -> ManagedWsEvent {
+        ManagedWsEvent::Error(Self {
+            kind,
+            detail: detail.to_string(),
+        })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -112,6 +145,8 @@ pub enum SendAwaitError {
     Disconnected,
     #[error("request timed out")]
     Timeout,
+    #[error("response could not be decoded: {0}")]
+    UnreadableResponse(Box<UnreadableFrame>),
     #[error("message has no stable correlation key")]
     NoCorrelationKey,
     #[error("an identical request is already awaiting a response")]
@@ -144,9 +179,9 @@ pub struct ManagedWsHandle {
     cmd_tx: mpsc::Sender<ManagedCommand>,
     cancel_tx: mpsc::UnboundedSender<u64>,
     gap_tx: Option<mpsc::UnboundedSender<()>>,
-    messages_tx: broadcast::Sender<ManagedInbound>,
+    messages_tx: broadcast::Sender<InboundItem>,
     events_tx: broadcast::Sender<ManagedWsEvent>,
-    initial_messages_rx: Arc<StdMutex<Option<broadcast::Receiver<ManagedInbound>>>>,
+    initial_messages_rx: Arc<StdMutex<Option<broadcast::Receiver<InboundItem>>>>,
     initial_events_rx: Arc<StdMutex<Option<broadcast::Receiver<ManagedWsEvent>>>>,
     state_rx: watch::Receiver<ManagedWsState>,
     vault_auth_rx: watch::Receiver<Option<VaultAuthSuccessData>>,
@@ -472,7 +507,7 @@ impl ManagedWsHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel(cmd_buffer);
         let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
         let (messages_tx, initial_messages_rx) =
-            broadcast::channel::<ManagedInbound>(broadcast_buffer);
+            broadcast::channel::<InboundItem>(broadcast_buffer);
         let (events_tx, initial_events_rx) = broadcast::channel(broadcast_buffer);
         let (state_tx, state_rx) = watch::channel(ManagedWsState::Connecting);
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -519,12 +554,12 @@ impl ManagedWsHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub fn inject_message(&self, msg: ServerMessage) {
         let sequence = self.next_inbound_sequence.fetch_add(1, Ordering::Relaxed);
-        let _ = self.messages_tx.send(ManagedInbound {
+        let _ = self.messages_tx.send(InboundItem::Message(ManagedInbound {
             connection_epoch: 0,
             sequence,
             received_at: std::time::Instant::now(),
             message: Arc::new(msg),
-        });
+        }));
     }
 
     #[cfg(any(test, feature = "test-helpers"))]
@@ -548,7 +583,7 @@ pub fn spawn_managed_ws(config: ManagedWsConfig) -> Result<ManagedWsHandle, Mana
     let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
     let (gap_tx, gap_rx) = mpsc::unbounded_channel();
     let gap_tx = config.reconnect_on_gap().then_some(gap_tx);
-    let (messages_tx, initial_messages_rx) = broadcast::channel::<ManagedInbound>(broadcast_buffer);
+    let (messages_tx, initial_messages_rx) = broadcast::channel::<InboundItem>(broadcast_buffer);
     let (events_tx, initial_events_rx) = broadcast::channel(broadcast_buffer);
     let (state_tx, state_rx) = watch::channel(ManagedWsState::Connecting);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

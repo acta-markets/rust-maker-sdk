@@ -11,13 +11,14 @@ use reqwest::header::{ETAG, IF_NONE_MATCH};
 use serde::de::DeserializeOwned;
 
 pub use types::{
-    CountLimit, PremiumFlow, ProjectionCursor, TokenProgramKind, Vault, VaultCapacity,
-    VaultExposure, VaultExposurePosition, VaultExposureTotal, VaultFees, VaultLeg, VaultMetadata,
-    VaultPerformance, VaultPolicy, VaultPosition, VaultPositionProduct, VaultPositionRole,
-    VaultPositionStatus, VaultPositionType, VaultPremium, VaultReturns, VaultStaging, Venue,
-    WindowReturn,
+    CountLimit, PremiumFlow, ProjectionCursor, TokenProgramKind, Vault, VaultCapacity, VaultCycle,
+    VaultDepositRequest, VaultExposure, VaultExposurePosition, VaultExposureTotal, VaultFees,
+    VaultLeg, VaultMetadata, VaultPerformance, VaultPolicy, VaultPosition, VaultPositionProduct,
+    VaultPositionRole, VaultPositionStatus, VaultPositionType, VaultPremium, VaultReturns,
+    VaultStaging, VaultWithdrawRequest, Venue, WindowReturn,
 };
 use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
+use types::{VaultCyclesResponse, VaultRequestsResponse};
 
 use crate::ws::types::{MarketInfo, TokenInfo};
 
@@ -164,6 +165,52 @@ impl HttpClient {
             )
             .await?;
         Ok(response.positions)
+    }
+
+    /// Every cycle of the vault, newest first.
+    pub async fn vault_cycles(&self, pda: crate::Address32) -> Result<Vec<VaultCycle>, HttpError> {
+        let response: VaultCyclesResponse = self
+            .collect(
+                &format!("/api/v1/vaults/{pda}/cycles"),
+                |all: &VaultCyclesResponse| all.next_cursor.as_deref(),
+                |all, page| {
+                    all.cycles.extend(page.cycles);
+                    all.next_cursor = page.next_cursor;
+                },
+            )
+            .await?;
+        Ok(response.cycles)
+    }
+
+    /// Every pending deposit of the vault, read without Solana RPC.
+    pub async fn vault_deposit_requests(
+        &self,
+        pda: crate::Address32,
+    ) -> Result<Vec<VaultDepositRequest>, HttpError> {
+        self.vault_requests(&format!("/api/v1/vaults/{pda}/deposit-requests"))
+            .await
+    }
+
+    /// Every pending withdrawal of the vault, read without Solana RPC.
+    pub async fn vault_withdraw_requests(
+        &self,
+        pda: crate::Address32,
+    ) -> Result<Vec<VaultWithdrawRequest>, HttpError> {
+        self.vault_requests(&format!("/api/v1/vaults/{pda}/withdraw-requests"))
+            .await
+    }
+
+    async fn vault_requests<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, HttpError> {
+        let response: VaultRequestsResponse<T> = crate::paging::fetch_all(
+            |cursor| async move { self.get(&Self::page_path(path, 100, &cursor)?).await },
+            |all: &VaultRequestsResponse<T>| all.next_cursor.as_deref(),
+            |all, page| {
+                all.requests.extend(page.requests);
+                all.next_cursor = page.next_cursor;
+            },
+        )
+        .await?;
+        Ok(response.requests)
     }
 
     /// Open and funded positions with indicative spot, moneyness and intrinsic value.

@@ -15,9 +15,9 @@ use super::reconnect_window::wait_reconnect_window;
 use super::tracker::AwaitTracker;
 use super::writer::{self, LaneFull};
 use super::{
-    ManagedCommand, ManagedInbound, ManagedWsConfig, ManagedWsError, ManagedWsEvent,
-    ManagedWsState, ManagedWsTerminationReason, normalize_maker_ws_url_for_endpoint, send_event,
-    transition_state,
+    InboundItem, ManagedCommand, ManagedInbound, ManagedWsConfig, ManagedWsError, ManagedWsEvent,
+    ManagedWsFailure, ManagedWsFailureKind, ManagedWsState, ManagedWsTerminationReason,
+    normalize_maker_ws_url_for_endpoint, send_event, transition_state,
 };
 
 const INVALID_SIGNATURE_STRIKE_LIMIT: u32 = 3;
@@ -112,7 +112,7 @@ mod ready;
 mod session_message;
 
 struct InboundPublisher<'a> {
-    tx: &'a broadcast::Sender<ManagedInbound>,
+    tx: &'a broadcast::Sender<InboundItem>,
     connection_epoch: u64,
     sequence: &'a mut u64,
 }
@@ -138,8 +138,13 @@ impl InboundPublisher<'_> {
             received_at: std::time::Instant::now(),
             message: Arc::clone(&message),
         };
-        let _ = self.tx.send(inbound);
+        let _ = self.tx.send(InboundItem::Message(inbound));
         message
+    }
+
+    fn publish_unreadable(&mut self) {
+        *self.sequence = self.sequence.wrapping_add(1);
+        let _ = self.tx.send(InboundItem::Unreadable);
     }
 }
 
@@ -169,7 +174,7 @@ pub(super) fn connection_ended(
 pub(super) async fn run_managed_ws(
     config: ManagedWsConfig,
     inputs: HandleInputs,
-    messages_tx: broadcast::Sender<ManagedInbound>,
+    messages_tx: broadcast::Sender<InboundItem>,
     events_tx: broadcast::Sender<ManagedWsEvent>,
     state_tx: watch::Sender<ManagedWsState>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -263,10 +268,13 @@ pub(super) async fn run_managed_ws(
                             pending_auth_rejection = Some(reason);
                             send_event(
                                 &events_tx,
-                                ManagedWsEvent::Error(format!(
-                                    "authentication rejected with invalid_signature, retrying \
+                                ManagedWsFailure::event(
+                                    ManagedWsFailureKind::Auth,
+                                    format!(
+                                        "authentication rejected with invalid_signature, retrying \
                                      ({invalid_signature_strikes}/{INVALID_SIGNATURE_STRIKE_LIMIT})"
-                                )),
+                                    ),
+                                ),
                             );
                         } else {
                             terminate(&events_tx, &state_tx, reason);
@@ -292,17 +300,23 @@ pub(super) async fn run_managed_ws(
                 }
             }
             Err(err) => {
-                send_event(&events_tx, ManagedWsEvent::Error(err.to_string()));
+                send_event(
+                    &events_tx,
+                    ManagedWsFailure::event(ManagedWsFailureKind::Network, &err),
+                );
             }
         }
 
         if backoff.limit_reached(config.max_reconnect_attempts) {
             send_event(
                 &events_tx,
-                ManagedWsEvent::Error(format!(
-                    "reconnect attempt limit reached ({})",
-                    config.max_reconnect_attempts
-                )),
+                ManagedWsFailure::event(
+                    ManagedWsFailureKind::Network,
+                    format!(
+                        "reconnect attempt limit reached ({})",
+                        config.max_reconnect_attempts
+                    ),
+                ),
             );
             let reason = match pending_auth_rejection.take() {
                 Some(rejection) => rejection,
@@ -360,7 +374,10 @@ async fn run_session(
         }
         Phase::Done(Ok(outcome)) => outcome,
         Phase::Done(Err(err)) => {
-            send_event(runtime.events_tx, ManagedWsEvent::Error(err.to_string()));
+            send_event(
+                runtime.events_tx,
+                ManagedWsFailure::event(ManagedWsFailureKind::Auth, &err),
+            );
             if err.is_server_rejection() {
                 client.await_server_close(SERVER_CLOSE_GRACE).await;
             }
@@ -372,7 +389,7 @@ async fn run_session(
         Phase::TimedOut => {
             send_event(
                 runtime.events_tx,
-                ManagedWsEvent::Error("authentication timed out".to_string()),
+                ManagedWsFailure::event(ManagedWsFailureKind::Auth, "authentication timed out"),
             );
             return SessionEnd::AuthenticationFailed;
         }
@@ -423,10 +440,10 @@ async fn run_session(
         Phase::Done(Err(err)) => {
             send_event(
                 runtime.events_tx,
-                ManagedWsEvent::Error(format!(
-                    "readiness failed at {}: {err}",
-                    readiness_step.name()
-                )),
+                ManagedWsFailure::event(
+                    ManagedWsFailureKind::Readiness,
+                    format!("readiness failed at {}: {err}", readiness_step.name()),
+                ),
             );
             if err.is_server_rejection() {
                 client.await_server_close(SERVER_CLOSE_GRACE).await;
@@ -437,10 +454,10 @@ async fn run_session(
         Phase::TimedOut => {
             send_event(
                 runtime.events_tx,
-                ManagedWsEvent::Error(format!(
-                    "readiness barrier timed out at {}",
-                    readiness_step.name()
-                )),
+                ManagedWsFailure::event(
+                    ManagedWsFailureKind::Readiness,
+                    format!("readiness barrier timed out at {}", readiness_step.name()),
+                ),
             );
             return AuthenticatedSessionEnd::Disconnected.finish(authenticated_at);
         }
@@ -456,7 +473,10 @@ async fn run_session(
     let ping = match PreparedClientMessage::new(&ClientMessage::Ping) {
         Ok(ping) => ping,
         Err(error) => {
-            send_event(runtime.events_tx, ManagedWsEvent::Error(error.to_string()));
+            send_event(
+                runtime.events_tx,
+                ManagedWsFailure::event(ManagedWsFailureKind::Server, error),
+            );
             writer_task.abort();
             return AuthenticatedSessionEnd::Disconnected.finish(authenticated_at);
         }
@@ -478,7 +498,7 @@ async fn run_session(
             Some(()) = runtime.gap_rx.recv() => {
                 send_event(
                     runtime.events_tx,
-                    ManagedWsEvent::Error("subscriber fell behind the inbound ring; reconnecting".to_string()),
+                    ManagedWsFailure::event(ManagedWsFailureKind::Network, "subscriber fell behind the inbound ring; reconnecting"),
                 );
                 break AuthenticatedSessionEnd::Disconnected;
             }
@@ -506,7 +526,7 @@ async fn run_session(
                 }
             }
             _ = wait_for_deadline(subscription_deadline), if subscription_deadline.is_some() => {
-                send_event(runtime.events_tx, ManagedWsEvent::Error("subscription acknowledgement timed out".to_string()));
+                send_event(runtime.events_tx, ManagedWsFailure::event(ManagedWsFailureKind::Server, "subscription acknowledgement timed out"));
                 break AuthenticatedSessionEnd::Disconnected;
             }
             maybe_await_id = cancel_rx.recv() => {
@@ -532,7 +552,7 @@ async fn run_session(
             _ = wait_for_deadline(pong_deadline), if pong_deadline.is_some() => {
                 send_event(
                     runtime.events_tx,
-                    ManagedWsEvent::Error("pong deadline exceeded".to_string()),
+                    ManagedWsFailure::event(ManagedWsFailureKind::Network, "pong deadline exceeded"),
                 );
                 break AuthenticatedSessionEnd::Disconnected;
             }

@@ -12,7 +12,7 @@ use tokio_tungstenite::{
     },
 };
 
-use crate::ws::error::{WsClientError, WsResult, WsTransportConfigError};
+use crate::ws::error::{UnreadableFrame, WsClientError, WsResult, WsTransportConfigError};
 use crate::ws::types::{
     AcceptQuoteMessage, AddChannelsData, AddMintsData, AuthChallengeData, BatchQuotesMessage,
     CancelAllQuotesMessage, CancelQuoteData, CancelRfqData, ClaimReferralCodeData, ClientMessage,
@@ -416,11 +416,10 @@ impl WsClient {
 
             match msg {
                 Message::Text(text) => {
-                    let parsed = parse_server_message(&text);
-                    return Some(parsed.map_err(WsClientError::from));
+                    return Some(parse_frame(text.as_bytes()));
                 }
                 Message::Binary(bin) => {
-                    return Some(parse_binary(&bin).map_err(WsClientError::from));
+                    return Some(parse_frame(&bin));
                 }
                 Message::Ping(payload) => {
                     if let Err(err) = self.stream.send(Message::Pong(payload)).await {
@@ -471,8 +470,8 @@ impl WsReader {
                 None => return None,
             };
             let frame = match msg {
-                Message::Text(text) => parse_server_message(&text).map(WsFrame::Message),
-                Message::Binary(bin) => parse_binary(&bin).map(WsFrame::Message),
+                Message::Text(text) => parse_frame(text.as_bytes()).map(WsFrame::Message),
+                Message::Binary(bin) => parse_frame(&bin).map(WsFrame::Message),
                 Message::Ping(payload) => Ok(WsFrame::Ping(payload)),
                 Message::Pong(_) => Ok(WsFrame::Pong),
                 Message::Close(frame) => {
@@ -481,14 +480,17 @@ impl WsReader {
                 }
                 Message::Frame(_) => continue,
             };
-            return Some(frame.map_err(WsClientError::from));
+            return Some(frame);
         }
     }
 }
 
-fn parse_binary(bin: &[u8]) -> Result<ServerMessage, serde_json::Error> {
-    match std::str::from_utf8(bin) {
+fn parse_frame(raw: &[u8]) -> WsResult<ServerMessage> {
+    let parsed = match std::str::from_utf8(raw) {
         Ok(text) => parse_server_message(text),
-        Err(_) => serde_json::from_slice::<ServerMessage>(bin),
-    }
+        Err(_) => serde_json::from_slice::<ServerMessage>(raw),
+    };
+    parsed.map_err(|error| {
+        WsClientError::UnreadableFrame(Box::new(UnreadableFrame::from_raw(raw, &error)))
+    })
 }

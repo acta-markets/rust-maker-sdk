@@ -151,6 +151,11 @@ impl AwaitTracker {
         self.cancel(await_id)
     }
 
+    pub(crate) fn take_for_request(&mut self, request_id: Uuid) -> Option<AwaitSender> {
+        let await_id = *self.by_key.get(&CorrelationKey::Request(request_id))?;
+        self.cancel(await_id)
+    }
+
     pub(crate) fn drain_all(&mut self) {
         self.by_key.clear();
         for (_, pending) in self.by_id.drain() {

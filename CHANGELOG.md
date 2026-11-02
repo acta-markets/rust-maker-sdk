@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.3
+
+- A server frame this SDK cannot decode no longer drops the session. A pending request
+  for it fails with `SendAwaitError::UnreadableResponse`, `ManagedWsEvent::UnreadableFrame`
+  reports it, and message receivers get `ManagedReceiveError::Gap`, so state is rebuilt
+  the same way as after any gap. Frames before `Ready` still fail the attempt.
+- `ManagedWsEvent::Error` carries `ManagedWsFailure { kind, detail }` instead of a string.
+- `HttpClient::vault_cycles`, `vault_deposit_requests` and `vault_withdraw_requests`.
+
 ## 0.6.2
 
 - `MakerDataClient::request` is now `request_all`, because a list request follows every

@@ -348,3 +348,53 @@ fn venue_requires_protocol_fee_fields() {
         assert!(serde_json::from_value::<Venue>(value).is_err());
     }
 }
+
+#[tokio::test]
+async fn vault_requests_page_at_the_route_maximum() {
+    let row = |wallet: &str| {
+        serde_json::json!({
+            "wallet": wallet, "shares": "90", "created_at": "1", "transaction_signature": null,
+        })
+    };
+    let (base, server) = serve(vec![
+        (
+            "200 OK",
+            serde_json::json!({ "requests": [row("a")], "next_cursor": "c" }).to_string(),
+        ),
+        (
+            "200 OK",
+            serde_json::json!({ "requests": [row("b")], "next_cursor": null }).to_string(),
+        ),
+    ]);
+    let client = HttpClient::new(base).unwrap();
+    let requests = client
+        .vault_withdraw_requests(crate::Address32::new([0; 32]))
+        .await
+        .unwrap();
+    assert_eq!(requests.len(), 2);
+    let paths = server.join().unwrap();
+    assert!(paths[0].ends_with("/withdraw-requests?limit=100"));
+    assert!(paths[1].ends_with("/withdraw-requests?limit=100&cursor=c"));
+}
+
+#[tokio::test]
+async fn vault_cycles_decode_a_running_cycle() {
+    let cycle = serde_json::json!({
+        "cycle_number": "4", "capital_generation": "0", "expiry": "1793606400",
+        "started_at": "1793520522", "finished_at": null, "share_price_start": "1028295748",
+        "share_price_end": null, "equity_start": "5141478741", "equity_end": null,
+        "positions_opened": 19, "positions_settled": 0, "return_pct": null,
+        "performance_fee_assessed": "0", "management_fee_assessed": "0",
+    });
+    let (base, server) = serve(vec![(
+        "200 OK",
+        serde_json::json!({ "cycles": [cycle], "next_cursor": null }).to_string(),
+    )]);
+    let client = HttpClient::new(base).unwrap();
+    let cycles = client
+        .vault_cycles(crate::Address32::new([0; 32]))
+        .await
+        .unwrap();
+    assert_eq!(cycles[0].positions_opened, 19);
+    assert_eq!(server.join().unwrap().len(), 1);
+}

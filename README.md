@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.6.2", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.6.3", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -175,7 +175,9 @@ Maker examples read `ACTA_KEYPAIR_PATH`, `ACTA_MAKER_OWNER` and `ACTA_WS_URL`.
   `*_unix_ms` fields are milliseconds.
 - **Closed wire.** Every field is present on every frame and absent facts are
   `null`. Decoding rejects unknown message types, enum values, error codes and
-  missing fields. Match error codes, not messages.
+  missing fields. A rejected frame after `Ready` keeps the session up and reaches
+  you as `ManagedWsEvent::UnreadableFrame` and a receiver gap: reconcile as after
+  any gap. Match error codes, not messages.
 - **Sell only.** Every RFQ, quote, position and trade carries `terms: OptionTerms`
   and `side`. The venue accepts only `sell`; the builders reject `buy` with
   `taker_buy_unsupported`.

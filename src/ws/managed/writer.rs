@@ -173,7 +173,10 @@ where
                     write(&mut sink, Message::Text(message.into_text()), write_timeout).await;
                 let failed = result.is_err();
                 if let Err(error) = &result {
-                    send_event(&events_tx, ManagedWsEvent::Error(error.to_string()));
+                    send_event(
+                        &events_tx,
+                        super::ManagedWsFailure::event(super::ManagedWsFailureKind::Network, error),
+                    );
                 }
                 if !failed && let Some(written) = written {
                     let _ = written.send(Instant::now());
@@ -187,7 +190,10 @@ where
             }
             WriterCommand::Pong(payload) => {
                 if let Err(error) = write(&mut sink, Message::Pong(payload), write_timeout).await {
-                    send_event(&events_tx, ManagedWsEvent::Error(error.to_string()));
+                    send_event(
+                        &events_tx,
+                        super::ManagedWsFailure::event(super::ManagedWsFailureKind::Network, error),
+                    );
                     return None;
                 }
             }
@@ -379,7 +385,7 @@ mod tests {
         task.await.expect("writer task ends after the failure");
         assert!(matches!(
             events_rx.try_recv(),
-            Ok(ManagedWsEvent::Error(detail)) if detail.contains("timed out")
+            Ok(ManagedWsEvent::Error(failure)) if failure.detail.contains("timed out")
         ));
         assert!(matches!(
             lanes.frame(data_frame(), None),

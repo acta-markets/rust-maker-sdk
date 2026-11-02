@@ -30,6 +30,13 @@ impl AsRef<ServerMessage> for ManagedInbound {
     }
 }
 
+/// What the session broadcasts: a decoded frame, or the place of one it could not decode.
+#[derive(Debug, Clone)]
+pub(crate) enum InboundItem {
+    Message(ManagedInbound),
+    Unreadable,
+}
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ManagedReceiveError {
@@ -40,7 +47,7 @@ pub enum ManagedReceiveError {
 }
 
 pub struct ManagedMessageReceiver {
-    pub(super) inner: broadcast::Receiver<ManagedInbound>,
+    pub(super) inner: broadcast::Receiver<InboundItem>,
     /// Set under `GapPolicy::Reconnect`: a lag asks the session to reconnect.
     pub(super) gap_tx: Option<mpsc::UnboundedSender<()>>,
 }
@@ -48,7 +55,9 @@ pub struct ManagedMessageReceiver {
 impl ManagedMessageReceiver {
     pub async fn recv(&mut self) -> Result<ManagedInbound, ManagedReceiveError> {
         match self.inner.recv().await {
-            Ok(message) => Ok(message),
+            Ok(InboundItem::Message(message)) => Ok(message),
+            // Rebuild state as after any gap; a reconnect would only meet the same frame.
+            Ok(InboundItem::Unreadable) => Err(ManagedReceiveError::Gap { skipped: 1 }),
             Err(broadcast::error::RecvError::Closed) => Err(ManagedReceiveError::Closed),
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 if let Some(gap_tx) = &self.gap_tx {

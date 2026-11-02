@@ -368,6 +368,64 @@ pub struct VaultExposureTotal {
     pub outstanding_intrinsic: Option<String>,
 }
 
+/// Public `/api/v1/vaults/{pda}/cycles` row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VaultCycle {
+    pub cycle_number: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub capital_generation: Option<String>,
+    pub expiry: String,
+    pub started_at: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub finished_at: Option<String>,
+    pub share_price_start: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub share_price_end: Option<String>,
+    pub equity_start: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub equity_end: Option<String>,
+    pub positions_opened: u32,
+    pub positions_settled: u32,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub return_pct: Option<f64>,
+    pub performance_fee_assessed: String,
+    pub management_fee_assessed: String,
+}
+
+/// Public `/api/v1/vaults/{pda}/deposit-requests` row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultDepositRequest {
+    pub wallet: String,
+    pub amount: String,
+    pub created_at: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub transaction_signature: Option<String>,
+}
+
+/// Public `/api/v1/vaults/{pda}/withdraw-requests` row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultWithdrawRequest {
+    pub wallet: String,
+    pub shares: String,
+    pub created_at: String,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub transaction_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct VaultCyclesResponse {
+    pub(super) cycles: Vec<VaultCycle>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub(super) next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct VaultRequestsResponse<T> {
+    pub(super) requests: Vec<T>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub(super) next_cursor: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct VaultPositionsResponse {
     pub(super) positions: Vec<VaultPosition>,
