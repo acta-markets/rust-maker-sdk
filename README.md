@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.6.1", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.6.2", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -24,7 +24,7 @@ Rust 1.89 or later. The default feature set is empty.
 | `test-helpers` | `ManagedWsHandle::test_handle` and message injection |
 
 This release speaks WS protocol `1.0.0` (`WS_PROTOCOL_VERSION`). See
-[CHANGELOG.md](CHANGELOG.md) for what changed since 0.6.0.
+[CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## Before you connect
 
@@ -213,7 +213,7 @@ SDK overhead only; network and server time are extra.
 
 ## List paging
 
-List calls collect every page for you. `MakerDataClient::request` and the
+List calls collect every page for you. `MakerDataClient::request_all` and the
 `HttpClient` catalog methods go through `paging::fetch_all`. For a "load more" view
 use `request_page` and keep the returned cursor as an opaque value.
 

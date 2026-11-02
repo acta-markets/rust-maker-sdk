@@ -41,7 +41,7 @@ fn every_quote_plane_method_exists() {
 #[test]
 fn every_data_plane_method_exists() {
     let _ = MakerDataClient::spawn;
-    let _ = MakerDataClient::request::<acta_maker_sdk::ws::types::GetMarketsMessage>;
+    let _ = MakerDataClient::request_all::<acta_maker_sdk::ws::types::GetMarketsMessage>;
 
     let _ = MakerDataClient::subscribe_messages;
     let _ = MakerDataClient::subscribe_events;

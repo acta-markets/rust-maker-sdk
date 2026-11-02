@@ -268,7 +268,9 @@ impl MakerDataClient {
         Ok(config)
     }
 
-    pub async fn request<R: MakerDataRequest>(
+    /// Fetch the complete response. A list request follows every page, so use
+    /// `request_page` to stop early.
+    pub async fn request_all<R: MakerDataRequest>(
         &self,
         request: R,
         timeout: Duration,
@@ -276,7 +278,7 @@ impl MakerDataClient {
         request.fetch(self, timeout).await
     }
 
-    /// Fetch exactly one page. Use `request` for a complete collection.
+    /// Fetch exactly one page. Use `request_all` for a complete collection.
     pub async fn request_page<R: MakerDataRequest>(
         &self,
         request: R,
@@ -686,7 +688,7 @@ mod tests {
         };
 
         let result = tokio::select! {
-            result = client.request(
+            result = client.request_all(
                 LeavesReadyWhileEncoding {
                     handle,
                     request_id: uuid::Uuid::new_v4(),

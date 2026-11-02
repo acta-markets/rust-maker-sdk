@@ -388,6 +388,7 @@ async fn run_session(
     );
     let authenticated_at = Instant::now();
 
+    let readiness_step = ready::ReadinessStep::default();
     let readiness_result = race_shutdown(
         runtime.shutdown_rx,
         config.readiness_timeout,
@@ -397,6 +398,7 @@ async fn run_session(
             runtime.inbound,
             runtime.subscriptions,
             &auth,
+            &readiness_step,
         ),
     )
     .await;
@@ -419,7 +421,13 @@ async fn run_session(
             );
         }
         Phase::Done(Err(err)) => {
-            send_event(runtime.events_tx, ManagedWsEvent::Error(err.to_string()));
+            send_event(
+                runtime.events_tx,
+                ManagedWsEvent::Error(format!(
+                    "readiness failed at {}: {err}",
+                    readiness_step.name()
+                )),
+            );
             if err.is_server_rejection() {
                 client.await_server_close(SERVER_CLOSE_GRACE).await;
             }
@@ -429,7 +437,10 @@ async fn run_session(
         Phase::TimedOut => {
             send_event(
                 runtime.events_tx,
-                ManagedWsEvent::Error("readiness barrier timed out".to_string()),
+                ManagedWsEvent::Error(format!(
+                    "readiness barrier timed out at {}",
+                    readiness_step.name()
+                )),
             );
             return AuthenticatedSessionEnd::Disconnected.finish(authenticated_at);
         }

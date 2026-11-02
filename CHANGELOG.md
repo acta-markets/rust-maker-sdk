@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2
+
+- `MakerDataClient::request` is now `request_all`, because a list request follows every
+  page. Use `request_page` when you may stop early.
+- Readiness errors name the step that failed or timed out: subscription snapshot,
+  subscription recovery or reconciliation reads.
+
 ## 0.6.1
 
 Requires a server with paged lists. The WS protocol version stays `1.0.0`, so an

@@ -7,7 +7,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::auth::AuthOutcome;
 use super::{
-    AuthenticatedSessionEnd, InboundPublisher, SessionEnd, SessionFailure, ready::establish,
+    AuthenticatedSessionEnd, InboundPublisher, SessionEnd, SessionFailure,
+    ready::{ReadinessStep, establish},
 };
 use crate::orders::{BytesSigner, SignerLike};
 use crate::ws::client::WsClient;
@@ -308,9 +309,16 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
     };
 
     let desired = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
-    establish(&mut client, &config, &mut inbound, &desired, &maker_auth())
-        .await
-        .expect("ready quote session");
+    establish(
+        &mut client,
+        &config,
+        &mut inbound,
+        &desired,
+        &maker_auth(),
+        &ReadinessStep::default(),
+    )
+    .await
+    .expect("ready quote session");
     server_task.await.expect("test server task");
 }
 
@@ -407,9 +415,16 @@ async fn readiness_rejects_an_empty_live_quote_page_with_more_rows() {
     };
 
     let desired = DesiredSubscriptions::from_initial(config.initial_subscribe.as_ref());
-    let error = establish(&mut client, &config, &mut inbound, &desired, &maker_auth())
-        .await
-        .expect_err("a partial Live quote response fails the barrier");
+    let error = establish(
+        &mut client,
+        &config,
+        &mut inbound,
+        &desired,
+        &maker_auth(),
+        &ReadinessStep::default(),
+    )
+    .await
+    .expect_err("a partial Live quote response fails the barrier");
     let _ = server_task.await.expect("test server task");
     assert!(matches!(
         &error,
@@ -526,7 +541,14 @@ async fn data_readiness(history_has_more: bool) {
 
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        establish(&mut client, &config, &mut inbound, &desired, &maker_auth()),
+        establish(
+            &mut client,
+            &config,
+            &mut inbound,
+            &desired,
+            &maker_auth(),
+            &ReadinessStep::default(),
+        ),
     )
     .await
     .expect("one MmSummary completes data readiness")

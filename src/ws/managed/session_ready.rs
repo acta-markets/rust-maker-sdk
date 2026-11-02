@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use uuid::Uuid;
 
@@ -12,6 +13,26 @@ use crate::ws::managed::{
 };
 use crate::ws::types::*;
 
+/// The step `establish` is on, for a failure or timeout report.
+#[derive(Debug, Default)]
+pub(super) struct ReadinessStep(AtomicU8);
+
+impl ReadinessStep {
+    const NAMES: [&'static str; 3] = [
+        "subscription snapshot",
+        "subscription recovery",
+        "reconciliation reads",
+    ];
+
+    fn enter(&self, index: u8) {
+        self.0.store(index, Ordering::Relaxed);
+    }
+
+    pub(super) fn name(&self) -> &'static str {
+        Self::NAMES[usize::from(self.0.load(Ordering::Relaxed))]
+    }
+}
+
 /// Re-establish the desired subscription target and authoritative maker reads
 /// before a managed endpoint can report `Ready`.
 pub(super) async fn establish(
@@ -20,6 +41,7 @@ pub(super) async fn establish(
     inbound: &mut InboundPublisher<'_>,
     subscriptions: &DesiredSubscriptions,
     auth: &AuthOutcome,
+    step: &ReadinessStep,
 ) -> Result<(), SessionFailure> {
     if config.endpoint == MakerWsEndpoint::Quote {
         let mut request = GetSubscriptionsMessage::default();
@@ -52,10 +74,14 @@ pub(super) async fn establish(
             request.request_id = Uuid::new_v4();
         }
 
+        step.enter(1);
         let recovery = subscriptions.recovery(&actual);
         recover_subscriptions(client, config, inbound, recovery).await?;
     }
 
+    if config.endpoint == MakerWsEndpoint::Vault {
+        step.enter(1);
+    }
     if config.endpoint == MakerWsEndpoint::Vault && subscriptions.wants_vault_feed() {
         let mut recovery = subscriptions.recovery(&SubscriptionsMessage {
             request_id: Uuid::new_v4(),
@@ -84,6 +110,7 @@ pub(super) async fn establish(
         .map_err(|error| SessionFailure::Retryable(error.to_string()))?;
         wait_for_unsubscribe_ack(client, inbound, request_id).await?;
     }
+    step.enter(2);
     let reads = match config.endpoint {
         MakerWsEndpoint::Quote => quote_reads(),
         MakerWsEndpoint::Data => vec![mm_summary_read()],
@@ -402,4 +429,17 @@ fn reconciliation_pages(
         _ => {}
     }
     Ok(pages)
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::ReadinessStep;
+
+    #[test]
+    fn step_names_follow_progress() {
+        let step = ReadinessStep::default();
+        assert_eq!(step.name(), "subscription snapshot");
+        step.enter(2);
+        assert_eq!(step.name(), "reconciliation reads");
+    }
 }
