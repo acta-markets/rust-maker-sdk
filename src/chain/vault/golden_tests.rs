@@ -636,7 +636,7 @@ fn fund_maker_position_matches_golden() {
         for (underlying_mint, quote_mint) in [(key(3), key(4)), (key(4), key(3))] {
             for is_put in [false, true] {
                 built.push(ix(&m
-                    .fund_maker_position(&VaultPositionRef {
+                    .fund_holder_position(&VaultPositionRef {
                         underlying_mint,
                         quote_mint,
                         expiry_ts: 1_900_000_000,
@@ -656,7 +656,7 @@ fn fund_maker_position_matches_golden() {
         order_id: [9; 32],
     };
     let m = manager(TOKEN_PROGRAM_ID);
-    assert!(m.fund_maker_position(&held).is_err());
+    assert!(m.fund_holder_position(&held).is_err());
     for held in [
         VaultPositionRef {
             quote_mint: key(4),
@@ -669,7 +669,7 @@ fn fund_maker_position_matches_golden() {
             ..held
         },
     ] {
-        assert!(m.fund_maker_position(&held).is_err());
+        assert!(m.fund_holder_position(&held).is_err());
     }
 }
 
@@ -739,13 +739,13 @@ fn governance_instructions_match_golden() {
             "3904/4/7f29ff5418d81c11",
             "3805/4/da408c2b2eb99f79",
             "3905/4/1008c0966018528c",
-            "2f20202020202020202020202020202020202020202020202020202020202020203f00000000b33f7100000000/5/db66018087f022ff",
+            "2f20202020202020202020202020202020202020202020202020202020202020207f00000000b33f7100000000/5/db66018087f022ff",
             "3e/3/4a35ed45ecc4ab38",
         ]
     );
     assert_eq!(unpriced, [true, false, false, true, true, true]);
     assert!(
-        m.rotate_delegate(key(32), VaultDelegatePermissions::from_bits(1 << 6), 0)
+        m.rotate_delegate(key(32), VaultDelegatePermissions::from_bits(1 << 7), 0)
             .is_err()
     );
 }

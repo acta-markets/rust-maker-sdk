@@ -308,7 +308,7 @@ async fn vault_auth_handshake_reaches_ready_with_taker_reconcile() {
     let (allow_reads, reads_allowed) = oneshot::channel();
     let peer = tokio::spawn(async move {
         let mut socket = accept(&listener).await;
-        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_TAKER).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_AS_WRITER).await;
         reads_allowed.await.unwrap();
         answer_reconcile(&mut socket, TAKER_READS).await;
         drain_until_closed(socket).await;
@@ -336,7 +336,7 @@ async fn vault_auth_handshake_reaches_ready_with_taker_reconcile() {
         .expect("vault session ready");
 
     let auth = client.auth().expect("vault auth recorded");
-    assert_eq!(auth.permissions, VaultDelegatePermissions::OPEN_TAKER);
+    assert_eq!(auth.permissions, VaultDelegatePermissions::OPEN_AS_WRITER);
     assert_eq!(
         auth.operator,
         crate::Address32::new(operator().pubkey_bytes())
@@ -452,13 +452,13 @@ async fn reconnect_reauthenticates_with_start_vault_auth() {
     let (first_ready_observed, allow_disconnect) = oneshot::channel();
     let peer = tokio::spawn(async move {
         let mut socket = accept(&listener).await;
-        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_TAKER).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_AS_WRITER).await;
         answer_reconcile(&mut socket, TAKER_READS).await;
         allow_disconnect.await.expect("first ready state observed");
         drop(socket);
 
         let mut socket = accept(&listener).await;
-        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_TAKER).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_AS_WRITER).await;
         answer_reconcile(&mut socket, TAKER_READS).await;
         drain_until_closed(socket).await;
     });
@@ -794,7 +794,7 @@ async fn vault_projection_advanced_reaches_the_typed_subscriber() {
     let (listener, url) = bind().await;
     let peer = tokio::spawn(async move {
         let mut socket = accept(&listener).await;
-        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_TAKER).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_AS_WRITER).await;
         answer_reconcile(&mut socket, TAKER_READS).await;
         send_server(
             &mut socket,
@@ -896,7 +896,7 @@ async fn vault_unsubscribe_survives_fresh_authentication() {
     let (acked, may_disconnect) = oneshot::channel();
     let peer = tokio::spawn(async move {
         let mut socket = accept(&listener).await;
-        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_TAKER).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_AS_WRITER).await;
         answer_reconcile(&mut socket, TAKER_READS).await;
         let ClientMessage::Unsubscribe(request) = receive_client(&mut socket).await else {
             panic!("expected user unsubscribe");
@@ -913,7 +913,7 @@ async fn vault_unsubscribe_survives_fresh_authentication() {
         may_disconnect.await.unwrap();
         drop(socket);
         let mut socket = accept(&listener).await;
-        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_TAKER).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_AS_WRITER).await;
         let ClientMessage::Unsubscribe(request) = receive_client(&mut socket).await else {
             panic!("fresh auth must restore the user's removed feed before Ready");
         };
@@ -990,7 +990,7 @@ async fn reconnect_clears_old_grant_then_uses_reduced_permissions() {
             };
             let mut socket = accept(&listener).await;
             reauth_allowed.await.unwrap();
-            vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_TAKER).await;
+            vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_AS_WRITER).await;
             answer_reconcile(&mut socket, TAKER_READS).await;
             drain_until_closed(socket).await;
         });
@@ -1023,7 +1023,7 @@ async fn reconnect_clears_old_grant_then_uses_reduced_permissions() {
         .unwrap();
         assert_eq!(
             client.auth().unwrap().permissions,
-            VaultDelegatePermissions::OPEN_TAKER
+            VaultDelegatePermissions::OPEN_AS_WRITER
         );
         assert!(!client.can_maker() && client.can_taker());
         client.close().await.unwrap();

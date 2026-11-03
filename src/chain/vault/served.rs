@@ -144,7 +144,7 @@ pub struct ComputeBudgetBounds {
 #[derive(Debug, Clone, Copy)]
 pub enum VaultOpenIntent<'a> {
     /// The vault writes and sells to an external maker
-    /// (`OpenPositionForVaultAsTaker` or `OpenSpreadForVaultAsTaker`).
+    /// (`OpenPositionForVaultWriter` or `OpenSpreadForVaultWriter`, holder byte 0).
     Sale {
         /// The deployment's checked `GlobalConfig.hot_authority`; it pays and signs.
         keeper: Pubkey,
@@ -163,12 +163,22 @@ pub enum VaultOpenIntent<'a> {
         terms: VaultSaleTerms,
     },
     /// An external taker writes against the vault's quote
-    /// (`OpenPositionForVaultAsMaker` or `OpenSpreadForVaultAsMaker`).
+    /// (`OpenPositionForVaultHolder` or `OpenSpreadForVaultHolder`).
     Fill {
         /// The deployment's checked `GlobalConfig.hot_authority`; it pays and signs.
         keeper: Pubkey,
         holder: &'a VaultManager,
         taker: Pubkey,
+        terms: VaultSaleTerms,
+    },
+    /// A wallet buys what the vault writes; the wallet signs and pays, the vault delegate
+    /// signed the quote (`OpenPositionForVaultWriter` or `OpenSpreadForVaultWriter`, holder
+    /// byte 1). Checked by the buying wallet, never by the vault.
+    Buy {
+        /// The deployment's checked `GlobalConfig.hot_authority`; it pays and signs.
+        keeper: Pubkey,
+        writer: &'a VaultManager,
+        holder: Pubkey,
         terms: VaultSaleTerms,
     },
 }
@@ -217,10 +227,10 @@ pub fn verify_vault_open(
             maker_quote_signer,
             match terms {
                 VaultSaleTerms::Physical(terms) => {
-                    writer.open_position_as_taker(keeper, maker_owner, &terms)?
+                    writer.open_position_as_writer(keeper, maker_owner, &terms)?
                 }
                 VaultSaleTerms::Spread(terms) => {
-                    writer.open_spread_as_taker(keeper, maker_owner, &terms)?
+                    writer.open_spread_as_writer(keeper, maker_owner, &terms)?
                 }
             },
         ),
@@ -253,10 +263,28 @@ pub fn verify_vault_open(
             holder.args.delegate_authority,
             match terms {
                 VaultSaleTerms::Physical(terms) => {
-                    holder.open_position_as_maker(keeper, taker, &terms)?
+                    holder.open_position_as_holder(keeper, taker, &terms)?
                 }
                 VaultSaleTerms::Spread(terms) => {
-                    holder.open_spread_as_maker(keeper, taker, &terms)?
+                    holder.open_spread_as_holder(keeper, taker, &terms)?
+                }
+            },
+        ),
+        VaultOpenIntent::Buy {
+            keeper,
+            writer,
+            holder,
+            terms,
+        } => (
+            keeper,
+            holder,
+            writer.args.delegate_authority,
+            match terms {
+                VaultSaleTerms::Physical(terms) => {
+                    writer.open_position_for_wallet_holder(keeper, holder, &terms)?
+                }
+                VaultSaleTerms::Spread(terms) => {
+                    writer.open_spread_for_wallet_holder(keeper, holder, &terms)?
                 }
             },
         ),

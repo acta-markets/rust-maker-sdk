@@ -159,6 +159,15 @@ impl VaultOperatorClient {
             })
     }
 
+    /// Ready to quote buy RFQs, the vault writing what the wallet buys.
+    #[must_use]
+    pub fn can_write_buys(&self) -> bool {
+        self.inner.is_ready()
+            && self
+                .permissions()
+                .is_some_and(VaultDelegatePermissions::can_write_buys)
+    }
+
     #[must_use]
     pub fn can_taker(&self) -> bool {
         self.inner.is_ready()
@@ -272,6 +281,7 @@ impl VaultOperatorClient {
             VaultOpenIntent::Sale { writer, .. }
             | VaultOpenIntent::BetweenVaults { writer, .. } => writer.actor(),
             VaultOpenIntent::Fill { taker, .. } => *taker,
+            VaultOpenIntent::Buy { holder, .. } => *holder,
         };
         let signer = Pubkey::new_from_array(self.operator.pubkey_bytes());
         if signer != expected_participant {

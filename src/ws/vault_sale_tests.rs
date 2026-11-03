@@ -706,7 +706,7 @@ fn spread_quote(
         panic!("spread sale signs spread terms");
     };
     let open = writer(case)
-        .open_spread_as_taker(key(&case["keeper"]), key(&case["maker_owner"]), &terms)
+        .open_spread_as_writer(key(&case["keeper"]), key(&case["maker_owner"]), &terms)
         .unwrap();
     quote.order_id = OrderId::new(open.order_id);
     (quote, open)

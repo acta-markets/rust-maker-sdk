@@ -220,15 +220,15 @@ fn position_role_builders_and_events_keep_their_pre_rename_bytes() {
         "2f8549c38dd312c6feba9e0c02f8256cecdce1fcfaf9be107ada6829aef4aeef"
     );
 
-    let mut settle = vec![65, 67, 84, 65, 1, 80];
+    let mut settle = vec![65, 67, 84, 65, 2, 79];
     for byte in [5u8, 6, 7, 8, 9] {
         settle.extend_from_slice(&[byte; 32]);
     }
     settle.extend_from_slice(&[4, 0]);
     settle.extend_from_slice(&7u64.to_le_bytes());
     settle.extend_from_slice(&8u64.to_le_bytes());
-    let Some(acta_maker_sdk::chain::events::SpreadEvent::Settle(event)) =
-        acta_maker_sdk::chain::events::decode_spread_event(&settle).unwrap()
+    let Some(acta_maker_sdk::chain::events::PositionEvent::SpreadSettled(event)) =
+        acta_maker_sdk::chain::events::decode_position_event(&settle).unwrap()
     else {
         panic!("not a SettleSpread");
     };

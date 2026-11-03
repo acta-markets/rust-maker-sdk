@@ -12,20 +12,17 @@ use solana_sdk::{
     pubkey::Pubkey,
 };
 
-/// Settles a wallet maker's own position, including a vault writer.
+/// Settles a position the maker side of: on a sell the maker holds (a vault may write); on a
+/// buy the maker or a vault writes and a wallet holds. `maker_owner` signs and pays rent.
 pub fn build_settle_position_ix(
     program_id: Pubkey,
     maker_owner: Pubkey,
     position: &PositionInfo,
     market: &MarketInfo,
 ) -> Result<Instruction, ChainError> {
-    if position.side.is_taker_buy() {
-        return Err(ChainError::TakerBuyUnsupported);
-    }
+    let buy = position.side.is_taker_buy();
+    require_maker_side(maker_owner, position)?;
     if position.terms.is_spread() {
-        if position.holder != maker_owner {
-            return Err(ChainError::Identity("wallet maker owner"));
-        }
         return crate::chain::spreads::build_cash_settle_ix(
             program_id,
             maker_owner,
@@ -33,11 +30,8 @@ pub fn build_settle_position_ix(
             market,
         );
     }
-    if position.flags & !3 != 0 || position.flags2 != 0 || position.flags3 != 0 {
+    if position.flags & !7 != 0 || position.flags2 != 0 || position.flags3 != 0 {
         return Err(ChainError::InvalidAccountData);
-    }
-    if position.holder != maker_owner || position.flags & 2 != 0 {
-        return Err(ChainError::Identity("wallet maker owner"));
     }
     let market_pda = crate::quote::market_pda(
         &program_id,
@@ -62,27 +56,18 @@ pub fn build_settle_position_ix(
             return Err(ChainError::InvalidAccountData);
         }
     }
-    let otm = if market.is_put {
-        market.settlement_price >= position.terms.strike().value()
-    } else {
-        market.settlement_price <= position.terms.strike().value()
-    };
+    let otm = is_otm(position, market);
     let open = position.status == PositionStatus::Open;
-    if position.status != PositionStatus::Funded && !(otm && open) {
+    // An Open sell that finishes in the money is liquidated, not settled.
+    if position.status != PositionStatus::Funded && !(otm || buy) {
         return Err(ChainError::InvalidSettlementState);
     }
-    let underlying = (market.underlying_mint, market.underlying_token_program_id);
-    let quote = (market.quote_mint, market.quote_token_program_id);
-    let (collateral, settlement) = if market.is_put {
-        (quote, underlying)
-    } else {
-        (underlying, quote)
-    };
-    let (writer, holder) = if otm {
-        (collateral, settlement)
-    } else {
-        (settlement, collateral)
-    };
+    let Destinations {
+        collateral,
+        settlement,
+        writer,
+        holder,
+    } = destinations(position, market);
     let position_pda = pda::position(&program_id, position.order_id.as_bytes()).0;
     let mut accounts = vec![
         AccountMeta::new(maker_owner, true),
@@ -98,15 +83,15 @@ pub fn build_settle_position_ix(
         if open {
             AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID, false)
         } else {
-            AccountMeta::new(ata(&maker_owner, &holder.0, &holder.1), false)
+            AccountMeta::new(ata(&position.holder, &holder.0, &holder.1), false)
         },
-        AccountMeta::new_readonly(underlying.1, false),
-        AccountMeta::new_readonly(quote.1, false),
+        AccountMeta::new_readonly(market.underlying_token_program_id, false),
+        AccountMeta::new_readonly(market.quote_token_program_id, false),
     ];
     if position.flags & 1 != 0 {
         accounts.extend([
-            AccountMeta::new_readonly(underlying.0, false),
-            AccountMeta::new_readonly(quote.0, false),
+            AccountMeta::new_readonly(market.underlying_mint, false),
+            AccountMeta::new_readonly(market.quote_mint, false),
             AccountMeta::new(position.writer, false),
         ]);
     }
@@ -123,13 +108,8 @@ pub fn settle_position_sequence(
     position: &PositionInfo,
     market: &MarketInfo,
 ) -> Result<Vec<Instruction>, ChainError> {
-    if position.side.is_taker_buy() {
-        return Err(ChainError::TakerBuyUnsupported);
-    }
     if position.terms.is_spread() {
-        if position.holder != maker_owner {
-            return Err(ChainError::Identity("wallet maker owner"));
-        }
+        require_maker_side(maker_owner, position)?;
         return crate::chain::spreads::cash_settle_sequence(
             program_id,
             maker_owner,
@@ -138,37 +118,83 @@ pub fn settle_position_sequence(
         );
     }
     let settle = build_settle_position_ix(program_id, maker_owner, position, market)?;
+    let Destinations { writer, holder, .. } = destinations(position, market);
     let mut instructions = Vec::with_capacity(3);
-    if position.status == PositionStatus::Funded {
-        let otm = if market.is_put {
-            market.settlement_price >= position.terms.strike().value()
-        } else {
-            market.settlement_price <= position.terms.strike().value()
-        };
-        let underlying = (market.underlying_mint, market.underlying_token_program_id);
-        let quote = (market.quote_mint, market.quote_token_program_id);
-        let (writer, holder) = if market.is_put == otm {
-            (quote, underlying)
-        } else {
-            (underlying, quote)
-        };
-        if position.flags & 1 == 0 {
-            instructions.push(super::lifecycle::create_destination_ata(
-                maker_owner,
-                position.writer,
-                writer.0,
-                writer.1,
-            ));
-        }
+    // Each wallet that receives tokens needs its ATA; a vault side pays into its own legs.
+    let funded = position.status == PositionStatus::Funded;
+    if position.flags & 1 == 0 && (funded || position.side.is_taker_buy()) {
         instructions.push(super::lifecycle::create_destination_ata(
             maker_owner,
+            position.writer,
+            writer.0,
+            writer.1,
+        ));
+    }
+    if funded {
+        instructions.push(super::lifecycle::create_destination_ata(
             maker_owner,
+            position.holder,
             holder.0,
             holder.1,
         ));
     }
     instructions.push(settle);
     Ok(instructions)
+}
+
+/// The maker side: the holder on a sell, the writer on a buy. A vault writer may be settled by
+/// any signer; a vault holder settles through the vault route instead.
+fn require_maker_side(maker_owner: Pubkey, position: &PositionInfo) -> Result<(), ChainError> {
+    let ok = if position.side.is_taker_buy() {
+        position.flags & 1 != 0 || position.writer == maker_owner
+    } else {
+        position.flags & 2 == 0 && position.holder == maker_owner
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(ChainError::Identity("wallet maker owner"))
+    }
+}
+
+fn is_otm(position: &PositionInfo, market: &MarketInfo) -> bool {
+    if market.is_put {
+        market.settlement_price >= position.terms.strike().value()
+    } else {
+        market.settlement_price <= position.terms.strike().value()
+    }
+}
+
+struct Destinations {
+    collateral: (Pubkey, Pubkey),
+    settlement: (Pubkey, Pubkey),
+    /// Mint and token program the writer receives.
+    writer: (Pubkey, Pubkey),
+    /// Mint and token program the holder receives when funded.
+    holder: (Pubkey, Pubkey),
+}
+
+/// Mirrors settle: the writer gets collateral back when OTM or when a buy was never funded.
+fn destinations(position: &PositionInfo, market: &MarketInfo) -> Destinations {
+    let underlying = (market.underlying_mint, market.underlying_token_program_id);
+    let quote = (market.quote_mint, market.quote_token_program_id);
+    let (collateral, settlement) = if market.is_put {
+        (quote, underlying)
+    } else {
+        (underlying, quote)
+    };
+    let otm = is_otm(position, market);
+    let unfunded_buy = position.side.is_taker_buy() && position.status == PositionStatus::Open;
+    Destinations {
+        collateral,
+        settlement,
+        writer: if otm || unfunded_buy {
+            collateral
+        } else {
+            settlement
+        },
+        holder: if otm { settlement } else { collateral },
+    }
 }
 
 #[cfg(feature = "chain-rpc")]

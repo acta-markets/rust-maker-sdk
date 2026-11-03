@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.7.1", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.7.2", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -148,7 +148,7 @@ in-the-money funded position to the owner's ATA; no SDK call is needed.
 | `discovery` | `ws-client` | Read quotes, positions, markets and summary on `/maker/data` |
 | `indicative` | `ws-client` | Answer unsigned indicative-price requests |
 | `loopback_latency` | `ws-client` | Measure local managed-client latency |
-| `vault_operator` | `vault`, `http` | Vault session with checked fill and swap signing |
+| `vault_operator` | `vault`, `http` | Vault session quoting both sides, with checked fill and swap signing |
 | `vault_capital` | `chain-rpc` | Capital-cycle crank |
 | `curator_pt` | `chain-rpc`, `http` | Plan a PT route and simulate it; never sends |
 
@@ -206,8 +206,11 @@ See [`examples/taker_buy_quote.rs`](examples/taker_buy_quote.rs).
   any gap. Match error codes, not messages.
 - **Side.** Every RFQ, quote, position and trade carries `terms: OptionTerms` and
   `side`. Makers subscribe to `WsChannel::TakerBuyRfqs` to receive `buy` RFQs, physical
-  or spread, and quote them from custody. Vaults stay `sell` only; the builders
-  reject those buys with `taker_buy_unsupported`.
+  or spread, and quote them from custody. A vault sees both sides on its `vaults`
+  channel: it bids on a sell and holds, and with `SIGN_WRITER_QUOTES` it asks on a
+  buy and writes from its collateral leg. The buyer's wallet signs that open
+  (`VaultOpenIntent::Buy`); the vault signs only the quote. A vault never requests a
+  buy as taker (`taker_buy_unsupported`).
 
 ## Where to start in the API
 
@@ -222,6 +225,8 @@ See [`examples/taker_buy_quote.rs`](examples/taker_buy_quote.rs).
 | Fund and confirm | `PositionSnapshot::fund_instructions`, `confirm_signatures` |
 | Vault owner actions | `chain::vault::VaultManager`, `ChainClient::vault_manager` |
 | Vault operator session | `VaultOperatorClient`, `verify_and_sign_sponsored_tx`, `verify_and_sign_swap` |
+| Buy from a vault (wallet side) | `VaultManager::open_position_for_wallet_holder`, `verify_vault_open` with `VaultOpenIntent::Buy` |
+| Decode position events | `chain::events::decode_position_event` (event version 2) |
 | Vault capital cycle | `ChainClient::unfunded_positions`, `pending_capital_requests` |
 | PT routing | `chain::vault::curator` |
 | Venue limits, tokens, markets, vaults | `HttpClient` |

@@ -48,13 +48,15 @@ pub enum VaultSwapDirection {
 pub struct VaultDelegatePermissions(u32);
 
 impl VaultDelegatePermissions {
-    pub const KNOWN_MASK: u32 = 0b11_1111;
-    pub const OPEN_TAKER: Self = Self(1 << 0);
-    pub const SIGN_MAKER_QUOTES: Self = Self(1 << 1);
-    pub const FUND_MAKER: Self = Self(1 << 2);
+    pub const KNOWN_MASK: u32 = 0b111_1111;
+    pub const OPEN_AS_WRITER: Self = Self(1 << 0);
+    pub const SIGN_HOLDER_QUOTES: Self = Self(1 << 1);
+    pub const FUND_HOLDER: Self = Self(1 << 2);
     pub const REBALANCE: Self = Self(1 << 3);
     pub const PROCESS_CAPITAL: Self = Self(1 << 4);
     pub const SET_DEPOSIT_WINDOW: Self = Self(1 << 5);
+    /// Quotes that commit vault collateral: the vault writes what a wallet buys.
+    pub const SIGN_WRITER_QUOTES: Self = Self(1 << 6);
     pub const ALL: Self = Self(Self::KNOWN_MASK);
 
     #[must_use]
@@ -77,16 +79,22 @@ impl VaultDelegatePermissions {
         Self(self.0 | other.0)
     }
 
-    /// May sign quotes on the vault's behalf (`SIGN_MAKER_QUOTES`).
+    /// May quote sell RFQs as maker, the vault holding (`SIGN_HOLDER_QUOTES`).
     #[must_use]
     pub const fn can_maker(self) -> bool {
-        self.contains(Self::SIGN_MAKER_QUOTES)
+        self.contains(Self::SIGN_HOLDER_QUOTES)
     }
 
-    /// May open taker positions for the vault (`OPEN_TAKER`).
+    /// May quote buy RFQs as maker, the vault writing (`SIGN_WRITER_QUOTES`).
+    #[must_use]
+    pub const fn can_write_buys(self) -> bool {
+        self.contains(Self::SIGN_WRITER_QUOTES)
+    }
+
+    /// May request RFQs as taker, the vault writing (`OPEN_AS_WRITER`).
     #[must_use]
     pub const fn can_taker(self) -> bool {
-        self.contains(Self::OPEN_TAKER)
+        self.contains(Self::OPEN_AS_WRITER)
     }
 }
 

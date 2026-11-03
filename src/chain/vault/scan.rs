@@ -19,7 +19,7 @@ pub struct PendingCapitalRequests {
 
 impl ChainClient {
     /// Positions the vault bought as a maker that still await
-    /// `VaultFundMakerPosition`, read from the program's accounts.
+    /// `FundPositionForVaultHolder`, read from the program's accounts.
     pub async fn unfunded_positions(
         &self,
         vault: &Pubkey,

@@ -133,16 +133,16 @@ fn vault_auth_success_roundtrip() {
     assert_eq!(data.permissions, permissions);
     assert!(
         data.permissions
-            .contains(VaultDelegatePermissions::OPEN_TAKER)
+            .contains(VaultDelegatePermissions::OPEN_AS_WRITER)
     );
     assert!(
         data.permissions
-            .contains(VaultDelegatePermissions::SIGN_MAKER_QUOTES)
+            .contains(VaultDelegatePermissions::SIGN_HOLDER_QUOTES)
     );
     assert!(
         !data
             .permissions
-            .contains(VaultDelegatePermissions::FUND_MAKER)
+            .contains(VaultDelegatePermissions::FUND_HOLDER)
     );
     assert_eq!(data.operator_kind, VaultOperatorKind::Delegate);
     assert_eq!(message.request_id(), None);

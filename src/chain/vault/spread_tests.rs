@@ -98,6 +98,39 @@ fn terms(kind: SpreadType) -> VaultSpreadTerms {
 }
 
 #[test]
+fn a_wallet_buys_a_spread_the_vault_writes_with_holder_byte_one() {
+    let vault = manager(7);
+    let holder = key(20);
+    let sell = terms(SpreadType::CallSpread);
+    assert!(
+        vault
+            .open_spread_for_wallet_holder(keeper(), holder, &sell)
+            .is_err()
+    );
+    let buy = VaultSpreadTerms {
+        side: TakerSide::Buy,
+        ..sell
+    };
+    assert!(vault.open_spread_as_writer(keeper(), key(9), &buy).is_err());
+    let built = vault
+        .open_spread_for_wallet_holder(keeper(), holder, &buy)
+        .unwrap();
+    let ix = &built.instruction;
+    assert_eq!((ix.data[0], ix.data.len(), ix.data[82]), (78, 83, 1));
+    assert_eq!(
+        built.order_id,
+        buy.order_id(&vault.args.program_id, &vault.addresses.vault, &holder)
+            .unwrap()
+    );
+    assert!(ix.accounts[1].is_signer && ix.accounts[1].pubkey == holder);
+    assert!(!ix.accounts[7].is_signer && ix.accounts[7].pubkey == holder);
+    assert_eq!(
+        ix.accounts[8].pubkey,
+        crate::chain::ix::derive_associated_token_address(&holder, &key(4), &TOKEN_PROGRAM_ID)
+    );
+}
+
+#[test]
 fn vault_spread_routes_use_spread_opcodes_layout_and_quote_leg_custody() {
     let vault = manager(7);
     let holder = manager(8);
@@ -107,14 +140,18 @@ fn vault_spread_routes_use_spread_opcodes_layout_and_quote_leg_custody() {
             crate::chain::ix::derive_associated_token_address(owner, &key(4), &TOKEN_PROGRAM_ID)
         };
         let taker = vault
-            .open_spread_as_taker(keeper(), key(9), &terms)
+            .open_spread_as_writer(keeper(), key(9), &terms)
             .unwrap();
         assert_eq!(
-            (taker.instruction.data[0], taker.instruction.data.len()),
-            (78, 82)
+            (
+                taker.instruction.data[0],
+                taker.instruction.data.len(),
+                taker.instruction.data[82]
+            ),
+            (78, 83, 0)
         );
         assert_eq!(taker.instruction.data[1], kind as u8);
-        assert_eq!(&taker.instruction.data[74..], &120u64.to_le_bytes());
+        assert_eq!(&taker.instruction.data[74..82], &120u64.to_le_bytes());
         assert_eq!(taker.instruction.accounts.len(), 23);
         assert_eq!(
             taker.addresses.collateral_ata,
@@ -127,7 +164,7 @@ fn vault_spread_routes_use_spread_opcodes_layout_and_quote_leg_custody() {
                 .unwrap()
         );
         let maker = vault
-            .open_spread_as_maker(keeper(), key(9), &terms)
+            .open_spread_as_holder(keeper(), key(9), &terms)
             .unwrap();
         assert_eq!(
             (maker.instruction.data[0], maker.instruction.accounts.len()),
@@ -154,7 +191,7 @@ fn vault_spread_routes_use_spread_opcodes_layout_and_quote_leg_custody() {
         };
         assert_ne!(
             vault
-                .open_spread_as_taker(keeper(), key(9), &moved)
+                .open_spread_as_writer(keeper(), key(9), &moved)
                 .unwrap()
                 .order_id,
             taker.order_id
@@ -179,7 +216,7 @@ fn vault_spread_routes_use_spread_opcodes_layout_and_quote_leg_custody() {
             ..terms(SpreadType::CallSpread)
         },
     ] {
-        assert!(vault.open_spread_as_maker(keeper(), key(9), &bad).is_err());
+        assert!(vault.open_spread_as_holder(keeper(), key(9), &bad).is_err());
     }
 }
 
@@ -313,6 +350,7 @@ fn verify_served(
             writer.args.actor
         }
         VaultOpenIntent::Fill { taker, .. } => *taker,
+        VaultOpenIntent::Buy { holder, .. } => *holder,
     };
     let table = lookup_table_for_open(keeper, participant, open, ixs);
     verify_served_with_tables(intent, keeper, order_id, ixs, std::slice::from_ref(&table))
@@ -351,7 +389,7 @@ fn served_vault_spread_sales_verify_under_the_shared_order_layout() {
         let market = terms.market(&program);
 
         let open = writer
-            .open_spread_as_taker(keeper, maker_owner, &terms)
+            .open_spread_as_writer(keeper, maker_owner, &terms)
             .unwrap();
         assert_eq!(
             open.order_id,
@@ -421,7 +459,7 @@ fn served_vault_spread_fills_verify_opcode_79_with_v0_alt_and_reject_tampering()
     let keeper = keeper();
     let taker = key(9);
     let (terms, _) = vector_terms("spread_call");
-    let open = holder.open_spread_as_maker(keeper, taker, &terms).unwrap();
+    let open = holder.open_spread_as_holder(keeper, taker, &terms).unwrap();
     assert_eq!(open.instruction.data[0], 79);
 
     let intent = VaultOpenIntent::Fill {
@@ -475,7 +513,7 @@ fn served_vault_open_requires_the_keeper_participant_and_dynamic_accounts_to_be_
     let maker_owner = key(9);
     let terms = terms(SpreadType::CallSpread);
     let open = writer
-        .open_spread_as_taker(keeper, maker_owner, &terms)
+        .open_spread_as_writer(keeper, maker_owner, &terms)
         .unwrap();
     let intent = VaultOpenIntent::Sale {
         keeper,
@@ -571,7 +609,7 @@ fn served_vault_spread_sales_reject_tampered_strikes_collateral_and_accounts() {
     for name in ["spread_call", "spread_put"] {
         let (terms, _) = vector_terms(name);
         let open = writer
-            .open_spread_as_taker(keeper, maker_owner, &terms)
+            .open_spread_as_writer(keeper, maker_owner, &terms)
             .unwrap();
         let served = served_sale(keeper, &open, &maker_signer);
         let sale = |terms| VaultOpenIntent::Sale {
@@ -646,7 +684,7 @@ fn served_vault_spread_sales_reject_tampered_strikes_collateral_and_accounts() {
                 Err(VaultIntentError::OrderId)
             );
             let rebuilt = writer
-                .open_spread_as_taker(keeper, maker_owner, &agreed)
+                .open_spread_as_writer(keeper, maker_owner, &agreed)
                 .unwrap();
             assert_eq!(
                 verify_served(&sale(agreed), keeper, &open, rebuilt.order_id, &served),

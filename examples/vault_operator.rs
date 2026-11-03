@@ -1,5 +1,9 @@
 //! Operate a vault over `/vault`: quote, follow the projection, sign fills and swaps only after
 //! verifying them against locally known terms (`sign_fill`, `rebalance`).
+//!
+//! The vault sees both sides on the `vaults` channel, only for its cycle expiry once Active. On a
+//! sell it bids and holds; on a buy it asks and writes from its collateral leg, which needs
+//! `SIGN_WRITER_QUOTES`. The buyer's wallet signs that transaction; the vault signs only the quote.
 
 #[allow(dead_code)]
 mod common;
@@ -82,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         operator_kind = ?auth.operator_kind,
         can_maker = client.can_maker(),
+        can_write_buys = client.can_write_buys(),
         can_taker = client.can_taker(),
         "vault session ready"
     );
@@ -97,14 +102,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(format!("message stream failed: {error}").into()),
         };
         match msg.message() {
-            ServerMessage::RfqBroadcast(rfq) if client.can_maker() && !rfq.terms.is_spread() => {
+            ServerMessage::RfqBroadcast(rfq) if !rfq.terms.is_spread() => {
+                let price = if rfq.side.is_taker_buy() {
+                    if !client.can_write_buys() {
+                        continue;
+                    }
+                    Price::new(2_000_000_000)
+                } else {
+                    if !client.can_maker() {
+                        continue;
+                    }
+                    Price::new(1_000_000_000)
+                };
                 let valid_until =
                     QuoteExpiry::after(lifetime).ok_or("system clock is before the Unix epoch")?;
                 let binding = RfqBinding::from_broadcast(rfq)?;
                 let quote = match client.sign_quote(
                     &binding
                         .quote()
-                        .price(Price::new(1_000_000_000))
+                        .price(price)
                         .valid_until(valid_until)
                         .venue(&venue)
                         .nonce(Nonce::new(NONCE_GEN.next_u64()?)),

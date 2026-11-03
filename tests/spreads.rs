@@ -475,36 +475,56 @@ fn chain_layout_events_open_and_settle() {
         })
         .is_err()
     );
-    let mut event = vec![0; 223];
-    event[..6].copy_from_slice(b"ACTA\x01\x4f");
-    event[134] = 3;
-    event[215..].copy_from_slice(&120u64.to_le_bytes());
-    assert!(matches!(
-        events::decode_spread_event(&event).unwrap(),
-        Some(events::SpreadEvent::Open(events::OpenSpreadEvent {
-            upper_strike: 120,
-            ..
-        }))
-    ));
-    event[5] = 86;
-    assert!(matches!(
-        events::decode_spread_event(&event).unwrap(),
-        Some(events::SpreadEvent::Open(events::OpenSpreadEvent {
-            side: TakerSide::Buy,
-            upper_strike: 120,
-            ..
-        }))
-    ));
+    // position, market, order id, writer, holder; flags, type; then nine u64 fields.
+    let mut event = vec![0; 240];
+    event[..6].copy_from_slice(b"ACTA\x02\x0b");
+    event[166] = 1 | 4;
+    event[167] = 3;
+    event[168..176].copy_from_slice(&100u64.to_le_bytes());
+    event[176..184].copy_from_slice(&120u64.to_le_bytes());
+    let Some(events::PositionEvent::Opened(opened)) =
+        events::decode_position_event(&event).unwrap()
+    else {
+        panic!("position opened");
+    };
+    assert_eq!((opened.side, opened.flags), (TakerSide::Buy, 5));
+    assert!(matches!(opened.terms, OptionTerms::PutSpread { .. }));
+    event[166] = 0;
+    let Some(events::PositionEvent::Opened(opened)) =
+        events::decode_position_event(&event).unwrap()
+    else {
+        panic!("position opened");
+    };
+    assert_eq!(opened.side, TakerSide::Sell);
+    event[167] = 0;
+    let Some(events::PositionEvent::Opened(opened)) =
+        events::decode_position_event(&event).unwrap()
+    else {
+        panic!("position opened");
+    };
+    assert_eq!(
+        opened.terms,
+        OptionTerms::CoveredCall {
+            strike: Strike::new(100)
+        }
+    );
     event.push(0);
-    assert!(events::decode_spread_event(&event).is_err());
+    assert!(events::decode_position_event(&event).is_err());
+    let mut v1 = vec![0; 223];
+    v1[..6].copy_from_slice(b"ACTA\x01\x4f");
+    assert!(
+        events::decode_position_event(&v1).is_err(),
+        "version 1 is not decoded"
+    );
     // settler, taker, maker owner, position, market; status, is_otm, payoff, return.
     let mut event = vec![0; 184];
-    event[..6].copy_from_slice(b"ACTA\x01\x50");
+    event[..6].copy_from_slice(b"ACTA\x02\x4f");
     event[38..70].copy_from_slice(&[7; 32]);
     event[166] = 4;
     event[168..176].copy_from_slice(&9u64.to_le_bytes());
     event[176..184].copy_from_slice(&12u64.to_le_bytes());
-    let Some(events::SpreadEvent::Settle(settle)) = events::decode_spread_event(&event).unwrap()
+    let Some(events::PositionEvent::SpreadSettled(settle)) =
+        events::decode_position_event(&event).unwrap()
     else {
         panic!("settle event");
     };

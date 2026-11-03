@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.2 - 2026-11-04
+
+Requires the vault-writer program upgrade.
+
+- Vaults write what wallets buy. `VaultManager::open_position_for_wallet_holder` and
+  `open_spread_for_wallet_holder` build `OpenPositionForVaultWriter` /
+  `OpenSpreadForVaultWriter` with holder byte 1 (the wallet signs slot 1, repeats in slot 7 and
+  pays from its quote account). `VaultOpenIntent::Buy` lets the buying wallet verify the served
+  transaction; the vault operator client refuses to sign it.
+- Breaking renames by position role, opcodes unchanged: `open_position_as_writer`,
+  `open_spread_as_writer` (holder byte 0), `open_position_as_holder`, `open_spread_as_holder`,
+  `fund_holder_position`; delegate bits `OPEN_AS_WRITER`, `SIGN_HOLDER_QUOTES`, `FUND_HOLDER`
+  and new `SIGN_WRITER_QUOTES` (`1 << 6`, `KNOWN_MASK` 0x7f). `can_write_buys` on the
+  permissions and the vault client.
+- Events version 2: `chain::events::decode_position_event` reads `PositionOpened` (every open:
+  writer, holder, flags, side, terms, gross and net premium, collateral) and `SettleSpread`
+  (kind 79); it replaces `decode_spread_event`. Version 1 envelopes are rejected.
+- `build_settle_position_ix` / `settle_position_sequence` settle buys from the writer side: a
+  maker wallet that wrote it or anyone for a vault writer. An unfunded buy returns collateral
+  to the writer.
+- The vault operator example quotes both sides.
+
 ## 0.7.1 - 2026-11-03
 
 - `RfqCloseReason::NoEligibleMakers` (`no_eligible_makers`): no maker could receive the RFQ,

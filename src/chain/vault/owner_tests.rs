@@ -241,6 +241,53 @@ fn settlement_rejects_wrong_owner_market_and_lifecycle() {
     assert!(build_settle_position_ix(key(9), key(1), &p, &m).is_err());
 }
 #[test]
+fn a_vault_written_buy_settles_its_collateral_back_unless_exercised() {
+    use crate::chain::ix::derive_associated_token_address as ata;
+    let (mut p, mut m) = settlement(false, true);
+    p.side = TakerSide::Buy;
+    p.flags = 1 | 4;
+    m.settlement_price = 150;
+    let collateral = (key(6), TOKEN_PROGRAM_ID);
+    let settlement_leg = (key(5), TOKEN_2022_PROGRAM_ID);
+    // Unfunded and in the money: never exercised, collateral returns to the vault.
+    let settler = Pubkey::new_unique();
+    let ix = build_settle_position_ix(key(9), settler, &p, &m).unwrap();
+    assert_eq!(
+        ix.accounts[5].pubkey,
+        ata(&p.writer, &collateral.0, &collateral.1)
+    );
+    assert_eq!(ix.accounts.len(), 12, "vault tail follows");
+    assert_eq!(ix.accounts[11].pubkey, p.writer);
+    let sequence = settle_position_sequence(key(9), settler, &p, &m).unwrap();
+    assert_eq!(
+        sequence.len(),
+        1,
+        "a vault writer needs no ATA, an unfunded holder receives nothing"
+    );
+    // Funded and in the money: the vault receives the deposit, the wallet the collateral.
+    p.status = PositionStatus::Funded;
+    let ix = build_settle_position_ix(key(9), settler, &p, &m).unwrap();
+    assert_eq!(
+        ix.accounts[5].pubkey,
+        ata(&p.writer, &settlement_leg.0, &settlement_leg.1)
+    );
+    assert_eq!(
+        ix.accounts[6].pubkey,
+        ata(&p.holder, &collateral.0, &collateral.1)
+    );
+    assert_eq!(
+        settle_position_sequence(key(9), settler, &p, &m)
+            .unwrap()
+            .len(),
+        2
+    );
+    // A wallet maker writing a buy must be the one settling it.
+    p.flags = 4;
+    assert!(build_settle_position_ix(key(9), settler, &p, &m).is_err());
+    assert!(build_settle_position_ix(key(9), p.writer, &p, &m).is_ok());
+}
+
+#[test]
 fn lifecycle_rejects_invalid_intent() {
     let m = manager(false);
     assert!(m.bootstrap(key(2), 99_999_999).is_err());
@@ -284,10 +331,12 @@ fn general_position_decoder_preserves_unknown_flags_but_settlement_rejects_them(
         &key(9),
     )
     .unwrap();
+    // On a buy the maker side is the writer, not the holder.
     assert!(matches!(
-        build_settle_position_ix(key(9), key(1), &buy, &m),
-        Err(crate::chain::ChainError::TakerBuyUnsupported)
+        build_settle_position_ix(key(9), buy.holder, &buy, &m),
+        Err(crate::chain::ChainError::Identity(_))
     ));
+    assert!(build_settle_position_ix(key(9), buy.writer, &buy, &m).is_ok());
     for (index, value) in [(5, 8), (6, 1), (7, 1)] {
         let mut bytes = data.clone();
         bytes[index] = value;

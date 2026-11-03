@@ -19,6 +19,7 @@ use crate::types::OrderId;
 use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
 
 const FIXTURE: &str = include_str!("../../../tests/fixtures/vault_served_tx.json");
+const BUY_FIXTURE: &str = include_str!("../../../tests/fixtures/vault_served_buy_tx.json");
 const BOUNDS: ComputeBudgetBounds = ComputeBudgetBounds {
     max_unit_limit: 400_000,
     max_unit_price_micro_lamports: 1_000,
@@ -645,7 +646,7 @@ fn vault_trade_builder_refuses_taker_buy_before_constructing_instructions() {
     trade_terms.side = crate::types::TakerSide::Buy;
 
     assert!(matches!(
-        manager(&case, "writer").open_position_as_taker(
+        manager(&case, "writer").open_position_as_writer(
             Pubkey::new_unique(),
             Pubkey::new_unique(),
             &trade_terms,
@@ -1579,4 +1580,52 @@ fn recovery_stage_pins_main_valuation_and_hop_program() {
     let mut truncated = ixs.clone();
     truncated[s].accounts.truncate(tail + 1);
     assert!(check(&truncated).is_err());
+}
+
+/// The backend builds these; the buying wallet checks them, never the vault.
+#[test]
+fn served_vault_writer_buys_verify_for_the_wallet_holder() {
+    let cases = serde_json::from_str::<Vec<Value>>(BUY_FIXTURE).unwrap();
+    assert_eq!(cases.len(), 4);
+    for case in &cases {
+        let writer = manager(case, "writer");
+        let to_sign = SponsoredTxToSignData {
+            order_id: OrderId::from_hex(case["position"]["order_id"].as_str().unwrap()).unwrap(),
+            tx_base64: served_tx(case),
+            last_valid_block_height: 1,
+            signature_deadline: std::time::UNIX_EPOCH,
+        };
+        let buy = VaultTradeTerms {
+            side: crate::types::TakerSide::Buy,
+            ..terms(case)
+        };
+        let intent = |holder: Pubkey, terms: VaultTradeTerms| VaultOpenIntent::Buy {
+            keeper: keeper(case),
+            writer: &writer,
+            holder,
+            terms: VaultSaleTerms::Physical(terms),
+        };
+        let holder = key(&case["holder"]);
+        verify_vault_open(&to_sign, &intent(holder, buy), &[table(case)], BOUNDS)
+            .unwrap_or_else(|error| panic!("buy rejected: {error}"));
+        assert!(
+            verify_vault_open(
+                &to_sign,
+                &intent(Pubkey::new_unique(), buy),
+                &[table(case)],
+                BOUNDS
+            )
+            .is_err()
+        );
+        assert!(
+            verify_vault_open(
+                &to_sign,
+                &intent(holder, terms(case)),
+                &[table(case)],
+                BOUNDS
+            )
+            .is_err(),
+            "a sell intent must not accept a served buy"
+        );
+    }
 }

@@ -1,22 +1,24 @@
 use super::ChainError;
-use crate::spreads::SpreadType;
-use crate::types::TakerSide;
+use crate::types::{OptionTerms, Strike, TakerSide};
 
+/// The one event every open emits, whoever writes and holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenSpreadEvent {
-    pub side: TakerSide,
-    pub user: [u8; 32],
-    pub maker_pda: [u8; 32],
-    pub market_pda: [u8; 32],
+pub struct PositionOpenedEvent {
     pub position_pda: [u8; 32],
-    pub position_type: SpreadType,
-    pub strike: u64,
-    pub upper_strike: u64,
+    pub market_pda: [u8; 32],
+    pub order_id: [u8; 32],
+    pub writer: [u8; 32],
+    pub holder: [u8; 32],
+    /// `Position.flags`: bit 0 a vault writes, bit 1 a vault holds, bit 2 the taker bought.
+    pub flags: u8,
+    pub side: TakerSide,
+    pub terms: OptionTerms,
     pub quantity: u64,
     pub price: u64,
+    pub gross_premium: u64,
+    pub net_premium: u64,
+    pub collateral: u64,
     pub valid_until: u64,
-    pub order_id: [u8; 32],
-    pub total_premium: u64,
     pub created_at: u64,
 }
 
@@ -33,15 +35,21 @@ pub struct SettleSpreadEvent {
     pub writer_return: u64,
 }
 
+/// The position events this module decodes; other kinds are skipped.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SpreadEvent {
-    Open(OpenSpreadEvent),
-    Settle(SettleSpreadEvent),
+pub enum PositionEvent {
+    Opened(PositionOpenedEvent),
+    SpreadSettled(SettleSpreadEvent),
 }
 
-/// Decode an ACTA binary envelope. Other event kinds return None.
-pub fn decode_spread_event(data: &[u8]) -> Result<Option<SpreadEvent>, ChainError> {
-    if data.len() < 6 || &data[..5] != b"ACTA\x01" {
+const HEADER: &[u8; 5] = b"ACTA\x02";
+const POSITION_OPENED: u8 = 11;
+const SETTLE_SPREAD: u8 = 79;
+const FLAG_TAKER_BUY: u8 = 1 << 2;
+
+/// Decode an ACTA version-2 envelope. Other event kinds return None.
+pub fn decode_position_event(data: &[u8]) -> Result<Option<PositionEvent>, ChainError> {
+    if data.len() < 6 || &data[..5] != HEADER {
         return Err(ChainError::InvalidAccountData);
     }
     let bytes = &data[6..];
@@ -59,36 +67,48 @@ pub fn decode_spread_event(data: &[u8]) -> Result<Option<SpreadEvent>, ChainErro
         Ok(u64::from_le_bytes(value))
     };
     Ok(Some(match data[5] {
-        kind @ (79 | 86) => {
-            if bytes.len() != 217 {
+        POSITION_OPENED => {
+            if bytes.len() != 234 {
                 return Err(ChainError::InvalidAccountData);
             }
-            SpreadEvent::Open(OpenSpreadEvent {
-                side: if kind == 86 {
+            let flags = bytes[160];
+            let product = crate::ChainPositionType::try_from(bytes[161])
+                .map_err(|error| ChainError::InvalidPositionType(error.0))?;
+            let strike = Strike::new(word(162)?);
+            let upper = product
+                .is_spread()
+                .then(|| word(170))
+                .transpose()?
+                .map(Strike::new);
+            PositionEvent::Opened(PositionOpenedEvent {
+                position_pda: array(0)?,
+                market_pda: array(32)?,
+                order_id: array(64)?,
+                writer: array(96)?,
+                holder: array(128)?,
+                flags,
+                side: if flags & FLAG_TAKER_BUY != 0 {
                     TakerSide::Buy
                 } else {
                     TakerSide::Sell
                 },
-                user: array(0)?,
-                maker_pda: array(32)?,
-                market_pda: array(64)?,
-                position_pda: array(96)?,
-                position_type: SpreadType::try_from(bytes[128])?,
-                strike: word(129)?,
-                quantity: word(137)?,
-                price: word(145)?,
-                valid_until: word(153)?,
-                order_id: array(161)?,
-                total_premium: word(193)?,
-                created_at: word(201)?,
-                upper_strike: word(209)?,
+                terms: OptionTerms::from_chain(crate::ChainTerms::from_parts(
+                    product, strike, upper,
+                )?),
+                quantity: word(178)?,
+                price: word(186)?,
+                gross_premium: word(194)?,
+                net_premium: word(202)?,
+                collateral: word(210)?,
+                valid_until: word(218)?,
+                created_at: word(226)?,
             })
         }
-        80 => {
+        SETTLE_SPREAD => {
             if bytes.len() != 178 || bytes[160] != 4 || bytes[161] > 1 {
                 return Err(ChainError::InvalidAccountData);
             }
-            SpreadEvent::Settle(SettleSpreadEvent {
+            PositionEvent::SpreadSettled(SettleSpreadEvent {
                 settler: array(0)?,
                 writer: array(32)?,
                 holder: array(64)?,
