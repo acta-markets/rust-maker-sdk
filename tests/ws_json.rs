@@ -995,6 +995,7 @@ proptest! {
             Just(RfqCloseReason::Filled),
             Just(RfqCloseReason::MarketExpired),
             Just(RfqCloseReason::LadderTimeout),
+            Just(RfqCloseReason::NoEligibleMakers),
         ],
     ) {
         let rfq_id = Uuid::from_bytes(rfq_bytes);

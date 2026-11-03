@@ -12,6 +12,8 @@ pub enum RfqCloseReason {
     Filled,
     MarketExpired,
     LadderTimeout,
+    /// No maker could receive the RFQ, so it closed at once instead of at its TTL.
+    NoEligibleMakers,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]

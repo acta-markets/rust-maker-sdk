@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1 - 2026-11-03
+
+- `RfqCloseReason::NoEligibleMakers` (`no_eligible_makers`): no maker could receive the RFQ,
+  so the server closes it at once instead of at its TTL. Only the taker receives it; a 0.7.0
+  taker reads it as an unreadable frame.
+
 ## 0.7.0 - 2026-11-03
 
 - Breaking rename, wire unchanged: `deposit_premium`/`withdraw_premium` are `maker_deposit`/
