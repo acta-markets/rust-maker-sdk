@@ -10,6 +10,15 @@ use std::time::{Duration, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[test]
+fn ladder_timeout_is_not_a_close_reason() {
+    assert!(serde_json::from_value::<RfqCloseReason>(json!("ladder_timeout")).is_err());
+    assert_eq!(
+        serde_json::from_value::<RfqCloseReason>(json!("no_eligible_makers")).unwrap(),
+        RfqCloseReason::NoEligibleMakers
+    );
+}
+
+#[test]
 fn auth_success_requires_expires_at() {
     for data in [
         json!({"session_id":"s"}),
@@ -994,7 +1003,6 @@ proptest! {
             Just(RfqCloseReason::TakerCancelled),
             Just(RfqCloseReason::Filled),
             Just(RfqCloseReason::MarketExpired),
-            Just(RfqCloseReason::LadderTimeout),
             Just(RfqCloseReason::NoEligibleMakers),
         ],
     ) {

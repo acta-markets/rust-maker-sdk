@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.3 - 2026-11-05
+
+- Breaking: `RfqCloseReason::LadderTimeout` is removed; the server never sends
+  `ladder_timeout`, and an `RfqClosed` carrying it now fails to decode like any unknown reason.
+
 ## 0.7.2 - 2026-11-04
 
 Requires the vault-writer program upgrade.

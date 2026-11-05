@@ -11,7 +11,6 @@ pub enum RfqCloseReason {
     TakerCancelled,
     Filled,
     MarketExpired,
-    LadderTimeout,
     /// No maker could receive the RFQ, so it closed at once instead of at its TTL.
     NoEligibleMakers,
 }
