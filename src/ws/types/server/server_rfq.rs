@@ -79,6 +79,16 @@ pub struct RfqBroadcastMessage {
     pub sent_at_unix_ms: SystemTime,
 }
 
+/// Another maker's quote was accepted; the RFQ takes no quotes until it closes or becomes available again.
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RfqLockedMessage {
+    pub rfq_id: Uuid,
+    pub rfq_version: RfqVersion,
+    #[serde_as(as = "UnixSeconds")]
+    pub locked_at: SystemTime,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqAvailableAgainMessage {

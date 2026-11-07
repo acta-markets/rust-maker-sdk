@@ -52,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         request_id: req.request_id,
                         market: MarketId::new(req.market.market_pda),
                         position_type: req.position_type,
+                        side: req.side,
                         prices,
                     })
                     .await?;

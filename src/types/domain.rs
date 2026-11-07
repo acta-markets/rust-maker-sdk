@@ -13,6 +13,8 @@ pub enum RfqCloseReason {
     MarketExpired,
     /// No maker could receive the RFQ, so it closed at once instead of at its TTL.
     NoEligibleMakers,
+    /// The server stopped before the order reached the keeper; quotes are cancelled.
+    ServerShutdown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]

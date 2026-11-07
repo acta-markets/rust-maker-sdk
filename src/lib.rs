@@ -9,6 +9,7 @@
 )]
 
 pub mod error;
+pub mod io_observer;
 pub mod network;
 pub mod nonce;
 pub mod orders;
@@ -21,7 +22,7 @@ pub mod ws;
 pub use error::ActaSdkError;
 pub use network::{DEVNET_API, DEVNET_WS, MAINNET_API, MAINNET_WS};
 
-pub const WS_PROTOCOL_VERSION: &str = "1.0.0";
+pub const WS_PROTOCOL_VERSION: &str = "1.1.0";
 
 /// The same on devnet and mainnet; `/api/v1/venue` `program_id` is authoritative.
 pub const ACTA_PROGRAM_ID: [u8; 32] =

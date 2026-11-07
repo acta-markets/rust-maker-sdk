@@ -727,7 +727,8 @@ mod tests {
             "position": {"revision": {"slot": 1, "transaction_index": 0, "instruction_index": 0}, "pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D", "market": "11111111111111111111111111111111", "underlying_mint": "opdhLMLuFCTUEq3YCwdtgqfuhtMqdkHBsJf6YrHfUFF", "quote_mint": "Aa8SVbHR7yKKA6Zq2M2Yw9jGvNsZkMD6QKwCCCR7vgeA",
                 "terms": {"type": "covered_call", "strike": 1}, "side": "sell", "state": "open", "quantity": 2,
                 "price": 3, "total_premium": 6, "created_at": 1, "expiry_ts": 2,
-                "underlying_decimals": 9, "quote_decimals": 6},
+                "underlying_decimals": 9, "quote_decimals": 6,
+                "underlying_price": {"type": "available", "price": 150, "published_at": 1}},
             "update_type": "created"
         }}),
         serde_json::json!({"type": "TradeExecuted", "data": {"trade": {

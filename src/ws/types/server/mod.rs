@@ -52,6 +52,7 @@ pub enum ServerMessage {
     QuoteOutbid(QuoteOutbidMessage),
     QuoteFilled(QuoteFilledMessage),
     RfqAvailableAgain(RfqAvailableAgainMessage),
+    RfqLocked(RfqLockedMessage),
     QuoteExpired(QuoteExpiredMessage),
     QuoteRejected(QuoteRejectedMessage),
     ActiveRfqs(ActiveRfqsData),
@@ -308,6 +309,22 @@ pub enum ServerError {
     Generic { code: WsErrorCode, message: String },
 }
 
+impl ServerError {
+    /// The RFQ or quote moved on before the request arrived (locked, closed, expired, gone).
+    /// Normal quoting races, not faults.
+    pub const fn is_quote_race(&self) -> bool {
+        matches!(
+            self,
+            Self::RfqNotFound
+                | Self::RfqNotActive
+                | Self::RfqAlreadyLocked
+                | Self::QuoteLocked { .. }
+                | Self::QuoteNotFound
+                | Self::QuoteExpired
+        )
+    }
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WelcomeData {
@@ -401,6 +418,7 @@ impl ServerMessage {
             | Self::QuoteOutbid(_)
             | Self::QuoteFilled(_)
             | Self::RfqAvailableAgain(_)
+            | Self::RfqLocked(_)
             | Self::QuoteExpired(_)
             | Self::QuoteRejected(_)
             | Self::RfqSkipped(_)

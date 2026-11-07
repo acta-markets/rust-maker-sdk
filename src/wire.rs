@@ -19,8 +19,15 @@ pub enum WireError {
     InvalidLength { expected: usize, actual: usize },
 }
 
+pub(crate) fn strip_0x(s: &str) -> &str {
+    match s.strip_prefix("0x") {
+        Some(rest) => rest,
+        None => s,
+    }
+}
+
 pub fn decode_hex_32(hex_str: &str) -> Result<[u8; 32], WireError> {
-    let trimmed = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    let trimmed = strip_0x(hex_str);
     let bytes = hex::decode(trimmed).map_err(|err| WireError::InvalidHex(err.to_string()))?;
     if bytes.len() != 32 {
         return Err(WireError::InvalidLength {

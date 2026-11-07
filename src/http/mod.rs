@@ -90,7 +90,14 @@ struct Cached {
 impl HttpClient {
     /// `base_url` is the API origin, e.g. `https://beta-api.acta.markets`.
     pub fn new(base_url: impl Into<String>) -> Result<Self, HttpError> {
-        let client = reqwest::Client::builder().timeout(TIMEOUT).build()?;
+        static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+        let client = match CLIENT.get() {
+            Some(client) => client.clone(),
+            None => {
+                let client = reqwest::Client::builder().timeout(TIMEOUT).build()?;
+                CLIENT.get_or_init(|| client).clone()
+            }
+        };
         Ok(Self::with_client(client, base_url))
     }
 
@@ -284,11 +291,10 @@ impl HttpClient {
         if let crate::ws::types::Cursor::After { id } = cursor {
             url.query_pairs_mut().append_pair("cursor", id);
         }
-        Ok(format!(
-            "{}?{}",
-            url.path(),
-            url.query().unwrap_or_default()
-        ))
+        Ok(match url.query() {
+            Some(query) => format!("{}?{query}", url.path()),
+            None => url.path().to_owned(),
+        })
     }
 
     async fn collect<T: DeserializeOwned>(
@@ -314,7 +320,7 @@ impl HttpClient {
         if let Some(etag) = self.cached(path, |cached| cached.etag.clone()) {
             request = request.header(IF_NONE_MATCH, etag);
         }
-        let response = request.send().await?;
+        let response = crate::io_observer::send(request, "acta", path).await?;
         let status = response.status();
         if status == StatusCode::NOT_MODIFIED
             && let Some(body) = self.cached(path, |cached| Arc::clone(&cached.body))
@@ -322,7 +328,9 @@ impl HttpClient {
             return Ok(serde_json::from_slice(&body)?);
         }
         if !status.is_success() {
-            let body = response.text().await?;
+            let body =
+                String::from_utf8_lossy(&crate::io_observer::bytes(response, "acta", path).await?)
+                    .into_owned();
             return Err(HttpError::Status {
                 status: status.as_u16(),
                 body,
@@ -333,14 +341,14 @@ impl HttpClient {
             .get(ETAG)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        let body = response.bytes().await?;
+        let body = crate::io_observer::bytes(response, "acta", path).await?;
         let value = serde_json::from_slice(&body)?;
         if let Some(etag) = etag {
             let _ = self.cache().insert(
                 path.to_owned(),
                 Cached {
                     etag,
-                    body: Arc::from(body.as_ref()),
+                    body: Arc::from(body.as_slice()),
                 },
             );
         }

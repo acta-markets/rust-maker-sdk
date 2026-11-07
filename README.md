@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.7.3", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.8.0", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -23,7 +23,7 @@ Rust 1.89 or later. The default feature set is empty.
 | `decimal` | `rust_decimal` conversions for `Price`, `Strike` and `Quantity` |
 | `test-helpers` | `ManagedWsHandle::test_handle` and message injection |
 
-This release speaks WS protocol `1.0.0` (`WS_PROTOCOL_VERSION`). See
+This release speaks WS protocol `1.1.0` (`WS_PROTOCOL_VERSION`). See
 [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## Before you connect
@@ -170,7 +170,9 @@ is separate from `Rfqs`, so a maker that only sells never receives buys.
   wallet: the underlying for a call, the quote mint for a put, a spread or a cash
   put. The net premium lands in custody in the same transaction. Fund custody with
   `ChainClient::maker_deposit` (`MakerDeposit`) from your wallet ATA; a wSOL
-  underlying must already be wrapped in that ATA.
+  underlying must already be wrapped in that ATA. For native SOL,
+  `chain::build_maker_deposit_native_sol_ixs` wraps and deposits in one go and
+  `chain::build_maker_withdraw_native_sol_ixs` withdraws and unwraps.
 - **Admission.** The server checks custody before it sends you the RFQ. A short
   custody turns into `RfqSkipped` with `maker_insufficient_balance` and the RFQ never
   reaches quoting, so top up when you see the skip, after every fill, or on a timer.

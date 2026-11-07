@@ -248,6 +248,20 @@ pub struct PositionInfo {
     pub created_at: SystemTime,
     #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
+    pub underlying_price: UnderlyingPrice,
+}
+
+/// Trusted oracle price of the underlying in the quote token (1e9), as the server prices RFQs.
+#[serde_as]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UnderlyingPrice {
+    Unavailable {},
+    Available {
+        price: Price,
+        #[serde_as(as = "UnixSeconds")]
+        published_at: SystemTime,
+    },
 }
 
 #[serde_as]

@@ -129,7 +129,10 @@ impl ChainClient {
     }
 
     pub fn new(rpc_url: &str, program_id: Pubkey, commitment: CommitmentConfig) -> Self {
-        let rpc = RpcClient::new_with_commitment(rpc_url.to_string(), commitment);
+        let rpc = RpcClient::new_sender(
+            ObservedSender(shared_sender(rpc_url)),
+            solana_rpc_client::rpc_client::RpcClientConfig::with_commitment(commitment),
+        );
         Self {
             rpc,
             program_id,
@@ -620,3 +623,44 @@ mod tests;
 #[cfg(test)]
 #[path = "rpc_mock.rs"]
 mod mock;
+
+fn shared_sender(url: &str) -> std::sync::Arc<solana_rpc_client::http_sender::HttpSender> {
+    static SENDERS: std::sync::LazyLock<
+        std::sync::Mutex<
+            std::collections::HashMap<
+                String,
+                std::sync::Arc<solana_rpc_client::http_sender::HttpSender>,
+            >,
+        >,
+    > = std::sync::LazyLock::new(Default::default);
+    let mut senders = match SENDERS.lock() {
+        Ok(s) => s,
+        Err(p) => p.into_inner(),
+    };
+    senders
+        .entry(url.to_owned())
+        .or_insert_with(|| {
+            std::sync::Arc::new(solana_rpc_client::http_sender::HttpSender::new(url))
+        })
+        .clone()
+}
+struct ObservedSender(std::sync::Arc<solana_rpc_client::http_sender::HttpSender>);
+#[async_trait::async_trait]
+impl solana_rpc_client::rpc_sender::RpcSender for ObservedSender {
+    async fn send(
+        &self,
+        request: solana_rpc_client_api::request::RpcRequest,
+        params: serde_json::Value,
+    ) -> solana_rpc_client_api::client_error::Result<serde_json::Value> {
+        crate::io_observer::record(crate::io_observer::Event::Rpc {
+            method: &request.to_string(),
+        });
+        self.0.send(request, params).await
+    }
+    fn get_transport_stats(&self) -> solana_rpc_client::rpc_sender::RpcTransportStats {
+        self.0.get_transport_stats()
+    }
+    fn url(&self) -> String {
+        self.0.url()
+    }
+}

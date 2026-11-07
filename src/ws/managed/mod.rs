@@ -212,18 +212,24 @@ impl Drop for ShutdownOnLastHandle {
     }
 }
 
+fn take_initial<T>(slot: &StdMutex<Option<T>>) -> Option<T> {
+    match slot.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    }
+}
+
 impl ManagedWsHandle {
     /// Messages in connection-local wire order. The first subscriber receives the
     /// since-spawn backlog; later subscribers start at subscription time. Lag returns
     /// [`ManagedReceiveError::Gap`].
     pub fn subscribe_messages(&self) -> ManagedMessageReceiver {
-        let initial = self
-            .initial_messages_rx
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let inner = match take_initial(&self.initial_messages_rx) {
+            Some(initial) => initial,
+            None => self.messages_tx.subscribe(),
+        };
         ManagedMessageReceiver {
-            inner: initial.unwrap_or_else(|| self.messages_tx.subscribe()),
+            inner,
             gap_tx: self.gap_tx.clone(),
         }
     }
@@ -234,11 +240,10 @@ impl ManagedWsHandle {
 
     /// Lifecycle events, including the since-spawn backlog for the first subscriber.
     pub fn subscribe_events(&self) -> broadcast::Receiver<ManagedWsEvent> {
-        self.initial_events_rx
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-            .unwrap_or_else(|| self.events_tx.subscribe())
+        match take_initial(&self.initial_events_rx) {
+            Some(initial) => initial,
+            None => self.events_tx.subscribe(),
+        }
     }
 
     /// Subscribe to the latest lifecycle state.

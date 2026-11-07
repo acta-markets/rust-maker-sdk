@@ -95,6 +95,13 @@ async fn handle_session_message(
         ServerMessage::AuthSuccess(_) => {
             send_event(events_tx, ManagedWsEvent::Authenticated);
         }
+        ServerMessage::RequestError(envelope) if envelope.error.is_quote_race() => {
+            tracing::debug!(
+                request_id = %envelope.request_id,
+                error = ?envelope.error,
+                "request lost a quote race"
+            );
+        }
         ServerMessage::RequestError(envelope) => {
             tracing::error!(
                 request_id = %envelope.request_id,

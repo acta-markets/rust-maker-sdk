@@ -37,7 +37,7 @@ pub type WsResult<T> = Result<T, WsClientError>;
 /// A server frame this SDK version cannot decode. `frame_type` and `request_id` come from
 /// a lenient read of the raw JSON, when it is JSON at all.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{}: {error}", frame_type.as_deref().unwrap_or("unknown type"))]
+#[error("{}: {error}", frame_type.as_deref().map_or("unknown type", |kind| kind))]
 pub struct UnreadableFrame {
     pub frame_type: Option<String>,
     pub request_id: Option<uuid::Uuid>,

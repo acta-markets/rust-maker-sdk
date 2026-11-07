@@ -376,6 +376,7 @@ fn indicative_prices_response_requires_request_id() {
             14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
         ])),
         position_type: PositionType::CoveredCall,
+        side: TakerSide::Sell,
         updated_at: UNIX_EPOCH,
         is_stale: false,
         strikes: vec![],
@@ -811,6 +812,7 @@ fn rfq_created_and_position_payouts_require_their_strict_keys() {
                 "expiry_ts": 2,
                 "revision": {"slot": 100, "transaction_index": 0, "instruction_index": 1},
                 "underlying_decimals": 9, "quote_decimals": 6,
+                "underlying_price": {"type": "unavailable"},
             }],
         }
     });
@@ -818,6 +820,7 @@ fn rfq_created_and_position_payouts_require_their_strict_keys() {
     for field in [
         "revision",
         "state",
+        "underlying_price",
         "underlying_decimals",
         "quote_decimals",
         "total_premium",
@@ -1295,6 +1298,7 @@ fn indicative_price_response_is_not_treated_as_an_acknowledged_request() {
             14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
         ])),
         position_type: PositionType::CoveredCall,
+        side: TakerSide::Sell,
         prices: vec![],
     });
     assert_eq!(message.request_id(), None);
@@ -1773,5 +1777,29 @@ fn position_state_has_one_required_tag_and_no_open_settlement() {
         json!({"state":"open","settlement":{"type":"cash","settlement_price":1,"holder_payoff":0,"writer_return":1}}),
     ] {
         assert!(serde_json::from_value::<PositionState>(value).is_err());
+    }
+}
+
+#[test]
+fn quote_races_are_told_apart_from_faults() {
+    for race in [
+        ServerError::RfqNotActive,
+        ServerError::RfqAlreadyLocked,
+        ServerError::QuoteLocked {
+            reason: QuoteLockedReason::OrderSubmitted,
+        },
+        ServerError::QuoteExpired,
+    ] {
+        assert!(race.is_quote_race(), "{race:?}");
+    }
+    for fault in [
+        ServerError::InvalidStrike,
+        ServerError::OrderIdMismatch,
+        ServerError::Generic {
+            code: WsErrorCode::InternalError,
+            message: String::new(),
+        },
+    ] {
+        assert!(!fault.is_quote_race(), "{fault:?}");
     }
 }

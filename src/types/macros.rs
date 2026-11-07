@@ -61,7 +61,7 @@ macro_rules! define_bytes32_newtype {
 
             #[must_use]
             pub fn from_hex(s: &str) -> Option<Self> {
-                let s = s.strip_prefix("0x").unwrap_or(s);
+                let s = $crate::wire::strip_0x(s);
                 let bytes = hex::decode(s).ok()?;
                 if bytes.len() != 32 {
                     return None;

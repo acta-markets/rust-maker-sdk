@@ -116,6 +116,7 @@ pub struct MakerPositionInfo {
     pub created_at: SystemTime,
     #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
+    pub underlying_price: crate::ws::types::common::UnderlyingPrice,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,6 +306,7 @@ pub struct TokenMarketEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenMarketIndicatives {
     pub position_type: PositionType,
+    pub side: TakerSide,
     #[serde_as(as = "UnixSeconds")]
     pub updated_at: SystemTime,
     pub is_stale: bool,
@@ -319,6 +321,7 @@ pub struct IndicativePricesMessage {
     pub request_id: Uuid,
     pub market: MarketId,
     pub position_type: PositionType,
+    pub side: TakerSide,
     #[serde_as(as = "UnixSeconds")]
     pub updated_at: SystemTime,
     pub is_stale: bool,

@@ -61,6 +61,7 @@ macro_rules! ws_method_request_id {
 pub struct WsClient {
     stream: Socket,
     server_close: Arc<OnceLock<ServerClose>>,
+    stream_label: &'static str,
 }
 
 /// Read half of a split [`WsClient`]. Liveness frames are returned, not
@@ -68,6 +69,7 @@ pub struct WsClient {
 pub(crate) struct WsReader {
     stream: SplitStream<Socket>,
     server_close: Arc<OnceLock<ServerClose>>,
+    stream_label: &'static str,
 }
 
 /// The close frame the server sent.
@@ -210,6 +212,11 @@ impl WsClient {
         Ok(Self {
             stream,
             server_close: Arc::default(),
+            stream_label: if url.ends_with("/data") {
+                "data"
+            } else {
+                "quote"
+            },
         })
     }
 
@@ -409,7 +416,14 @@ impl WsClient {
     pub async fn next(&mut self) -> Option<Result<ServerMessage, WsClientError>> {
         loop {
             let msg = match self.stream.next().await {
-                Some(Ok(msg)) => msg,
+                Some(Ok(msg)) => {
+                    crate::io_observer::record(crate::io_observer::Event::Ws {
+                        venue: "acta",
+                        stream: self.stream_label,
+                        bytes: msg.len(),
+                    });
+                    msg
+                }
                 Some(Err(err)) => return Some(Err(err.into())),
                 None => return None,
             };
@@ -448,6 +462,7 @@ impl WsClient {
             WsReader {
                 stream,
                 server_close: self.server_close,
+                stream_label: self.stream_label,
             },
         )
     }
@@ -465,7 +480,14 @@ impl WsReader {
     pub(crate) async fn next(&mut self) -> Option<WsResult<WsFrame>> {
         loop {
             let msg = match self.stream.next().await {
-                Some(Ok(msg)) => msg,
+                Some(Ok(msg)) => {
+                    crate::io_observer::record(crate::io_observer::Event::Ws {
+                        venue: "acta",
+                        stream: self.stream_label,
+                        bytes: msg.len(),
+                    });
+                    msg
+                }
                 Some(Err(err)) => return Some(Err(err.into())),
                 None => return None,
             };

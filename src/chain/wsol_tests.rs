@@ -127,3 +127,34 @@ fn public_wrap_creates_before_transfer_and_sync() {
         instructions[2].accounts[0].pubkey
     );
 }
+
+#[test]
+fn native_sol_deposit_wraps_into_the_owner_ata_before_the_deposit() {
+    let program = Pubkey::new_unique();
+    let owner = Pubkey::new_unique();
+    let ixs = build_maker_deposit_native_sol_ixs(&program, owner, owner, 5_000).unwrap();
+    let ata =
+        super::super::ix::derive_associated_token_address(&owner, &NATIVE_MINT, &TOKEN_PROGRAM_ID);
+    assert_eq!(ixs.len(), 5);
+    assert_eq!(ixs[2].accounts[1].pubkey, ata);
+    assert_eq!(ixs[2].data[4..], 5_000u64.to_le_bytes());
+    assert_eq!(ixs[3].data, vec![SPL_TOKEN_SYNC_NATIVE]);
+    assert_eq!(ixs[4].program_id, program);
+    assert_eq!(ixs[4].accounts[2].pubkey, ata);
+}
+
+#[test]
+fn native_sol_withdraw_closes_the_owner_wsol_account_after_the_withdraw() {
+    let program = Pubkey::new_unique();
+    let owner = Pubkey::new_unique();
+    let ixs = build_maker_withdraw_native_sol_ixs(&program, owner, owner, 5_000).unwrap();
+    let ata =
+        super::super::ix::derive_associated_token_address(&owner, &NATIVE_MINT, &TOKEN_PROGRAM_ID);
+    let close = ixs.last().unwrap();
+    assert_eq!(ixs[ixs.len() - 2].program_id, program);
+    assert_eq!(ixs[ixs.len() - 2].accounts[3].pubkey, ata);
+    assert_eq!(close.data, vec![SPL_TOKEN_CLOSE_ACCOUNT]);
+    assert_eq!(close.accounts[0].pubkey, ata);
+    assert_eq!(close.accounts[1].pubkey, owner);
+    assert!(close.accounts[2].is_signer);
+}

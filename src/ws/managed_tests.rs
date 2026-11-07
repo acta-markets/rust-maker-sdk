@@ -1712,6 +1712,7 @@ async fn indicative_response_rechecks_readiness_before_enqueue() {
             request_id: Uuid::new_v4(),
             market: crate::MarketId::new(crate::Address32::new([7; 32])),
             position_type: crate::PositionType::CoveredCall,
+            side: TakerSide::Buy,
             prices: Vec::new(),
         },
     );

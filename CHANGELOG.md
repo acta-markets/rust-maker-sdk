@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.8.0 - 2026-11-09
+
+WS protocol `1.1.0` (`WS_PROTOCOL_VERSION`); a `1.0.0` client is refused at Hello with `unsupported_protocol_version`.
+
+- Indicatives are per taker side: `IndicativePricesRequestMessage`, `IndicativePricesResponseMessage`,
+  `GetIndicativePricesMessage`, `IndicativePricesMessage` and `TokenMarketIndicatives` carry a
+  required `side`. Echo the request's `side` in the response; the server no longer parses a
+  response without it. Buy requests arrive only with a `TakerBuyRfqs` subscription.
+- `PositionInfo.underlying_price: UnderlyingPrice` (`Available { price, published_at }` or
+  `Unavailable {}`): the trusted oracle price the server prices RFQs with. `MakerPositionInfo`
+  (`MakerPositions`, `MmSummary`) carries it too.
+- `ServerMessage::RfqLocked(RfqLockedMessage { rfq_id, rfq_version, locked_at })`: another
+  maker's quote was accepted; yours stays as a backup until `RfqAvailableAgain` or `RfqClosed`.
+- `RfqCloseReason::ServerShutdown`: a graceful server stop closed the RFQ before its order
+  reached the keeper; your quote reports `cancelled`.
+- `QuoteReceived.net_price` on a buy is the gross price the buyer pays; it was shown net of the
+  fee.
+- `GetIndicativePrices` and `GetTokenMarketsInfo` failures arrive as `RequestError` with the
+  request's `request_id`; `GetTokenMarketsInfo` for an underlying without active markets returns
+  `market_not_found` instead of no response.
+
+- `ServerError::is_quote_race` marks the normal quoting races (`RfqNotFound`, `RfqNotActive`,
+  `RfqAlreadyLocked`, `QuoteLocked`, `QuoteNotFound`, `QuoteExpired`). The managed session logs
+  them at debug; other `RequestError`s stay at error.
+- `chain::build_maker_deposit_native_sol_ixs` wraps native SOL and deposits it into the Maker
+  PDA custody; `chain::build_maker_withdraw_native_sol_ixs` withdraws wSOL and unwraps it by
+  closing the owner's wSOL account (all wSOL held there returns as SOL).
+- `io_observer`: `install` a process-wide `fn(Event)` to count HTTP requests, statuses and body
+  bytes, WebSocket frames per stream and RPC methods. Nothing is recorded until one is installed.
+- HTTP reuses one client per process; RPC clients share one connection pool per URL. HTTP and
+  RPC accept gzip, deflate and brotli responses.
+
 ## 0.7.3 - 2026-11-05
 
 - Breaking: `RfqCloseReason::LadderTimeout` is removed; the server never sends

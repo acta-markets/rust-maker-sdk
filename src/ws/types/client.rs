@@ -228,6 +228,7 @@ pub struct IndicativePricesRequestMessage {
     pub request_id: Uuid,
     pub market: MarketDescriptor,
     pub position_type: PositionType,
+    pub side: TakerSide,
     pub strikes: Vec<Strike>,
 }
 
@@ -236,6 +237,7 @@ pub struct IndicativePricesResponseMessage {
     pub request_id: Uuid,
     pub market: MarketId,
     pub position_type: PositionType,
+    pub side: TakerSide,
     pub prices: Vec<IndicativeStrikePrice>,
 }
 

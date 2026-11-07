@@ -1,6 +1,6 @@
 [package]
 name = "acta-maker-sdk"
-version = "0.7.3"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -33,7 +33,7 @@ futures-util = { version = "0.3", optional = true }
 hex = "0.4"
 rand = "0.9"
 rust_decimal = { version = "1", default-features = false, features = ["std"], optional = true }
-reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "gzip", "deflate", "brotli"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = { version = "3.16.1", features = ["macros"] }
@@ -48,6 +48,10 @@ uuid = { version = "1", features = ["serde", "v4"] }
 zeroize = { version = "1", features = ["derive"] }
 
 solana-rpc-client = { version = "3.1.14", optional = true }
+solana-rpc-client-api = { version = "3.1.14", optional = true }
+async-trait = { version = "0.1", optional = true }
+# Compression for the RPC client's own reqwest 0.12.
+reqwest-rpc = { package = "reqwest", version = "0.12", optional = true, default-features = false, features = ["gzip", "deflate", "brotli"] }
 solana-sdk = { version = "3.0.0", optional = true }
 solana-commitment-config = { version = "3.0.0", optional = true }
 solana-compute-budget-interface = { version = "3.0.0", optional = true }
@@ -63,6 +67,9 @@ chain-rpc = [
   "dep:solana-rpc-client",
   "dep:solana-commitment-config",
   "dep:solana-compute-budget-interface",
+  "dep:async-trait",
+  "dep:solana-rpc-client-api",
+  "dep:reqwest-rpc",
 ]
 http = ["dep:reqwest"]
 decimal = ["dep:rust_decimal"]

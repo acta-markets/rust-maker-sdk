@@ -31,7 +31,10 @@ pub use ix::{
 #[cfg(feature = "chain-rpc")]
 pub use rpc::{ChainClient, FundPositionArgs, MakerDepositArgs, MakerWithdrawArgs, SendOptions};
 
-pub use wsol::{DEFAULT_SOL_RESERVE_LAMPORTS, NATIVE_MINT, NativeSolFunding};
+pub use wsol::{
+    DEFAULT_SOL_RESERVE_LAMPORTS, NATIVE_MINT, NativeSolFunding,
+    build_maker_deposit_native_sol_ixs, build_maker_withdraw_native_sol_ixs,
+};
 
 pub mod events;
 pub mod spreads;

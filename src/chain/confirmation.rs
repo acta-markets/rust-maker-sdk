@@ -87,12 +87,20 @@ impl ChainClient {
         };
         let (mut socket, _) = connect_async(ws_url).await.map_err(transport)?;
         for (index, signature) in signatures.iter().enumerate() {
+            crate::io_observer::record(crate::io_observer::Event::Rpc {
+                method: "signatureSubscribe",
+            });
             socket.send(Message::Text(json!({"jsonrpc":"2.0", "id":index, "method":"signatureSubscribe", "params":[signature.to_string(), {"commitment": self.rpc().commitment().commitment}]}).to_string().into())).await.map_err(transport)?;
         }
         let mut subscriptions = std::collections::BTreeMap::new();
         let mut early = std::collections::BTreeMap::new();
         while let Some(message) = socket.next().await {
             let message = message.map_err(transport)?;
+            crate::io_observer::record(crate::io_observer::Event::Ws {
+                venue: "solana",
+                stream: "signatures",
+                bytes: message.len(),
+            });
             let value: Value = match message {
                 Message::Text(text) => serde_json::from_str(&text)
                     .map_err(|error| ChainError::Confirmation(error.to_string()))?,

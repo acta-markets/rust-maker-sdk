@@ -27,10 +27,10 @@ impl Price {
     #[must_use]
     pub fn after_fee_bps(self, bps: u16) -> Self {
         let fee = u128::from(self.0) * u128::from(bps) / 10_000;
-        Self::new(
-            self.0
-                .saturating_sub(u64::try_from(fee).unwrap_or(u64::MAX)),
-        )
+        match u64::try_from(fee) {
+            Ok(fee) => Self::new(self.0.saturating_sub(fee)),
+            Err(_) => Self::new(0),
+        }
     }
 }
 

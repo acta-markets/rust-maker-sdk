@@ -243,6 +243,7 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
                     total_premium: crate::types::ids::Balance::new(1),
                     created_at: std::time::UNIX_EPOCH,
                     expiry_ts: std::time::UNIX_EPOCH,
+                    underlying_price: crate::ws::types::UnderlyingPrice::Unavailable {},
                 }],
             }),
             ClientMessage::GetMmSummary(m) => ServerMessage::MmSummary(MmSummaryData {

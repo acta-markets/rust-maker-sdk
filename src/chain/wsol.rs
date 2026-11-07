@@ -18,6 +18,7 @@ pub(crate) const TOKEN_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
 const SPL_TOKEN_SYNC_NATIVE: u8 = 17;
+const SPL_TOKEN_CLOSE_ACCOUNT: u8 = 9;
 const SYSTEM_INSTRUCTION_TRANSFER: u32 = 2;
 #[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_MINT_OFFSET: usize = 0;
@@ -270,6 +271,70 @@ pub fn build_wrap_sol_ixs(owner: Pubkey, fee_payer: Pubkey, lamports: u64) -> Ve
         build_system_transfer_ix(&owner, &ata, lamports),
         build_sync_native_ix(&TOKEN_PROGRAM_ID, &ata),
     ]
+}
+
+/// Wraps `lamports` of native SOL and deposits them into the Maker PDA custody; `maker_owner` signs.
+pub fn build_maker_deposit_native_sol_ixs(
+    program_id: &Pubkey,
+    maker_owner: Pubkey,
+    fee_payer: Pubkey,
+    lamports: u64,
+) -> Result<Vec<Instruction>, super::ChainIxError> {
+    let args = super::MakerDepositIxArgs {
+        maker_owner,
+        amount: lamports,
+        premium_mint: NATIVE_MINT,
+        token_program: TOKEN_PROGRAM_ID,
+        create_atas: true,
+    };
+    let mut ixs = super::build_maker_deposit_ixs(program_id, &args, fee_payer)?;
+    let Some(deposit) = ixs.pop() else {
+        return Ok(ixs);
+    };
+    let ata =
+        super::ix::derive_associated_token_address(&maker_owner, &NATIVE_MINT, &TOKEN_PROGRAM_ID);
+    ixs.push(build_system_transfer_ix(&maker_owner, &ata, lamports));
+    ixs.push(build_sync_native_ix(&TOKEN_PROGRAM_ID, &ata));
+    ixs.push(deposit);
+    Ok(ixs)
+}
+
+/// Withdraws `lamports` of wSOL from the Maker PDA custody and unwraps by closing the owner's
+/// wSOL account: every wSOL the owner holds there, not only this withdrawal, returns as SOL.
+pub fn build_maker_withdraw_native_sol_ixs(
+    program_id: &Pubkey,
+    maker_owner: Pubkey,
+    fee_payer: Pubkey,
+    lamports: u64,
+) -> Result<Vec<Instruction>, super::ChainIxError> {
+    let args = super::MakerWithdrawIxArgs {
+        maker_owner,
+        amount: lamports,
+        premium_mint: NATIVE_MINT,
+        token_program: TOKEN_PROGRAM_ID,
+        create_atas: true,
+    };
+    let mut ixs = super::build_maker_withdraw_ixs(program_id, &args, fee_payer)?;
+    let ata =
+        super::ix::derive_associated_token_address(&maker_owner, &NATIVE_MINT, &TOKEN_PROGRAM_ID);
+    ixs.push(build_close_account_ix(
+        &TOKEN_PROGRAM_ID,
+        &ata,
+        &maker_owner,
+    ));
+    Ok(ixs)
+}
+
+fn build_close_account_ix(token_program: &Pubkey, account: &Pubkey, owner: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: *token_program,
+        accounts: vec![
+            AccountMeta::new(*account, false),
+            AccountMeta::new(*owner, false),
+            AccountMeta::new_readonly(*owner, true),
+        ],
+        data: vec![SPL_TOKEN_CLOSE_ACCOUNT],
+    }
 }
 
 fn build_system_transfer_ix(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction {

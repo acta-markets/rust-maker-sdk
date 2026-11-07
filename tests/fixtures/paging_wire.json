@@ -239,7 +239,10 @@
           "price": 5000000000,
           "total_premium": 4975000,
           "created_at": 1710000042,
-          "expiry_ts": 1710600000
+          "expiry_ts": 1710600000,
+          "underlying_price": {
+            "type": "unavailable"
+          }
         }
       ],
       "unrenderable": [],
@@ -630,6 +633,7 @@
       "request_id": "00000000-0000-4000-8000-000000000001",
       "market": "11111111111111111111111111111111",
       "position_type": "covered_call",
+      "side": "sell",
       "limit": 200,
       "cursor": {
         "type": "start"
@@ -683,6 +687,7 @@
           "indicatives": [
             {
               "position_type": "covered_call",
+              "side": "sell",
               "updated_at": 1710000000,
               "is_stale": false,
               "strikes": [
@@ -704,6 +709,7 @@
       "request_id": "00000000-0000-4000-8000-000000000001",
       "market": "11111111111111111111111111111111",
       "position_type": "covered_call",
+      "side": "sell",
       "updated_at": 1710000000,
       "is_stale": false,
       "strikes": [

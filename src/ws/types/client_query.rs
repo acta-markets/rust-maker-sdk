@@ -243,6 +243,7 @@ pub struct GetIndicativePricesMessage {
     pub request_id: Uuid,
     pub market: MarketId,
     pub position_type: PositionType,
+    pub side: TakerSide,
 }
 
 #[serde_as]
