@@ -117,13 +117,13 @@ pub(super) async fn establish(
         MakerWsEndpoint::Vault => {
             let mut reads = vec![
                 ClientMessage::GetMyActiveRfqs(GetMyActiveRfqsMessage {
-                    limit: 200,
+                    limit: crate::paging::MAX_PAGE_SIZE,
                     cursor: Cursor::Start {},
 
                     request_id: Uuid::new_v4(),
                 }),
                 ClientMessage::GetPositions(GetPositionsMessage {
-                    limit: 200,
+                    limit: crate::paging::MAX_PAGE_SIZE,
                     cursor: Cursor::Start {},
 
                     request_id: Uuid::new_v4(),
@@ -158,7 +158,7 @@ pub(super) async fn establish(
 fn quote_reads() -> Vec<ClientMessage> {
     vec![
         ClientMessage::GetActiveRfqs(GetActiveRfqsMessage {
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: Cursor::Start {},
 
             request_id: Uuid::new_v4(),
@@ -166,7 +166,7 @@ fn quote_reads() -> Vec<ClientMessage> {
         ClientMessage::GetMyQuotes(GetMyQuotesMessage {
             request_id: Uuid::new_v4(),
             scope: MakerQuoteScope::Live {},
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: Cursor::Start {},
         }),
     ]
@@ -174,7 +174,7 @@ fn quote_reads() -> Vec<ClientMessage> {
 
 fn mm_summary_read() -> ClientMessage {
     ClientMessage::GetMmSummary(GetMmSummaryMessage {
-        limit: 200,
+        limit: crate::paging::MAX_PAGE_SIZE,
         cursor: Cursor::Start {},
 
         request_id: Uuid::new_v4(),
@@ -408,13 +408,13 @@ fn reconciliation_pages(
                 underlying_mint: QueryFilter::All {},
                 status: vec![PositionStatus::Open, PositionStatus::Funded],
                 min_expiry_ts: TimeBound::Unbounded {},
-                limit: 200,
+                limit: crate::paging::MAX_PAGE_SIZE,
                 cursor: Cursor::Start {},
             }));
             pages.push(ClientMessage::GetMyQuotes(GetMyQuotesMessage::default()));
             pages.push(ClientMessage::GetMyCaps(GetMyCapsMessage {
                 request_id: Uuid::new_v4(),
-                limit: 200,
+                limit: crate::paging::MAX_PAGE_SIZE,
                 cursor: Cursor::Start {},
             }));
             pages.push(ClientMessage::GetMarketsForMaker(
@@ -422,7 +422,7 @@ fn reconciliation_pages(
             ));
             pages.push(ClientMessage::GetTokens(GetTokensMessage {
                 request_id: Uuid::new_v4(),
-                limit: 200,
+                limit: crate::paging::MAX_PAGE_SIZE,
                 cursor: Cursor::Start {},
             }));
         }

@@ -285,7 +285,7 @@ mod tests {
 
     fn data_frame() -> PreparedClientMessage {
         PreparedClientMessage::new(&ClientMessage::GetMarkets(GetMarketsMessage {
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: crate::ws::types::Cursor::Start {},
             request_id: Uuid::nil(),
         }))

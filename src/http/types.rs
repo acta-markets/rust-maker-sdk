@@ -464,8 +464,6 @@ pub enum CountLimit {
 /// Public `/api/v1/venue`: limits the server validates against.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Venue {
-    pub protocol_fee_bps_premium: u16,
-    pub protocol_fee_bps_volume: u16,
     pub program_id: crate::Address32,
     pub min_quote_validity_seconds: u32,
     pub settlement_buffer_seconds: u32,
@@ -476,4 +474,6 @@ pub struct Venue {
     pub max_quotes_per_rfq: CountLimit,
     pub max_active_rfqs_per_taker: CountLimit,
     pub pre_expiry_cutoff_seconds: u64,
+    /// Largest `limit` any paged request accepts.
+    pub max_page_size: u32,
 }

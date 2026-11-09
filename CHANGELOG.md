@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.2 - 2026-11-09
+
+Breaking: `Venue` drops `protocol_fee_bps_premium` and `protocol_fee_bps_volume`; fees are per
+quote token now (`TokenInfo::protocol_fees`), so 0.8.1's `venue()` fails against this server.
+Everything else is additive.
+
+- `chain::build_maker_withdraw_native_sol_ixs` unwraps exactly the withdrawn amount through a
+  temporary wSOL account (`chain::unwrap_account`); other wSOL in the owner's account stays
+  wrapped. 0.8.1 closed the owner's wSOL account and unwrapped all of it.
+- `paging::MAX_PAGE_SIZE` (200) is the largest `limit` any paged request accepts; the SDK's own
+  requests use it. `/venue` reports it as `Venue::max_page_size`.
+- `TokenInfo::protocol_fees: TokenProtocolFees`: `Quote { premium_bps, volume_bps }` from the
+  token's on-chain config, or `None {}` for a token that quotes no market.
+- `TokenInfo::session: TradingSession`: `Continuous {}` or `PythSchedule { schedule }` with the
+  Pyth trading-hours string of the token's feed.
+
 ## 0.8.1 - 2026-11-09
 
 - `WS_PROTOCOL_VERSION` is `1.0.0` again; the server stays on `1.0.0`. 0.8.0 sent `1.1.0` and is

@@ -43,7 +43,7 @@ macro_rules! ws_method_request_id {
         pub async fn $name(&mut self) -> WsResult<()> {
             self.send(&ClientMessage::$variant($msg {
                 request_id: Uuid::new_v4(),
-                limit: 200,
+                limit: crate::paging::MAX_PAGE_SIZE,
                 cursor: crate::ws::types::Cursor::Start {},
             }))
             .await

@@ -52,7 +52,7 @@ macro_rules! paged_request {
         impl PagedRequest for $request {
             fn first_page(&mut self) {
                 self.request_id = uuid::Uuid::new_v4();
-                self.limit = 200;
+                self.limit = crate::paging::MAX_PAGE_SIZE;
                 self.cursor = Cursor::Start {};
             }
             fn next_page(&mut self, page: &$response) -> bool {
@@ -132,7 +132,7 @@ paged_request!(
 impl PagedRequest for GetTokenMarketsInfoMessage {
     fn first_page(&mut self) {
         self.request_id = uuid::Uuid::new_v4();
-        self.limit = 200;
+        self.limit = crate::paging::MAX_PAGE_SIZE;
         self.cursor = Cursor::Start {};
     }
     fn next_page(&mut self, page: &TokenMarketsInfoData) -> bool {
@@ -165,11 +165,9 @@ impl PagedRequest for GetTokenMarketsInfoMessage {
                 .find(|m| m.market_pda == market.market_pda)
             {
                 for indicative in market.indicatives {
-                    if let Some(current) = existing
-                        .indicatives
-                        .iter_mut()
-                        .find(|i| i.position_type == indicative.position_type)
-                    {
+                    if let Some(current) = existing.indicatives.iter_mut().find(|i| {
+                        i.position_type == indicative.position_type && i.side == indicative.side
+                    }) {
                         current.strikes.extend(indicative.strikes);
                     } else {
                         existing.indicatives.push(indicative);
@@ -561,7 +559,7 @@ mod tests {
                 connection_epoch: 7,
             });
             ClientMessage::GetMmSummary(GetMmSummaryMessage {
-                limit: 200,
+                limit: crate::paging::MAX_PAGE_SIZE,
                 cursor: crate::ws::types::Cursor::Start {},
 
                 request_id: self.request_id,
@@ -631,6 +629,50 @@ mod tests {
     }
 
     #[test]
+    fn token_market_pages_merge_per_product_and_side() {
+        let page = |side: &str, strike: u64, next: Option<&str>| -> TokenMarketsInfoData {
+            serde_json::from_value(serde_json::json!({
+                "next_cursor": next, "request_id": "00000000-0000-0000-0000-000000000000",
+                "underlying_symbol": "SOL", "underlying_decimals": 9, "quote_symbol": "USDC", "quote_decimals": 6,
+                "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "reference_price": 1,
+                "markets": [{ "products": ["covered_call"], "market_pda": "11111111111111111111111111111111",
+                    "expiry_ts": 10, "is_put": false,
+                    "indicatives": [{ "position_type": "covered_call", "side": side, "updated_at": 0, "is_stale": false,
+                        "strikes": [{ "strike": strike, "best_price": strike + 100 }] }] }]
+            }))
+            .unwrap()
+        };
+        let mut all = page("sell", 1, Some("a"));
+        for next in [
+            page("sell", 2, Some("b")),
+            page("buy", 1, Some("c")),
+            page("buy", 2, None),
+        ] {
+            GetTokenMarketsInfoMessage::append(&mut all, next);
+        }
+        let sides: Vec<_> = all.markets[0]
+            .indicatives
+            .iter()
+            .map(|i| {
+                (
+                    i.side,
+                    i.strikes
+                        .iter()
+                        .map(|s| s.strike.value())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sides,
+            vec![
+                (crate::types::TakerSide::Sell, vec![1, 2]),
+                (crate::types::TakerSide::Buy, vec![1, 2])
+            ]
+        );
+    }
+
+    #[test]
     fn empty_continuation_is_rejected() {
         let mut request = GetMyQuotesMessage::default();
         let page = MyQuotesMessage {
@@ -645,14 +687,14 @@ mod tests {
     fn data_request_maps_to_one_typed_response() {
         let request_id = uuid::Uuid::new_v4();
         let request = GetActiveRfqsMessage {
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: crate::ws::types::Cursor::Start {},
             request_id,
         };
         assert!(matches!(
                 request.into_message(),
                 ClientMessage::GetActiveRfqs(GetActiveRfqsMessage {
-        limit: 200,
+        limit: crate::paging::MAX_PAGE_SIZE,
         cursor: crate::ws::types::Cursor::Start {},
 
                     request_id: actual

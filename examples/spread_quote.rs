@@ -88,11 +88,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     underlying_decimals: underlying.decimals.value(),
                 };
                 let price = (terms.upper_strike - terms.lower_strike) * PRICE_FRACTION_BPS / 10_000;
-                let premium = match terms.premium(
-                    price,
-                    venue.protocol_fee_bps_premium,
-                    venue.protocol_fee_bps_volume,
-                ) {
+                let TokenProtocolFees::Quote {
+                    premium_bps,
+                    volume_bps,
+                } = quote_token.protocol_fees
+                else {
+                    continue;
+                };
+                let premium = match terms.premium(price, premium_bps, volume_bps) {
                     Ok(premium) => premium,
                     // Too small to price: G rounds to zero or reaches C.
                     Err(_) => continue,

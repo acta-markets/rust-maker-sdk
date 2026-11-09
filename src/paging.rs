@@ -2,6 +2,9 @@
 use crate::ws::types::Cursor;
 use std::collections::HashSet;
 
+/// Largest `limit` any paged request accepts; the server rejects more with `invalid_limit`.
+pub const MAX_PAGE_SIZE: u32 = 200;
+
 #[derive(Default)]
 pub(crate) struct Continuation {
     seen: HashSet<String>,

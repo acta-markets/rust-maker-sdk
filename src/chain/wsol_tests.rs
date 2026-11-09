@@ -150,11 +150,33 @@ fn native_sol_withdraw_closes_the_owner_wsol_account_after_the_withdraw() {
     let ixs = build_maker_withdraw_native_sol_ixs(&program, owner, owner, 5_000).unwrap();
     let ata =
         super::super::ix::derive_associated_token_address(&owner, &NATIVE_MINT, &TOKEN_PROGRAM_ID);
-    let close = ixs.last().unwrap();
-    assert_eq!(ixs[ixs.len() - 2].program_id, program);
-    assert_eq!(ixs[ixs.len() - 2].accounts[3].pubkey, ata);
+    let temporary = unwrap_account(&owner);
+    assert_eq!(
+        temporary,
+        Pubkey::create_with_seed(&owner, "acta-unwrap", &TOKEN_PROGRAM_ID).unwrap()
+    );
+    let [withdraw, create, init, transfer, close] = &ixs[ixs.len() - 5..] else {
+        panic!("expected withdraw, create, init, transfer, close");
+    };
+    assert_eq!(withdraw.program_id, program);
+    assert_eq!(withdraw.accounts[3].pubkey, ata);
+    assert_eq!(create.program_id, SYSTEM_PROGRAM_ID);
+    assert_eq!(create.accounts[1].pubkey, temporary);
+    assert_eq!(init.data[0], SPL_TOKEN_INITIALIZE_ACCOUNT3);
+    assert_eq!(init.accounts[0].pubkey, temporary);
+    assert_eq!(
+        transfer.data,
+        [&[SPL_TOKEN_TRANSFER][..], &5_000u64.to_le_bytes()].concat()
+    );
+    assert_eq!(
+        (transfer.accounts[0].pubkey, transfer.accounts[1].pubkey),
+        (ata, temporary)
+    );
     assert_eq!(close.data, vec![SPL_TOKEN_CLOSE_ACCOUNT]);
-    assert_eq!(close.accounts[0].pubkey, ata);
+    assert_eq!(
+        close.accounts[0].pubkey, temporary,
+        "only the temporary account is closed"
+    );
     assert_eq!(close.accounts[1].pubkey, owner);
     assert!(close.accounts[2].is_signer);
 }

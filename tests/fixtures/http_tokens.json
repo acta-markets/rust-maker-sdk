@@ -9,6 +9,14 @@
       ],
       "role": {
         "type": "quote"
+      },
+      "session": {
+        "type": "continuous"
+      },
+      "protocol_fees": {
+        "type": "quote",
+        "premium_bps": 100,
+        "volume_bps": 10
       }
     },
     {
@@ -29,6 +37,12 @@
         "quote_mints": [
           "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
         ]
+      },
+      "session": {
+        "type": "continuous"
+      },
+      "protocol_fees": {
+        "type": "none"
       }
     }
   ],

@@ -148,6 +148,33 @@ pub struct TokenInfo {
     pub decimals: Decimals,
     pub oracle_feed_ids: Vec<String>,
     pub role: TokenRole,
+    pub session: TradingSession,
+    pub protocol_fees: TokenProtocolFees,
+}
+
+/// Protocol fees a market quoted in this token pays, from the token's on-chain config.
+/// The program charges the smaller of the premium fee and the volume fee on the strike or spread width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TokenProtocolFees {
+    /// Not a quote token, or its config is not projected yet.
+    None {},
+    Quote {
+        premium_bps: u16,
+        volume_bps: u16,
+    },
+}
+
+/// When the token's price feed trades. Outside a Pyth session the oracle price is the last one published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TradingSession {
+    Continuous {},
+    /// Pyth `attributes.schedule`: `TZ;Mon,..,Sun;MMDD/spec,...`, each spec `O` (open all day),
+    /// `C` (closed) or `HHMM-HHMM` windows joined by `&`; holiday entries replace that date's weekday entry.
+    PythSchedule {
+        schedule: String,
+    },
 }
 
 /// Only underlyings have option sizing and a strike grid.

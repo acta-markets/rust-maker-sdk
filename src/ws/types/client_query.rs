@@ -39,7 +39,7 @@ macro_rules! default_request {
             fn default() -> Self {
                 Self {
                     request_id: Uuid::new_v4(),
-                    limit: 200,
+                    limit: crate::paging::MAX_PAGE_SIZE,
                     cursor: Cursor::Start {},
                 }
             }
@@ -65,7 +65,7 @@ impl Default for GetActiveRfqsMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: Cursor::Start {},
         }
     }
@@ -147,7 +147,7 @@ impl Default for GetMyActiveRfqsMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: Cursor::Start {},
         }
     }
@@ -180,7 +180,7 @@ impl Default for GetMyQuotesMessage {
         Self {
             request_id: Uuid::new_v4(),
             scope: MakerQuoteScope::Live {},
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: Cursor::Start {},
         }
     }
@@ -210,7 +210,7 @@ impl Default for GetMarketsForMakerMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: Cursor::Start {},
             underlying_mints: Vec::new(),
             quote_mints: Vec::new(),
@@ -272,7 +272,7 @@ impl Default for GetMmSummaryMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            limit: 200,
+            limit: crate::paging::MAX_PAGE_SIZE,
             cursor: Cursor::Start {},
         }
     }

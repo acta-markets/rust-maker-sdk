@@ -1685,7 +1685,7 @@ fn reference_frames_decode() {
         "type": "Tokens",
         "data": { "next_cursor": null,
             "request_id": "00000000-0000-0000-0000-000000000000",
-            "tokens": [{ "mint": "bvgRxX4i3TVxu72eSGE1dkLjPMunReapc72mEmn3E6U", "symbol": "SOL", "decimals": 9, "oracle_feed_ids": [], "role": { "type": "underlying", "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "strike_tick": 500000000, "quote_mints": ["63QRh6CpNaGpV13A7eV99sdKhBE2z1Yh8knawNfMqqbm"] } }]
+            "tokens": [{ "mint": "bvgRxX4i3TVxu72eSGE1dkLjPMunReapc72mEmn3E6U", "symbol": "SOL", "decimals": 9, "oracle_feed_ids": [], "role": { "type": "underlying", "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "strike_tick": 500000000, "quote_mints": ["63QRh6CpNaGpV13A7eV99sdKhBE2z1Yh8knawNfMqqbm"] }, "session": { "type": "pyth_schedule", "schedule": "America/New_York;0930-1600,0930-1600,0930-1600,0930-1600,0930-1600,C,C;" }, "protocol_fees": { "type": "none" } }]
         }
     }))
     .unwrap();

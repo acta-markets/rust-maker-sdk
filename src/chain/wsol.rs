@@ -20,6 +20,13 @@ const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("1111111111111111111111111
 const SPL_TOKEN_SYNC_NATIVE: u8 = 17;
 const SPL_TOKEN_CLOSE_ACCOUNT: u8 = 9;
 const SYSTEM_INSTRUCTION_TRANSFER: u32 = 2;
+const SYSTEM_INSTRUCTION_CREATE_ACCOUNT_WITH_SEED: u32 = 3;
+const SPL_TOKEN_TRANSFER: u8 = 3;
+const SPL_TOKEN_INITIALIZE_ACCOUNT3: u8 = 18;
+/// Rent-exempt minimum of a 165-byte token account.
+const TOKEN_ACCOUNT_RENT_LAMPORTS: u64 = 2_039_280;
+/// Seed of the owner's temporary wSOL account; it is created and closed in one transaction.
+const UNWRAP_SEED: &str = "acta-unwrap";
 #[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_MINT_OFFSET: usize = 0;
 #[cfg(feature = "chain-rpc")]
@@ -299,8 +306,10 @@ pub fn build_maker_deposit_native_sol_ixs(
     Ok(ixs)
 }
 
-/// Withdraws `lamports` of wSOL from the Maker PDA custody and unwraps by closing the owner's
-/// wSOL account: every wSOL the owner holds there, not only this withdrawal, returns as SOL.
+/// Withdraws `lamports` of wSOL from the Maker PDA custody and unwraps exactly that amount: it
+/// moves to a temporary wSOL account derived from the owner, which is closed in the same
+/// transaction. Other wSOL in the owner's account stays wrapped. `maker_owner` signs and fronts
+/// the temporary account's rent, which the close returns.
 pub fn build_maker_withdraw_native_sol_ixs(
     program_id: &Pubkey,
     maker_owner: Pubkey,
@@ -317,12 +326,75 @@ pub fn build_maker_withdraw_native_sol_ixs(
     let mut ixs = super::build_maker_withdraw_ixs(program_id, &args, fee_payer)?;
     let ata =
         super::ix::derive_associated_token_address(&maker_owner, &NATIVE_MINT, &TOKEN_PROGRAM_ID);
-    ixs.push(build_close_account_ix(
-        &TOKEN_PROGRAM_ID,
-        &ata,
-        &maker_owner,
-    ));
+    let temporary = unwrap_account(&maker_owner);
+    ixs.extend([
+        build_create_account_with_seed_ix(&maker_owner, &temporary),
+        build_initialize_account3_ix(&temporary, &maker_owner),
+        build_token_transfer_ix(&ata, &temporary, &maker_owner, lamports),
+        build_close_account_ix(&TOKEN_PROGRAM_ID, &temporary, &maker_owner),
+    ]);
     Ok(ixs)
+}
+
+/// The owner's temporary wSOL account used to unwrap an exact amount: `create_with_seed(owner,
+/// "acta-unwrap", token program)`, hashed directly because the fixed seed cannot fail its checks.
+pub fn unwrap_account(owner: &Pubkey) -> Pubkey {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::new()
+        .chain_update(owner.as_ref())
+        .chain_update(UNWRAP_SEED.as_bytes())
+        .chain_update(TOKEN_PROGRAM_ID.as_ref())
+        .finalize();
+    Pubkey::new_from_array(hash.into())
+}
+
+fn build_create_account_with_seed_ix(owner: &Pubkey, account: &Pubkey) -> Instruction {
+    let mut data = Vec::with_capacity(4 + 32 + 8 + UNWRAP_SEED.len() + 8 + 8 + 32);
+    data.extend_from_slice(&SYSTEM_INSTRUCTION_CREATE_ACCOUNT_WITH_SEED.to_le_bytes());
+    data.extend_from_slice(owner.as_ref());
+    data.extend_from_slice(&(UNWRAP_SEED.len() as u64).to_le_bytes());
+    data.extend_from_slice(UNWRAP_SEED.as_bytes());
+    data.extend_from_slice(&TOKEN_ACCOUNT_RENT_LAMPORTS.to_le_bytes());
+    data.extend_from_slice(&(TOKEN_ACCOUNT_RENT_LEN as u64).to_le_bytes());
+    data.extend_from_slice(TOKEN_PROGRAM_ID.as_ref());
+    Instruction {
+        program_id: SYSTEM_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*owner, true),
+            AccountMeta::new(*account, false),
+            AccountMeta::new_readonly(*owner, true),
+        ],
+        data,
+    }
+}
+
+fn build_initialize_account3_ix(account: &Pubkey, owner: &Pubkey) -> Instruction {
+    let mut data = Vec::with_capacity(33);
+    data.push(SPL_TOKEN_INITIALIZE_ACCOUNT3);
+    data.extend_from_slice(owner.as_ref());
+    Instruction {
+        program_id: TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*account, false),
+            AccountMeta::new_readonly(NATIVE_MINT, false),
+        ],
+        data,
+    }
+}
+
+fn build_token_transfer_ix(from: &Pubkey, to: &Pubkey, owner: &Pubkey, amount: u64) -> Instruction {
+    let mut data = Vec::with_capacity(9);
+    data.push(SPL_TOKEN_TRANSFER);
+    data.extend_from_slice(&amount.to_le_bytes());
+    Instruction {
+        program_id: TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*from, false),
+            AccountMeta::new(*to, false),
+            AccountMeta::new_readonly(*owner, true),
+        ],
+        data,
+    }
 }
 
 fn build_close_account_ix(token_program: &Pubkey, account: &Pubkey, owner: &Pubkey) -> Instruction {

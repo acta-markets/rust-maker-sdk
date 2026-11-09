@@ -341,12 +341,10 @@ async fn reference_reads_revalidate_with_etag() {
 }
 
 #[test]
-fn venue_requires_protocol_fee_fields() {
-    for field in ["protocol_fee_bps_premium", "protocol_fee_bps_volume"] {
-        let mut value: Value = serde_json::from_str(VENUE).unwrap();
-        value.as_object_mut().unwrap().remove(field);
-        assert!(serde_json::from_value::<Venue>(value).is_err());
-    }
+fn venue_requires_max_page_size() {
+    let mut value: Value = serde_json::from_str(VENUE).unwrap();
+    value.as_object_mut().unwrap().remove("max_page_size");
+    assert!(serde_json::from_value::<Venue>(value).is_err());
 }
 
 #[tokio::test]

@@ -15,6 +15,5 @@
     "value": 50
   },
   "pre_expiry_cutoff_seconds": 10800,
-  "protocol_fee_bps_premium": 100,
-  "protocol_fee_bps_volume": 10
+  "max_page_size": 200
 }

@@ -288,8 +288,6 @@ fn valid_until_must_sit_between_the_venue_floor_and_market_expiry() {
 #[test]
 fn venue_sets_the_floor_and_checks_the_settlement_buffer() {
     let venue = crate::http::Venue {
-        protocol_fee_bps_premium: 100,
-        protocol_fee_bps_volume: 10,
         program_id: crate::Address32::new(PROGRAM),
 
         min_quote_validity_seconds: 5,
@@ -301,6 +299,7 @@ fn venue_sets_the_floor_and_checks_the_settlement_buffer() {
         max_quotes_per_rfq: crate::http::CountLimit::Unlimited {},
         max_active_rfqs_per_taker: crate::http::CountLimit::Unlimited {},
         pre_expiry_cutoff_seconds: 0,
+        max_page_size: crate::paging::MAX_PAGE_SIZE,
     };
     let now = QuoteExpiry::after(Duration::ZERO)
         .expect("clock after epoch")
