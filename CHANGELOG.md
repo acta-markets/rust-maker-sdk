@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.1 - 2026-11-09
+
+- `WS_PROTOCOL_VERSION` is `1.0.0` again; the server stays on `1.0.0`. 0.8.0 sent `1.1.0` and is
+  refused at Hello. The wire shapes are those of 0.8.0.
+
 ## 0.8.0 - 2026-11-09
 
 WS protocol `1.1.0` (`WS_PROTOCOL_VERSION`); a `1.0.0` client is refused at Hello with `unsupported_protocol_version`.

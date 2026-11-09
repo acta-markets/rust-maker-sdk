@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.8.0", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.8.1", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -23,7 +23,7 @@ Rust 1.89 or later. The default feature set is empty.
 | `decimal` | `rust_decimal` conversions for `Price`, `Strike` and `Quantity` |
 | `test-helpers` | `ManagedWsHandle::test_handle` and message injection |
 
-This release speaks WS protocol `1.1.0` (`WS_PROTOCOL_VERSION`). See
+This release speaks WS protocol `1.0.0` (`WS_PROTOCOL_VERSION`). See
 [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## Before you connect
