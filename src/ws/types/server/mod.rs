@@ -337,6 +337,42 @@ pub struct WelcomeData {
     pub min_quote_validity_seconds: u32,
     /// A quote stays executable only while `valid_until - settlement_buffer_seconds > now`.
     pub settlement_buffer_seconds: u32,
+    /// `None` from servers that predate it; their limits are the documented defaults.
+    #[serde(default)]
+    pub rate_limits: Option<WsRateLimits>,
+}
+
+/// Message budgets of this connection. A message costs 1, `SwapQuote` 5 and
+/// `BatchQuotes` one per quote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WsRateLimits {
+    /// Every message except quotes; exceeding it closes the connection with `4003`.
+    pub connection: RateLimit,
+    /// All connections of the authenticated wallet together; exceeding it closes with `4003`.
+    pub wallet: RateLimit,
+    /// The per-category limits below reject only the message, with `rate_limited`.
+    pub rfqs: RateLimit,
+    pub quotes: RateLimit,
+    pub queries: RateLimit,
+    /// Once a maker or Vault operator authenticates, this replaces all limits above.
+    pub liquidity_provider: ProviderRateLimit,
+}
+
+/// A token bucket: `burst` messages at once, refilled at `per_second`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RateLimit {
+    Unlimited,
+    Bucket { per_second: u32, burst: u32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProviderRateLimit {
+    /// This endpoint has no liquidity-provider sessions.
+    NotApplicable,
+    /// One bucket for every message, rejecting the message with `rate_limited`.
+    Shared { per_second: u32, burst: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

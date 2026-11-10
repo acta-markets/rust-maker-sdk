@@ -450,6 +450,14 @@ fn welcome_roundtrip() {
         server_time_unix_ms: UNIX_EPOCH + Duration::from_millis(1_700_000_000_000),
         min_quote_validity_seconds: 100,
         settlement_buffer_seconds: 90,
+        rate_limits: Some(acta_maker_sdk::ws::types::WsRateLimits {
+            connection: acta_maker_sdk::ws::types::RateLimit::Unlimited,
+            wallet: acta_maker_sdk::ws::types::RateLimit::Unlimited,
+            rfqs: acta_maker_sdk::ws::types::RateLimit::Unlimited,
+            quotes: acta_maker_sdk::ws::types::RateLimit::Unlimited,
+            queries: acta_maker_sdk::ws::types::RateLimit::Unlimited,
+            liquidity_provider: acta_maker_sdk::ws::types::ProviderRateLimit::NotApplicable,
+        }),
     });
     let json = serde_json::to_string(&msg).unwrap();
     let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
@@ -1801,5 +1809,20 @@ fn quote_races_are_told_apart_from_faults() {
         },
     ] {
         assert!(!fault.is_quote_race(), "{fault:?}");
+    }
+}
+
+#[test]
+fn welcome_from_an_older_server_has_no_rate_limits() {
+    let frame = serde_json::json!({"type": "Welcome", "data": {
+        "protocol_version": "1.0.0", "server_version": "old", "min_supported_version": "1.0.0",
+        "server_time_unix_ms": 1_700_000_000_123u64, "min_quote_validity_seconds": 60,
+        "settlement_buffer_seconds": 50
+    }});
+    match serde_json::from_value(frame).unwrap() {
+        acta_maker_sdk::ws::types::ServerMessage::Welcome(welcome) => {
+            assert!(welcome.rate_limits.is_none())
+        }
+        other => panic!("expected Welcome, got {other:?}"),
     }
 }

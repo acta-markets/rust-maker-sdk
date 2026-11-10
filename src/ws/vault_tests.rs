@@ -148,6 +148,14 @@ async fn vault_handshake_response(socket: &mut Socket, response: ServerMessage) 
             server_time_unix_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 100,
             settlement_buffer_seconds: 90,
+            rate_limits: Some(crate::ws::types::WsRateLimits {
+                connection: crate::ws::types::RateLimit::Unlimited,
+                wallet: crate::ws::types::RateLimit::Unlimited,
+                rfqs: crate::ws::types::RateLimit::Unlimited,
+                quotes: crate::ws::types::RateLimit::Unlimited,
+                queries: crate::ws::types::RateLimit::Unlimited,
+                liquidity_provider: crate::ws::types::ProviderRateLimit::NotApplicable,
+            }),
         }),
     )
     .await;

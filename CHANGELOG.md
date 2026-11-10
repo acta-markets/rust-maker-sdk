@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.4 - 2026-11-10
+
+Additive.
+
+- `WelcomeData::rate_limits: Option<WsRateLimits>`: the connection's message budgets, `None` from an
+  older server (`connection`, `wallet`,
+  `rfqs`, `quotes`, `queries` as `RateLimit::{Unlimited, Bucket}`, and `liquidity_provider` as
+  `ProviderRateLimit::{NotApplicable, Shared}`). The SDK does not delay frames by them; a bot that
+  bursts can pace itself from `Welcome`.
+
 ## 0.8.3 - 2026-11-10
 
 Additive.
