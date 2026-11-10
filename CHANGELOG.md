@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.3 - 2026-11-10
+
+Additive.
+
+- `ws::types::ErrorAction` and `ServerError::action()` / `WsErrorCode::action()`: what to do
+  after an error (`retry`, `reauthenticate`, `refresh`, `reconcile`, `fix_request`, `stop`),
+  matching the server's error catalog. `ErrorAction::for_delivery` turns any action into
+  `reconcile` when `delivery` is `unknown`.
+
 ## 0.8.2 - 2026-11-09
 
 Breaking: `Venue` drops `protocol_fee_bps_premium` and `protocol_fee_bps_volume`; fees are per

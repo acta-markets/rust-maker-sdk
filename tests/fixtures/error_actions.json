@@ -1,0 +1,457 @@
+{
+  "codes": {
+    "already_authenticated": "fix_request",
+    "auth_timeout": "reauthenticate",
+    "batch_quotes_too_large": "fix_request",
+    "blacklisted": "stop",
+    "caps_authority_unavailable": "refresh",
+    "challenge_mismatch": "fix_request",
+    "challenge_not_issued": "fix_request",
+    "clock_error": "retry",
+    "duplicate_quote": "reconcile",
+    "duplicate_rfq_id": "reconcile",
+    "hello_already_sent": "fix_request",
+    "hello_required": "fix_request",
+    "hello_timeout": "retry",
+    "history_projection_incomplete": "stop",
+    "insufficient_collateral": "fix_request",
+    "internal_error": "retry",
+    "invalid_amount": "fix_request",
+    "invalid_cursor": "fix_request",
+    "invalid_limit": "fix_request",
+    "invalid_products": "fix_request",
+    "invalid_program_id": "stop",
+    "invalid_quantity_size_rule": "fix_request",
+    "invalid_signature": "fix_request",
+    "invalid_signed_tx": "fix_request",
+    "invalid_strike_notional": "fix_request",
+    "invalid_strikes": "fix_request",
+    "invalid_timeout": "fix_request",
+    "invalid_underlying_mint_key": "stop",
+    "invalid_vault_counterparty": "fix_request",
+    "invalid_vault_subscription": "fix_request",
+    "kernel_timeout": "reconcile",
+    "ladder_strike_source_unavailable": "retry",
+    "maker_not_registered": "stop",
+    "maker_unregistered": "stop",
+    "market_disabled": "stop",
+    "market_expired": "stop",
+    "market_finalized": "stop",
+    "market_not_found": "fix_request",
+    "market_pre_expiry": "stop",
+    "missing_size_rule_for_underlying_mint": "stop",
+    "missing_tick_for_underlying_mint": "stop",
+    "operator_mismatch": "fix_request",
+    "order_already_submitted": "reconcile",
+    "parse_error": "fix_request",
+    "product_not_allowed": "fix_request",
+    "pubkey_mismatch": "fix_request",
+    "quote_identity_mismatch": "fix_request",
+    "quote_refresh_required": "refresh",
+    "rate_limited": "retry",
+    "resource_limit": "retry",
+    "rfq_closed": "refresh",
+    "server_busy": "retry",
+    "server_overloaded": "retry",
+    "session_conflict": "reauthenticate",
+    "session_expired": "reauthenticate",
+    "session_limit_exceeded": "stop",
+    "session_replaced": "stop",
+    "sponsored_tx_not_ready": "retry",
+    "spread_invalid_strikes": "fix_request",
+    "spread_premium_invalid": "fix_request",
+    "spread_tick_violation": "fix_request",
+    "subscription_scope_too_large": "fix_request",
+    "taker_buy_unsupported": "fix_request",
+    "temporarily_unavailable": "retry",
+    "time_overflow": "fix_request",
+    "too_many_auth_attempts": "retry",
+    "too_many_parse_errors": "fix_request",
+    "trading_paused": "stop",
+    "tx_build_failed": "retry",
+    "unsupported_protocol_version": "stop",
+    "vault_auth_not_started": "fix_request",
+    "vault_auth_required": "reauthenticate",
+    "vault_authorization_failed": "reauthenticate",
+    "vault_authorization_unavailable": "retry",
+    "vault_governance_required": "stop",
+    "vault_mismatch": "fix_request",
+    "vault_not_tradable": "stop",
+    "vault_operator_unauthorized": "stop",
+    "vault_pending_capital": "stop",
+    "vault_projection_unavailable": "retry",
+    "vault_resume_not_supported": "fix_request",
+    "vault_safety_mode": "stop",
+    "vault_session_invalidated": "reauthenticate",
+    "vault_swap_idempotency_conflict": "fix_request",
+    "vault_swap_invalid_amount": "fix_request",
+    "vault_swap_invalid_state": "stop",
+    "vault_swap_oracle_stale": "retry",
+    "vault_swap_quote_expired": "refresh",
+    "vault_swap_route_unavailable": "retry",
+    "vault_swap_service_unavailable": "retry",
+    "vault_swap_signed_tx_rejected": "refresh",
+    "vault_trading_closed": "stop"
+  },
+  "typed": [
+    {
+      "action": "reauthenticate",
+      "error": {
+        "data": {
+          "action": "create_rfqs"
+        },
+        "type": "Unauthenticated"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": {
+          "action": "submit_quotes",
+          "role": "maker"
+        },
+        "type": "Unauthorized"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "type": "RfqNotFound"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "type": "RfqNotActive"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "type": "RfqAlreadyLocked"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": {
+          "state": "not_active"
+        },
+        "type": "InvalidState"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": {
+          "reason": "rfq_locked"
+        },
+        "type": "QuoteLocked"
+      }
+    },
+    {
+      "action": "reconcile",
+      "error": {
+        "data": {
+          "reason": "order_submitted"
+        },
+        "type": "QuoteLocked"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "type": "QuoteNotFound"
+      }
+    },
+    {
+      "action": "refresh",
+      "error": {
+        "type": "QuoteExpired"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "data": {
+          "min_seconds": 60
+        },
+        "type": "QuoteExpiryTooShort"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "type": "InvalidStrike"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "type": "InvalidValidUntil"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "type": "OrderIdMismatch"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "type": "UnknownOrder"
+      }
+    },
+    {
+      "action": "refresh",
+      "error": {
+        "type": "SignatureTimeout"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "type": "OracleNotReady"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": {
+          "age_seconds": 120
+        },
+        "type": "OraclePriceStale"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "type": "OraclePriceNotReady"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "type": "InvalidPositionType"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "data": {
+          "pubkey": "x"
+        },
+        "type": "InvalidMarket"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": {
+          "details": "x"
+        },
+        "type": "MarketMetadataIncomplete"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": {
+          "details": "x"
+        },
+        "type": "TokenMetadataIncomplete"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": "too_many_active_rfqs_per_taker",
+        "type": "RateLimit"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": "too_many_active_rfqs_total",
+        "type": "RateLimit"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "too_many_quotes_per_rfq",
+        "type": "RateLimit"
+      }
+    },
+    {
+      "action": "reconcile",
+      "error": {
+        "data": "too_many_failed_orders_per_rfq",
+        "type": "RateLimit"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "too_many_sessions_per_user",
+        "type": "RateLimit"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": "caps_unavailable",
+        "type": "Cap"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "data": {
+          "maker_position_cap_exceeded": {
+            "current": 5,
+            "limit": 5
+          }
+        },
+        "type": "Cap"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "type": "InternalError"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "type": "KernelNotAvailable"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": {
+          "feature": "mm_summary"
+        },
+        "type": "DbDisabled"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "type": "ServerShuttingDown"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "type": "InviteRequired"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "data": "invalid_code",
+        "type": "Invite"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "code_exhausted",
+        "type": "Invite"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "code_expired",
+        "type": "Invite"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "code_disabled",
+        "type": "Invite"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "code_owner_inactive",
+        "type": "Invite"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "code_owner_blacklisted",
+        "type": "Invite"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "already_registered",
+        "type": "Invite"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": "internal_error",
+        "type": "Invite"
+      }
+    },
+    {
+      "action": "stop",
+      "error": {
+        "data": "not_registered",
+        "type": "Claim"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "data": "invalid_format",
+        "type": "Claim"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "data": "code_taken",
+        "type": "Claim"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "data": "reserved",
+        "type": "Claim"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": "internal_error",
+        "type": "Claim"
+      }
+    },
+    {
+      "action": "fix_request",
+      "error": {
+        "data": {
+          "allowed_endpoints": [
+            "maker"
+          ],
+          "endpoint": "taker"
+        },
+        "type": "WrongEndpoint"
+      }
+    }
+  ]
+}
