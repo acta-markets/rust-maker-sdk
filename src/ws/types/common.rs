@@ -189,19 +189,40 @@ pub enum TokenRole {
     },
 }
 
-/// USD totals from prices captured at signed-transaction submission.
-/// Amounts are decimal dollar strings; priced count exposes historical gaps.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UsdTradeStats {
-    pub notional_24h: String,
-    pub premium_24h: String,
-    pub priced_trades_24h: u32,
+/// USD totals, or `unavailable` while USD pricing is down.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UsdStats {
+    #[default]
+    Unavailable,
+    Available {
+        notional_24h: String,
+        premium_24h: String,
+        priced_trades_24h: u32,
+    },
+}
+
+/// A price that exists only once someone quoted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum QuotedPrice {
+    None,
+    Quoted { price: Price },
+}
+
+impl QuotedPrice {
+    #[must_use]
+    pub const fn price(self) -> Option<Price> {
+        match self {
+            Self::Quoted { price } => Some(price),
+            Self::None => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GlobalStats {
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub usd: Option<UsdTradeStats>,
+    pub usd: UsdStats,
     pub total_volume_24h: Volume,
     pub total_trades_24h: TradeCount,
     /// Cash-settled spread fills, excluded from physical aggregate volume and trade totals.
@@ -260,8 +281,10 @@ pub struct PositionInfo {
     pub pda: Address32,
     pub market: MarketId,
     pub underlying_mint: Address32,
+    pub underlying_symbol: String,
     pub underlying_decimals: u8,
     pub quote_mint: Address32,
+    pub quote_symbol: String,
     pub quote_decimals: u8,
     pub terms: OptionTerms,
     pub side: TakerSide,
@@ -314,16 +337,19 @@ mod usd_stats_tests {
     #[test]
     fn usd_stats_are_required_nullable_and_stay_exact() {
         let unavailable = serde_json::to_value(GlobalStats::default()).unwrap();
-        assert_eq!(unavailable.get("usd"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            unavailable["usd"],
+            serde_json::json!({"type": "unavailable"})
+        );
         let mut omitted = unavailable;
         let _ = omitted.as_object_mut().unwrap().remove("usd");
         assert!(serde_json::from_value::<GlobalStats>(omitted).is_err());
         let stats = GlobalStats {
-            usd: Some(UsdTradeStats {
+            usd: UsdStats::Available {
                 notional_24h: "9007199254740993.000000001".into(),
                 premium_24h: "0.000000009".into(),
                 priced_trades_24h: 2,
-            }),
+            },
             ..GlobalStats::default()
         };
         let decoded: GlobalStats =

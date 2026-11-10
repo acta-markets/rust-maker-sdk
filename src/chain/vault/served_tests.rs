@@ -10,6 +10,8 @@ use solana_sdk::{
 };
 use uuid::Uuid;
 
+use crate::ws::types::SwapStaging;
+
 use super::*;
 use crate::chain::vault::{
     MAX_VAULT_SWAP_ROUTE_ACCOUNTS, PriceRoute, VaultManager, VaultManagerArgs, VaultStagedSlot,
@@ -122,12 +124,11 @@ fn swap_quote(case: &Value, tx_base64: String) -> SwapQuoteResultData {
         quoted_out_amount: num(&swap["quoted_out_amount"]).to_string(),
         minimum_out_amount: num(&swap["minimum_out_amount"]).to_string(),
         valid_until: num(&swap["valid_until"]).to_string(),
-        staging: serde_json::from_value(case["staging"]["mode"].clone())
-            .ok()
-            .map(|mode: String| match mode.as_str() {
-                "stage" => VaultStagingStep::Stage,
-                _ => VaultStagingStep::Unstage,
-            }),
+        staging: match serde_json::from_value::<String>(case["staging"]["mode"].clone()) {
+            Ok(mode) if mode == "stage" => SwapStaging::Stage,
+            Ok(_) => SwapStaging::Unstage,
+            Err(_) => SwapStaging::None,
+        },
     }
 }
 
@@ -812,17 +813,17 @@ fn staging_swaps_bind_step_leg_and_staging_route() {
         let tables = [table(case)];
         let request = swap_request(case);
         let quote = swap_quote(case, served_tx(case));
-        let step = quote.staging.unwrap();
+        let step = quote.staging.step().unwrap();
         verify_swap(case, &request, &quote, &tables).unwrap();
 
         let mut unstaged = quote.clone();
-        unstaged.staging = None;
+        unstaged.staging = SwapStaging::None;
         assert!(verify_swap(case, &request, &unstaged, &tables).is_err());
         let mut flipped = quote.clone();
-        flipped.staging = Some(match step {
-            VaultStagingStep::Stage => VaultStagingStep::Unstage,
-            _ => VaultStagingStep::Stage,
-        });
+        flipped.staging = match step {
+            VaultStagingStep::Stage => SwapStaging::Unstage,
+            VaultStagingStep::Unstage => SwapStaging::Stage,
+        };
         assert!(verify_swap(case, &request, &flipped, &tables).is_err());
         let mut reversed = request.clone();
         reversed.direction = match request.direction {
@@ -906,7 +907,7 @@ fn staging_halves_name_the_vaults_slot() {
             amount: num(&case["staging"]["amount_in"]),
             staged_at: 1,
         };
-        if quote.staging == Some(VaultStagingStep::Stage) {
+        if quote.staging == SwapStaging::Stage {
             assert_eq!(
                 with(VaultStagingState {
                     open: Some(open),

@@ -26,8 +26,25 @@ pub struct QuoteRefreshRequestedMessage {
 pub struct QuoteAcknowledgedMessage {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub replaced_order_id: Option<OrderId>,
+    pub replaced: ReplacedQuote,
+}
+
+/// The quote this one replaced, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReplacedQuote {
+    None,
+    Replaced { order_id: OrderId },
+}
+
+impl ReplacedQuote {
+    #[must_use]
+    pub const fn order_id(self) -> Option<OrderId> {
+        match self {
+            Self::Replaced { order_id } => Some(order_id),
+            Self::None => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,8 +52,7 @@ pub struct QuoteBestStatusMessage {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
     pub is_best: bool,
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub current_best_price: Option<Price>,
+    pub current_best_price: crate::ws::types::common::QuotedPrice,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,8 +60,7 @@ pub struct QuoteOutbidMessage {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
     pub your_price: Price,
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub current_best_price: Option<Price>,
+    pub current_best_price: crate::ws::types::common::QuotedPrice,
 }
 
 #[serde_as]
@@ -54,9 +69,8 @@ pub struct QuoteFilledMessage {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
     pub market_pda: Address32,
-    /// `None` when the server no longer knows the market; resolve it from `market_pda`.
-    #[serde_as(as = "Option<UnixSeconds>", no_default)]
-    pub expiry_ts: Option<SystemTime>,
+    #[serde_as(as = "UnixSeconds")]
+    pub expiry_ts: SystemTime,
     pub terms: OptionTerms,
     pub side: TakerSide,
     pub taker: Address32,
@@ -181,8 +195,7 @@ pub struct QuoteReceivedMessage {
     pub valid_until: QuoteExpiry,
     pub nonce: Nonce,
     pub order_id: OrderId,
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub net_price: Option<Price>,
+    pub net_price: Price,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -163,7 +163,7 @@ fn quote(case: &serde_json::Value, rfq_id: Uuid, price: u64) -> ServerMessage {
         valid_until: QuoteExpiry::from_unix_seconds(num(&p["valid_until"])),
         nonce: Nonce::new(num(&p["nonce"])),
         order_id: OrderId::from_hex(p["order_id"].as_str().unwrap()).unwrap(),
-        net_price: None,
+        net_price: Price::new(price),
     })
 }
 
@@ -310,7 +310,7 @@ async fn serve_sale(
                 ServerMessage::RequestError(RequestErrorEnvelope {
                     request_id: submit.request_id,
                     error: ServerError::InternalError,
-                    delivery: Some(delivery),
+                    delivery,
                 }),
             )
             .await;
@@ -700,7 +700,7 @@ fn spread_quote(
         valid_until: QuoteExpiry::from_unix_seconds(num(&p["valid_until"])),
         nonce: Nonce::new(num(&p["nonce"])),
         order_id: OrderId::new([0; 32]),
-        net_price: None,
+        net_price: Price::new(num(&p["price"])),
     };
     let VaultSaleTerms::Spread(terms) = sale.signed_terms(&quote).unwrap() else {
         panic!("spread sale signs spread terms");

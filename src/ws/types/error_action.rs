@@ -30,13 +30,12 @@ impl ErrorAction {
         matches!(self, Self::Retry | Self::Reauthenticate)
     }
 
-    /// A rejected submission whose delivery is not `not_forwarded` may still execute,
-    /// so every action other than `Reconcile` is downgraded to it.
+    /// A submission with `unknown` delivery may still execute, so any action becomes `Reconcile`.
     #[must_use]
-    pub const fn for_delivery(self, delivery: Option<Delivery>) -> Self {
+    pub const fn for_delivery(self, delivery: Delivery) -> Self {
         match delivery {
-            Some(Delivery::Unknown) => Self::Reconcile,
-            Some(Delivery::NotForwarded) | None => self,
+            Delivery::Unknown => Self::Reconcile,
+            Delivery::NotForwarded | Delivery::NotApplicable => self,
         }
     }
 }

@@ -25,7 +25,13 @@ pub struct MarketInfo {
     pub expiry_ts: SystemTime,
     pub is_put: bool,
     pub status: MarketStatus,
+    pub settlement: Settlement,
+}
 
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub settlement_price: Option<Price>,
+/// The market's settlement fixing, once published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Settlement {
+    Pending,
+    Fixed { price: Price },
 }

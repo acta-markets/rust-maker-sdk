@@ -113,7 +113,7 @@
       "valid_until": 1799999900,
       "nonce": 999,
       "order_id": "0101010101010101010101010101010101010101010101010101010101010101",
-      "net_price": null
+      "net_price": 1000000000
     }
   },
   "Positions": {
@@ -125,7 +125,9 @@
           "pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
           "market": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
           "underlying_mint": "4WfbkL2bewdXcoxpqjjau4FynhwCt4KeEiSYKLESRfgy",
+          "underlying_symbol": "UNDER",
           "quote_mint": "7g3yp1HFGur2nvsU1PsqivfT3C21v1pFrKq99T5hLDzM",
+          "quote_symbol": "QUOTE",
           "terms": {
             "type": "call_spread",
             "lower_strike": 100000000000,

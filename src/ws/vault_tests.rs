@@ -237,7 +237,9 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
                         127, 212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
                     ])),
                     underlying_mint: crate::Address32::new([12; 32]),
+                    underlying_symbol: "UNDER".into(),
                     quote_mint: crate::Address32::new([13; 32]),
+                    quote_symbol: "QUOTE".into(),
                     underlying_decimals: 9,
                     quote_decimals: 6,
                     terms: OptionTerms::CallSpread {
@@ -543,7 +545,7 @@ async fn swap_quote_is_correlated_and_times_out_without_a_reply() {
                 quoted_out_amount: "990".to_string(),
                 minimum_out_amount: "985".to_string(),
                 valid_until: "0".to_string(),
-                staging: None,
+                staging: crate::ws::types::server::SwapStaging::None,
             }),
         )
         .await;
@@ -603,7 +605,7 @@ async fn paused_swap_requests_receive_their_own_rejections_out_of_order() {
                         code: WsErrorCode::TradingPaused,
                         message: "Trading is paused".into(),
                     },
-                    delivery: None,
+                    delivery: crate::ws::types::server::Delivery::NotApplicable,
                 }),
             )
             .await;
@@ -687,7 +689,7 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
             ServerMessage::RequestError(RequestErrorEnvelope {
                 request_id: accept.request_id,
                 error: ServerError::QuoteNotFound,
-                delivery: None,
+                delivery: crate::ws::types::server::Delivery::NotApplicable,
             }),
         )
         .await;
@@ -701,7 +703,7 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
                 ServerMessage::RequestError(RequestErrorEnvelope {
                     request_id: submit.request_id,
                     error: ServerError::InternalError,
-                    delivery: Some(delivery),
+                    delivery,
                 }),
             )
             .await;
@@ -1112,7 +1114,7 @@ async fn failed_initial_reads_clear_the_authenticated_grant() {
                     code: crate::ws::types::WsErrorCode::TemporarilyUnavailable,
                     message: "projection unavailable".into(),
                 },
-                delivery: None,
+                delivery: crate::ws::types::server::Delivery::NotApplicable,
             }),
         )
         .await;
@@ -1286,7 +1288,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         quoted_out_amount: "2000".into(),
         minimum_out_amount: "1990".into(),
         valid_until: "1000100".into(),
-        staging: None,
+        staging: crate::ws::types::server::SwapStaging::None,
     };
     let route = |name: &str| {
         PriceRoute::parse(&hex::decode(swap[name].as_str().unwrap()).unwrap()).unwrap()

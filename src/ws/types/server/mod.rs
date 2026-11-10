@@ -117,16 +117,16 @@ pub enum ServerMessage {
 pub struct RequestErrorEnvelope {
     pub request_id: Uuid,
     pub error: ServerError,
-    /// Present on `SubmitSignedSponsoredTx` and `SwapSubmit` failures.
-
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub delivery: Option<Delivery>,
+    /// `not_applicable` except on `SubmitSignedSponsoredTx` and `SwapSubmit` failures.
+    pub delivery: Delivery,
 }
 
 /// Whether a rejected submission can have reached the keeper pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Delivery {
+    /// The failed request does not hand a transaction off.
+    NotApplicable,
     NotForwarded,
     /// The signed transaction may be in flight.
     Unknown,

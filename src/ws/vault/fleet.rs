@@ -509,7 +509,7 @@ mod tests {
             ServerMessage::AuthSuccess(AuthSuccessData {
                 session_id: "s".into(),
                 expires_at: std::time::UNIX_EPOCH,
-                maker_pda: None,
+                role: crate::ws::types::server::AuthRole::Taker,
             }),
         )
         .await;

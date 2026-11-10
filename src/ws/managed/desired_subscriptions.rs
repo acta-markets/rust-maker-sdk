@@ -209,7 +209,7 @@ mod tests {
                 code: WsErrorCode::SubscriptionScopeTooLarge,
                 message: "test".to_string(),
             },
-            delivery: None,
+            delivery: crate::ws::types::server::Delivery::NotApplicable,
         }));
 
         let recovery = desired.recovery(&SubscriptionsMessage {

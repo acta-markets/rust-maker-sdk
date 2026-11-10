@@ -22,7 +22,7 @@ fn ladder_timeout_is_not_a_close_reason() {
 fn auth_success_requires_expires_at() {
     for data in [
         json!({"session_id":"s"}),
-        json!({"session_id":"s","expires_at":null,"maker_pda":null}),
+        json!({"session_id":"s","expires_at":null,"role":{"type":"taker"}}),
         json!({"session_id":"s","expires_at":1}),
     ] {
         assert!(
@@ -31,7 +31,7 @@ fn auth_success_requires_expires_at() {
         );
     }
     let message: ServerMessage = serde_json::from_value(json!({
-        "type":"AuthSuccess", "data":{"session_id":"s","expires_at":1_710_086_400,"maker_pda":null}
+        "type":"AuthSuccess", "data":{"session_id":"s","expires_at":1_710_086_400,"role":{"type":"taker"}}
     }))
     .unwrap();
     let ServerMessage::AuthSuccess(data) = message else {
@@ -135,7 +135,7 @@ fn server_message_parses_cases() {
                         "valid_until": 3,
                         "nonce": 4,
                         "order_id": "0000000000000000000000000000000000000000000000000000000000000002",
-                        "net_price": null
+                        "net_price": 2
                     }]
                 }
             }),
@@ -170,8 +170,8 @@ fn server_message_parses_cases() {
                     "rfq_id": rfq_id,
                     "rfq_version": 7,
                     "reason": "expired",
-                    "your_quote": null,
-                    "winner": null,
+                    "your_quote": {"type": "none"},
+                    "winner": {"type": "none"},
                     "closed_at": 123
                 }
             }),
@@ -377,14 +377,13 @@ fn indicative_prices_response_requires_request_id() {
         ])),
         position_type: PositionType::CoveredCall,
         side: TakerSide::Sell,
-        updated_at: UNIX_EPOCH,
-        is_stale: false,
+        freshness: acta_maker_sdk::ws::types::server::IndicativeFreshness::NoData,
         strikes: vec![],
     });
     let json = serde_json::to_string(&msg).expect("serialize indicative prices");
     assert!(json.contains("\"request_id\""));
 
-    let missing_request_id = r#"{"type":"IndicativePrices","data":{ "next_cursor": null,"market":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9","position_type":"covered_call","updated_at":0,"is_stale":false,"strikes":[]}}"#;
+    let missing_request_id = r#"{"type":"IndicativePrices","data":{ "next_cursor": null,"market":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9","position_type":"covered_call","freshness":{"type":"no_data"},"strikes":[]}}"#;
     let err = serde_json::from_str::<ServerMessage>(missing_request_id)
         .expect_err("request_id must be mandatory");
     assert!(err.to_string().contains("request_id"));
@@ -481,7 +480,7 @@ fn quote_acknowledged_roundtrip() {
     let msg = ServerMessage::QuoteAcknowledged(QuoteAcknowledgedMessage {
         rfq_id,
         order_id,
-        replaced_order_id: Some(replaced),
+        replaced: acta_maker_sdk::ws::types::ReplacedQuote::Replaced { order_id: replaced },
     });
     let json = serde_json::to_string(&msg).unwrap();
     let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
@@ -489,7 +488,10 @@ fn quote_acknowledged_roundtrip() {
         ServerMessage::QuoteAcknowledged(data) => {
             assert_eq!(data.rfq_id, rfq_id);
             assert_eq!(data.order_id, order_id);
-            assert_eq!(data.replaced_order_id, Some(replaced));
+            assert_eq!(
+                data.replaced,
+                acta_maker_sdk::ws::types::ReplacedQuote::Replaced { order_id: replaced }
+            );
         }
         _ => panic!("expected QuoteAcknowledged"),
     }
@@ -524,7 +526,7 @@ fn quote_filled_names_its_market() {
     );
     assert_eq!(
         filled.expiry_ts,
-        Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000)
     );
     assert_eq!(filled.terms.position_type(), PositionType::CashSecuredPut);
     assert_eq!(
@@ -541,16 +543,7 @@ fn quote_filled_names_its_market() {
     }
     let mut unknown_expiry = frame.clone();
     unknown_expiry["data"]["expiry_ts"] = serde_json::Value::Null;
-    let ServerMessage::QuoteFilled(filled) =
-        serde_json::from_value(unknown_expiry.clone()).unwrap()
-    else {
-        panic!("expected QuoteFilled");
-    };
-    assert_eq!(filled.expiry_ts, None);
-    assert_eq!(
-        serde_json::to_value(ServerMessage::QuoteFilled(filled)).unwrap(),
-        unknown_expiry
-    );
+    assert!(serde_json::from_value::<ServerMessage>(unknown_expiry).is_err());
 }
 
 #[test]
@@ -715,7 +708,7 @@ fn terms_and_side_are_required_and_terms_are_closed_tagged_unions() {
 }
 
 #[test]
-fn check_quote_and_quote_received_carry_strict_terms_side_and_required_null_net_price() {
+fn check_quote_and_quote_received_carry_strict_terms_side_and_net_price() {
     let check = json!({
         "type": "CheckQuote",
         "data": {
@@ -750,7 +743,7 @@ fn check_quote_and_quote_received_carry_strict_terms_side_and_required_null_net_
             "valid_until": 3,
             "nonce": 4,
             "order_id": "01".repeat(32),
-            "net_price": null,
+            "net_price": 2,
         }
     });
     assert_eq!(
@@ -785,7 +778,7 @@ fn rfq_created_and_position_payouts_require_their_strict_keys() {
             "expires_at": 2,
             "created_at": 1,
             "order_options": [],
-            "request_id": null,
+            "request_id": Uuid::nil(),
         }
     });
     for field in ["terms", "side"] {
@@ -809,7 +802,9 @@ fn rfq_created_and_position_payouts_require_their_strict_keys() {
                 "pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
                 "market": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",
                 "underlying_mint": "4WfbkL2bewdXcoxpqjjau4FynhwCt4KeEiSYKLESRfgy",
+                "underlying_symbol": "UNDER",
                 "quote_mint": "7g3yp1HFGur2nvsU1PsqivfT3C21v1pFrKq99T5hLDzM",
+                "quote_symbol": "QUOTE",
                 "terms": {"type": "call_spread", "lower_strike": 100, "upper_strike": 120},
                 "side": "sell",
                 "state": "open",
@@ -869,7 +864,7 @@ fn spread_liability_and_stats_fields_are_visible_and_required() {
     assert!(serde_json::from_value::<QuoteLiabilityCapInfo>(missing).is_err());
 
     let stats = json!({
-        "usd": null,
+        "usd": {"type": "unavailable"},
         "total_volume_24h": 1,
         "total_trades_24h": 2,
         "spread_trades_24h": 3,
@@ -918,7 +913,7 @@ fn request_error_roundtrip() {
     let original = ServerMessage::RequestError(RequestErrorEnvelope {
         request_id: Uuid::new_v4(),
         error: ServerError::RfqNotFound,
-        delivery: None,
+        delivery: acta_maker_sdk::ws::types::server::Delivery::NotApplicable,
     });
     let json = serde_json::to_value(&original).unwrap();
     let parsed: ServerMessage = serde_json::from_value(json).unwrap();
@@ -1022,8 +1017,8 @@ proptest! {
             rfq_id,
             rfq_version: RfqVersion::new(rfq_version),
             reason,
-            your_quote: None,
-            winner: None,
+            your_quote: acta_maker_sdk::ws::types::YourQuote::None,
+            winner: acta_maker_sdk::ws::types::RfqWinner::None,
             closed_at: UNIX_EPOCH + Duration::from_secs(closed_at),
         });
 
@@ -1190,7 +1185,7 @@ fn batch_quotes_ack_roundtrip() {
     let ack = QuoteAcknowledgedMessage {
         rfq_id: Uuid::new_v4(),
         order_id: OrderId([0xaa; 32]),
-        replaced_order_id: None,
+        replaced: acta_maker_sdk::ws::types::ReplacedQuote::None,
     };
     let reject = QuoteRejectedMessage {
         rfq_id: Uuid::new_v4(),
@@ -1536,7 +1531,7 @@ fn lifecycle_identity_fields_are_required() {
                     "side": "sell",
                     "expires_at": 1,
                     "created_at": 1,
-                    "request_id": null,
+                    "request_id": Uuid::nil(),
                     "order_options": [],
                 },
             }),
@@ -1551,8 +1546,8 @@ fn lifecycle_identity_fields_are_required() {
                     "rfq_version": 1,
                     "reason": "expired",
                     "closed_at": 1,
-                    "your_quote": null,
-                    "winner": null,
+                    "your_quote": {"type": "none"},
+                    "winner": {"type": "none"},
                 },
             }),
         ),

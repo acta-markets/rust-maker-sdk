@@ -39,10 +39,27 @@ pub struct SwapQuoteResultData {
     pub quoted_out_amount: String,
     pub minimum_out_amount: String,
     pub valid_until: String,
-    /// Absent for one-transaction swaps; once `stage` confirms, re-request (new id) for `unstage`.
+    /// `none` for one-transaction swaps; once `stage` confirms, re-request (new id) for `unstage`.
+    pub staging: SwapStaging,
+}
 
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub staging: Option<VaultStagingStep>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwapStaging {
+    None,
+    Stage,
+    Unstage,
+}
+
+impl SwapStaging {
+    #[must_use]
+    pub const fn step(self) -> Option<VaultStagingStep> {
+        match self {
+            Self::None => None,
+            Self::Stage => Some(VaultStagingStep::Stage),
+            Self::Unstage => Some(VaultStagingStep::Unstage),
+        }
+    }
 }
 
 /// Durable enqueue acknowledgement, not chain confirmation.

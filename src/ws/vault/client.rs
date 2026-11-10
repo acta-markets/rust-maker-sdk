@@ -85,7 +85,10 @@ impl VaultRequestError {
     pub fn delivery(&self) -> Option<Delivery> {
         match self {
             Self::Rejected { response, .. } => match &**response {
-                ServerMessage::RequestError(error) => error.delivery,
+                ServerMessage::RequestError(error) => match error.delivery {
+                    Delivery::NotApplicable => None,
+                    delivery => Some(delivery),
+                },
                 _ => Some(Delivery::Unknown),
             },
             Self::Session(ManagedWsError::NotReady | ManagedWsError::QueueFull)

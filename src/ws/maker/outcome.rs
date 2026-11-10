@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::types::{OrderId, QuoteCancelReason, QuoteFinalStatus, RfqCloseReason};
 use crate::ws::managed::ManagedInbound;
-use crate::ws::types::{QuoteFilledMessage, QuoteRejectReason, ServerMessage};
+use crate::ws::types::{QuoteFilledMessage, QuoteRejectReason, ServerMessage, YourQuote};
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -162,29 +162,25 @@ impl QuoteOutcomeTracker {
             {
                 QuoteOutcome::Acked
             }
-            ServerMessage::RfqClosed(m) if m.rfq_id == self.rfq_id => {
-                match m
-                    .your_quote
-                    .as_ref()
-                    .filter(|q| q.order_id == self.order_id)
-                {
-                    Some(q) => match q.status {
-                        QuoteFinalStatus::Expired => QuoteOutcome::Expired,
-                        QuoteFinalStatus::Cancelled => QuoteOutcome::Cancelled,
-                        QuoteFinalStatus::Outbid => {
-                            QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason))
-                        }
-                        QuoteFinalStatus::Filled => return,
-                    },
-                    None if m.reason == RfqCloseReason::Filled
-                        && matches!(self.outcome, QuoteOutcome::Acked) =>
-                    {
+            ServerMessage::RfqClosed(m) if m.rfq_id == self.rfq_id => match &m.your_quote {
+                YourQuote::Quoted {
+                    order_id, status, ..
+                } if *order_id == self.order_id => match status {
+                    QuoteFinalStatus::Expired => QuoteOutcome::Expired,
+                    QuoteFinalStatus::Cancelled => QuoteOutcome::Cancelled,
+                    QuoteFinalStatus::Outbid => {
                         QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason))
                     }
-                    None if m.reason == RfqCloseReason::Filled => return,
-                    None => QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason)),
+                    QuoteFinalStatus::Filled => return,
+                },
+                _ if m.reason == RfqCloseReason::Filled
+                    && matches!(self.outcome, QuoteOutcome::Acked) =>
+                {
+                    QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason))
                 }
-            }
+                _ if m.reason == RfqCloseReason::Filled => return,
+                _ => QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason)),
+            },
             _ => return,
         };
         self.outcome = next;

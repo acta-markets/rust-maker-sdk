@@ -286,7 +286,10 @@
           "quantity": 1000000000,
           "price": 5000000000,
           "tx_signature": "1111111111111111111111111111111111111111111111111111111111111111",
-          "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
+          "position": {
+            "type": "confirmed",
+            "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP"
+          },
           "confirmed_at": 1710000042
         }
       ],
@@ -463,7 +466,9 @@
             "call_spread"
           ],
           "status": "active",
-          "settlement_price": null
+          "settlement": {
+            "type": "pending"
+          }
         }
       ],
       "next_cursor": null
@@ -702,12 +707,17 @@
             {
               "position_type": "covered_call",
               "side": "sell",
-              "updated_at": 1710000000,
-              "is_stale": false,
+              "freshness": {
+                "type": "fresh",
+                "updated_at": 1710000000
+              },
               "strikes": [
                 {
                   "strike": 160000000000,
-                  "best_price": 50000000
+                  "price": {
+                    "type": "quoted",
+                    "price": 50000000
+                  }
                 }
               ]
             }
@@ -724,16 +734,23 @@
       "market": "11111111111111111111111111111111",
       "position_type": "covered_call",
       "side": "sell",
-      "updated_at": 1710000000,
-      "is_stale": false,
+      "freshness": {
+        "type": "fresh",
+        "updated_at": 1710000000
+      },
       "strikes": [
         {
           "strike": 450000000000,
-          "best_price": 5000000
+          "price": {
+            "type": "quoted",
+            "price": 5000000
+          }
         },
         {
           "strike": 460000000000,
-          "best_price": null
+          "price": {
+            "type": "none"
+          }
         }
       ],
       "next_cursor": null

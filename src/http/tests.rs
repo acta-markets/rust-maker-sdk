@@ -108,11 +108,13 @@ fn markets_round_trip_the_backend_shape() {
     };
     assert_eq!(finalized.status, MarketStatus::Finalized);
     assert_eq!(
-        finalized.settlement_price.map(|price| price.value()),
-        Some(150_000_000_000)
+        finalized.settlement,
+        crate::ws::types::Settlement::Fixed {
+            price: crate::types::Price::new(150_000_000_000)
+        }
     );
     assert_eq!(active.status, MarketStatus::Active);
-    assert!(active.settlement_price.is_none());
+    assert_eq!(active.settlement, crate::ws::types::Settlement::Pending);
 }
 
 #[test]

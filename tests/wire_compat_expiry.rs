@@ -13,7 +13,7 @@ fn server_frames_parse_with_a_bare_integer_expiry() {
         "maker":"d4Sdh8BP11q3E6NbEi1Qrn9DbPXg2XKZnX2Pcvemge1","price":5000000,
         "valid_until":1800000123,"nonce":7,
         "order_id":"00000000000000000000000000000000000000000000000000000000000000aa",
-        "net_price":null}}"#;
+        "net_price":1}}"#;
     match parse_server_message(quote_received).expect("parses") {
         ServerMessage::QuoteReceived(msg) => {
             assert_eq!(
@@ -48,7 +48,7 @@ fn a_known_frame_parses_as_its_type() {
         "terms":{"type":"covered_call","strike":1},"side":"sell","maker":"7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs","price":1,
         "valid_until":1800000123,"nonce":1,
         "order_id":"00000000000000000000000000000000000000000000000000000000000000aa",
-        "net_price":null}}"#;
+        "net_price":1}}"#;
     assert!(matches!(
         parse_server_message(quote_received).expect("parses"),
         ServerMessage::QuoteReceived(_)

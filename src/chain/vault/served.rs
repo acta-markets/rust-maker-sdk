@@ -383,7 +383,7 @@ pub fn verify_vault_swap(
     };
     let amount_in = parse_amount(&quote.in_amount, "quoted input")?;
     let open_slot = slot.open;
-    match (quote.staging, open_slot) {
+    match (quote.staging.step(), open_slot) {
         (Some(VaultStagingStep::Unstage), Some(slot)) if amount_in != slot.amount => {
             return Err(VaultIntentError::Terms(
                 "an unstage must spend the whole staged amount",
@@ -416,7 +416,7 @@ pub fn verify_vault_swap(
         ));
     }
     // A stage fills the staging mint, not the output leg the floor is in.
-    if quote.staging != Some(VaultStagingStep::Stage) && minimum_out < min_output_floor {
+    if quote.staging.step() != Some(VaultStagingStep::Stage) && minimum_out < min_output_floor {
         return Err(VaultIntentError::Terms(
             "minimum output is below the operator's floor",
         ));
@@ -452,7 +452,7 @@ pub fn verify_vault_swap(
         ("main", a.main_price_route, routes.main),
         ("second", a.second_price_route, routes.second),
     ];
-    let mut kind = match quote.staging {
+    let mut kind = match quote.staging.step() {
         None => kind,
         Some(step) => {
             let (Some(mint), Some(token_program)) = (swap.accounts.get(9), swap.accounts.get(10))

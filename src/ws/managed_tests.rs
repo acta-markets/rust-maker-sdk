@@ -745,7 +745,7 @@ async fn authenticate_test_peer(
         ServerMessage::AuthSuccess(AuthSuccessData {
             session_id: "session".to_string(),
             expires_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_900_000_000),
-            maker_pda: None,
+            role: crate::ws::types::server::AuthRole::Taker,
         }),
     )
     .await;
@@ -961,7 +961,7 @@ async fn gap_policy_reconnect_reconnects_after_a_subscriber_lags() {
             ServerMessage::AuthSuccess(AuthSuccessData {
                 session_id: "session".to_string(),
                 expires_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_900_000_000),
-                maker_pda: None,
+                role: crate::ws::types::server::AuthRole::Taker,
             }),
         )
         .await;
@@ -1123,7 +1123,7 @@ fn request_error_is_routed_by_request_id() {
     let error = ServerMessage::RequestError(RequestErrorEnvelope {
         request_id,
         error: ServerError::InternalError,
-        delivery: None,
+        delivery: crate::ws::types::server::Delivery::NotApplicable,
     });
     assert!(tracker.take_for_message(&error).is_some());
 }
@@ -1182,7 +1182,11 @@ fn command_receipts_resolve_by_request_id() {
 
 #[test]
 fn command_rejections_resolve_by_request_id_with_delivery() {
-    for delivery in [None, Some(Delivery::NotForwarded), Some(Delivery::Unknown)] {
+    for delivery in [
+        Delivery::NotApplicable,
+        Delivery::NotForwarded,
+        Delivery::Unknown,
+    ] {
         for (request_id, message) in correlated_commands() {
             let mut tracker = AwaitTracker::new(2);
             let mut rx = register(&mut tracker, 1, &message);
@@ -1243,7 +1247,7 @@ fn cancel_quote_request_error_resolves_without_timeout() {
     let error = ServerMessage::RequestError(RequestErrorEnvelope {
         request_id,
         error: ServerError::InternalError,
-        delivery: None,
+        delivery: crate::ws::types::server::Delivery::NotApplicable,
     });
     assert!(tracker.take_for_message(&error).is_some());
     assert_eq!(tracker.len(), 0);
@@ -1278,8 +1282,8 @@ fn cancel_rfq_without_a_success_receipt_is_not_awaitable() {
             rfq_id,
             rfq_version: Default::default(),
             reason,
-            your_quote: None,
-            winner: None,
+            your_quote: crate::ws::types::YourQuote::None,
+            winner: crate::ws::types::RfqWinner::None,
             closed_at: UNIX_EPOCH,
         });
         assert!(tracker.take_for_message(&closed).is_none());
@@ -1298,7 +1302,7 @@ fn concurrent_quote_acks_are_correlated_out_of_order() {
     let second_ack = ServerMessage::QuoteAcknowledged(QuoteAcknowledgedMessage {
         rfq_id: second.rfq_id,
         order_id: second.order_id,
-        replaced_order_id: None,
+        replaced: crate::ws::types::ReplacedQuote::None,
     });
     tracker
         .take_for_message(&second_ack)
@@ -1342,12 +1346,12 @@ fn batch_ack_is_correlated_independently_of_result_order() {
             BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
                 rfq_id: second.rfq_id,
                 order_id: second.order_id,
-                replaced_order_id: None,
+                replaced: crate::ws::types::ReplacedQuote::None,
             }),
             BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
                 rfq_id: first.rfq_id,
                 order_id: first.order_id,
-                replaced_order_id: None,
+                replaced: crate::ws::types::ReplacedQuote::None,
             }),
         ],
     });
@@ -1369,12 +1373,12 @@ fn batch_ack_with_future_status_still_correlates_by_order_id() {
             BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
                 rfq_id: first.rfq_id,
                 order_id: first.order_id,
-                replaced_order_id: None,
+                replaced: crate::ws::types::ReplacedQuote::None,
             }),
             BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
                 rfq_id: second.rfq_id,
                 order_id: second.order_id,
-                replaced_order_id: None,
+                replaced: crate::ws::types::ReplacedQuote::None,
             }),
         ],
     });

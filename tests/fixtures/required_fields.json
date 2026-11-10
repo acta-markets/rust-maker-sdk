@@ -10,7 +10,34 @@
         "server_time_unix_ms": 1700000000123,
         "min_quote_validity_seconds": 100,
         "settlement_buffer_seconds": 90,
-        "rate_limits": {"connection": {"type": "bucket", "per_second": 30, "burst": 60}, "wallet": {"type": "bucket", "per_second": 50, "burst": 100}, "rfqs": {"type": "bucket", "per_second": 10, "burst": 20}, "quotes": {"type": "unlimited"}, "queries": {"type": "bucket", "per_second": 20, "burst": 40}, "liquidity_provider": {"type": "not_applicable"}}
+        "rate_limits": {
+          "connection": {
+            "type": "bucket",
+            "per_second": 30,
+            "burst": 60
+          },
+          "wallet": {
+            "type": "bucket",
+            "per_second": 50,
+            "burst": 100
+          },
+          "rfqs": {
+            "type": "bucket",
+            "per_second": 10,
+            "burst": 20
+          },
+          "quotes": {
+            "type": "unlimited"
+          },
+          "queries": {
+            "type": "bucket",
+            "per_second": 20,
+            "burst": 40
+          },
+          "liquidity_provider": {
+            "type": "not_applicable"
+          }
+        }
       }
     }
   },
@@ -21,7 +48,9 @@
       "data": {
         "session_id": "s",
         "expires_at": 1700000000,
-        "maker_pda": null
+        "role": {
+          "type": "taker"
+        }
       }
     }
   },

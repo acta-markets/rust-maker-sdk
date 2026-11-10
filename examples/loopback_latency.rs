@@ -105,7 +105,7 @@ async fn authenticate_peer(socket: &mut Socket) {
         &ServerMessage::AuthSuccess(AuthSuccessData {
             session_id: "loopback".to_string(),
             expires_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_900_000_000),
-            maker_pda: None,
+            role: acta_maker_sdk::ws::types::server::AuthRole::Taker,
         }),
     )
     .await;
@@ -192,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let message = ServerMessage::QuoteAcknowledged(QuoteAcknowledgedMessage {
                 rfq_id: Uuid::from_u128(i as u128),
                 order_id: acta_maker_sdk::OrderId::new([0u8; 32]),
-                replaced_order_id: None,
+                replaced: acta_maker_sdk::ws::types::ReplacedQuote::None,
             });
             next_send += INBOUND_PACING;
             loop {

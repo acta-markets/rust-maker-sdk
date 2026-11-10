@@ -13,15 +13,18 @@ fn tracker() -> QuoteOutcomeTracker {
 
 fn message(kind: &str, extra: Value) -> ServerMessage {
     let mut data = json!({"rfq_id": Uuid::nil(), "order_id": OrderId::new([1; 32])});
-    let nullable: &[&str] = match kind {
-        "QuoteAcknowledged" => &["replaced_order_id"],
-        "QuoteFilled" => &["expiry_ts"],
-        "RfqClosed" => &["your_quote", "winner"],
+    let defaults: &[(&str, Value)] = match kind {
+        "QuoteAcknowledged" => &[("replaced", json!({"type": "none"}))],
+        "QuoteFilled" => &[("expiry_ts", json!(1))],
+        "RfqClosed" => &[
+            ("your_quote", json!({"type": "none"})),
+            ("winner", json!({"type": "none"})),
+        ],
         _ => &[],
     };
     let fields = data.as_object_mut().unwrap();
-    for key in nullable {
-        let _ = fields.insert((*key).to_string(), Value::Null);
+    for (key, value) in defaults {
+        let _ = fields.insert((*key).to_string(), value.clone());
     }
     if kind == "QuoteRejected" {
         let _ = fields.insert("message".to_string(), json!("rejected"));
@@ -129,7 +132,8 @@ fn closure_status_is_order_specific_and_filled_waits_for_details() {
     ] {
         let mut t = tracker();
         let mut close = closed("filled");
-        close["your_quote"] = json!({"order_id":t.order_id,"status":status,"price":1});
+        close["your_quote"] =
+            json!({"type":"quoted","order_id":t.order_id,"status":status,"price":1});
         feed(&mut t, "RfqClosed", close.clone());
         assert_eq!(t.outcome().is_terminal(), terminal);
         match status {
@@ -290,8 +294,7 @@ fn acknowledged_but_unselected_order_loses_when_rfq_fills() {
         feed(&mut t, "QuoteAcknowledged", json!({}));
         let mut close = closed("filled");
         if personalized {
-            close["your_quote"] =
-                json!({"order_id":OrderId::new([2;32]),"status":"filled","price":1});
+            close["your_quote"] = json!({"type":"quoted","order_id":OrderId::new([2;32]),"status":"filled","price":1});
         }
         feed(&mut t, "RfqClosed", close);
         assert!(matches!(

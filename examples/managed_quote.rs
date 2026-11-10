@@ -143,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::info!(
                     rfq = %outbid.rfq_id,
                     ours = outbid.your_price.value(),
-                    best = ?outbid.current_best_price.map(|p| p.value()),
+                    best = ?outbid.current_best_price.price().map(|p| p.value()),
                     "outbid"
                 );
             }

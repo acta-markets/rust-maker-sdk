@@ -7,7 +7,10 @@
       "expiry_ts": 1767225600,
       "is_put": true,
       "status": "finalized",
-      "settlement_price": 150000000000,
+      "settlement": {
+        "type": "fixed",
+        "price": 150000000000
+      },
       "products": [
         "cash_secured_put",
         "put_spread",
@@ -25,7 +28,9 @@
         "covered_call",
         "call_spread"
       ],
-      "settlement_price": null
+      "settlement": {
+        "type": "pending"
+      }
     }
   ],
   "next_cursor": null

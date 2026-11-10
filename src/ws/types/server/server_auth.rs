@@ -18,8 +18,14 @@ pub struct AuthSuccessData {
     pub session_id: String,
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub maker_pda: Option<Address32>,
+    pub role: AuthRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuthRole {
+    Taker,
+    Maker { maker_pda: Address32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

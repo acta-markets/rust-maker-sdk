@@ -19,9 +19,7 @@ pub struct RfqCreatedMessage {
     pub rfq_version: RfqVersion,
     pub terms: OptionTerms,
     pub side: TakerSide,
-
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub request_id: Option<Uuid>,
+    pub request_id: Uuid,
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     #[serde_as(as = "UnixSeconds")]
@@ -30,20 +28,34 @@ pub struct RfqCreatedMessage {
     pub order_options: Vec<RfqOrderOption>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RfqClosedYourQuote {
-    pub order_id: OrderId,
-    pub status: QuoteFinalStatus,
-    pub price: Price,
+/// The receiving maker's own quote on the closed RFQ.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum YourQuote {
+    None,
+    Quoted {
+        order_id: OrderId,
+        status: QuoteFinalStatus,
+        price: Price,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RfqClosedWinner {
-    pub maker: Address32,
-    pub price: Price,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RfqWinner {
+    None,
+    Winner {
+        maker: Address32,
+        price: Price,
+        transaction: WinnerTransaction,
+    },
+}
 
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub tx_signature: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WinnerTransaction {
+    Pending,
+    Sent { signature: String },
 }
 
 #[serde_as]
@@ -52,12 +64,8 @@ pub struct RfqClosedMessage {
     pub rfq_id: Uuid,
     pub rfq_version: RfqVersion,
     pub reason: RfqCloseReason,
-
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub your_quote: Option<RfqClosedYourQuote>,
-
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub winner: Option<RfqClosedWinner>,
+    pub your_quote: YourQuote,
+    pub winner: RfqWinner,
     #[serde_as(as = "UnixSeconds")]
     pub closed_at: SystemTime,
 }
@@ -122,8 +130,7 @@ pub struct ActiveRfqInfo {
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     pub quotes_count: QuoteCount,
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub best_price: Option<Price>,
+    pub best_price: crate::ws::types::common::QuotedPrice,
     pub order_options: Vec<RfqOrderOption>,
 }
 
@@ -154,13 +161,16 @@ pub struct MyActiveRfqInfo {
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
     pub state: MyActiveRfqState,
-
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub locked_order_id: Option<OrderId>,
+    pub lock: RfqLock,
     pub quotes_count: QuoteCount,
+    pub best_price: crate::ws::types::common::QuotedPrice,
+}
 
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub best_price: Option<Price>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RfqLock {
+    Unlocked,
+    Locked { order_id: OrderId },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

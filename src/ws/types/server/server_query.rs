@@ -74,7 +74,7 @@ pub struct MakerPositionsMessage {
     #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
     pub next_cursor: Option<String>,
     pub request_id: Uuid,
-    pub positions: Vec<MakerPositionInfo>,
+    pub positions: Vec<crate::ws::types::common::PositionInfo>,
     /// Positions omitted from `positions` because their market projection is incomplete.
     pub unrenderable: Vec<UnrenderablePositionInfo>,
 }
@@ -90,33 +90,6 @@ pub struct UnrenderablePositionInfo {
     pub created_at: SystemTime,
     /// Field names the projection could not supply.
     pub missing: Vec<String>,
-}
-
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MakerPositionInfo {
-    pub revision: crate::types::ids::PositionRevision,
-    pub pda: Address32,
-    pub market: MarketId,
-    pub underlying_mint: Address32,
-    pub underlying_symbol: String,
-    pub underlying_decimals: u8,
-    pub quote_mint: Address32,
-    pub quote_symbol: String,
-    pub quote_decimals: u8,
-    pub terms: OptionTerms,
-    pub side: TakerSide,
-    #[serde(flatten)]
-    pub state: crate::ws::types::common::PositionState,
-    pub quantity: Quantity,
-    pub price: Price,
-    /// Net premium in quote atoms, after the protocol fee.
-    pub total_premium: crate::types::ids::Balance,
-    #[serde_as(as = "UnixSeconds")]
-    pub created_at: SystemTime,
-    #[serde_as(as = "UnixSeconds")]
-    pub expiry_ts: SystemTime,
-    pub underlying_price: crate::ws::types::common::UnderlyingPrice,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,10 +213,16 @@ pub struct MakerTradeInfo {
     pub quantity: Quantity,
     pub price: Price,
     pub tx_signature: String,
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub position_pda: Option<Address32>,
+    pub position: TradePosition,
     #[serde_as(as = "UnixSeconds")]
     pub confirmed_at: SystemTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TradePosition {
+    Pending,
+    Confirmed { position_pda: Address32 },
 }
 
 #[serde_as]
@@ -307,9 +286,7 @@ pub struct TokenMarketEntry {
 pub struct TokenMarketIndicatives {
     pub position_type: PositionType,
     pub side: TakerSide,
-    #[serde_as(as = "UnixSeconds")]
-    pub updated_at: SystemTime,
-    pub is_stale: bool,
+    pub freshness: IndicativeFreshness,
     pub strikes: Vec<IndicativeStrikeBest>,
 }
 
@@ -322,17 +299,31 @@ pub struct IndicativePricesMessage {
     pub market: MarketId,
     pub position_type: PositionType,
     pub side: TakerSide,
-    #[serde_as(as = "UnixSeconds")]
-    pub updated_at: SystemTime,
-    pub is_stale: bool,
+    pub freshness: IndicativeFreshness,
     pub strikes: Vec<IndicativeStrikeBest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndicativeStrikeBest {
     pub strike: Strike,
-    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
-    pub best_price: Option<Price>,
+    /// Median of the makers' indicative prices.
+    pub price: crate::ws::types::common::QuotedPrice,
+}
+
+/// How current the indicative prices are.
+#[serde_as]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum IndicativeFreshness {
+    NoData,
+    Fresh {
+        #[serde_as(as = "UnixSeconds")]
+        updated_at: SystemTime,
+    },
+    Stale {
+        #[serde_as(as = "UnixSeconds")]
+        updated_at: SystemTime,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -396,7 +387,7 @@ pub struct MmSummaryData {
     pub request_id: Uuid,
     pub maker_pda: Address32,
     pub caps: MakerCapsSnapshot,
-    pub positions: Vec<MakerPositionInfo>,
+    pub positions: Vec<crate::ws::types::common::PositionInfo>,
     pub active_quotes: Vec<MakerQuoteInfo>,
     pub markets: Vec<MakerMarketInfo>,
     pub tokens: Vec<TokenInfo>,

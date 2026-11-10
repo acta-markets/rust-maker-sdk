@@ -264,7 +264,7 @@ impl VaultOperatorClient {
                 return Err(SaleError::SessionChanged);
             }
             match inbound.message() {
-                ServerMessage::RfqCreated(created) if created.request_id == Some(request_id) => {
+                ServerMessage::RfqCreated(created) if created.request_id == request_id => {
                     rfq_id = Some(created.rfq_id);
                 }
                 ServerMessage::QuoteReceived(quote) if taken.is_none() => {

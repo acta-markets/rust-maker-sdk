@@ -746,7 +746,7 @@ async fn server_challenge_auth(
         ServerMessage::AuthSuccess(AuthSuccessData {
             session_id: session_id.to_string(),
             expires_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_900_000_000),
-            maker_pda: None,
+            role: crate::ws::types::server::AuthRole::Taker,
         }),
     )
     .await;
@@ -916,7 +916,7 @@ async fn a_dropped_session_reconnects_resumes_and_becomes_ready_again() {
             ServerMessage::AuthSuccess(AuthSuccessData {
                 session_id: "session-2".to_string(),
                 expires_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_900_000_000),
-                maker_pda: None,
+                role: crate::ws::types::server::AuthRole::Taker,
             }),
         )
         .await;

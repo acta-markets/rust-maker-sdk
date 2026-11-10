@@ -637,8 +637,8 @@ mod tests {
                 "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "reference_price": 1,
                 "markets": [{ "products": ["covered_call"], "market_pda": "11111111111111111111111111111111",
                     "expiry_ts": 10, "is_put": false,
-                    "indicatives": [{ "position_type": "covered_call", "side": side, "updated_at": 0, "is_stale": false,
-                        "strikes": [{ "strike": strike, "best_price": strike + 100 }] }] }]
+                    "indicatives": [{ "position_type": "covered_call", "side": side, "freshness": { "type": "no_data" },
+                        "strikes": [{ "strike": strike, "price": { "type": "quoted", "price": strike + 100 } }] }] }]
             }))
             .unwrap()
         };
@@ -766,7 +766,7 @@ mod tests {
         [
         serde_json::json!({"type": "MakerCapsUpdated", "data": {"caps_snapshot": caps, "reason": "lifecycle"}}),
         serde_json::json!({"type": "PositionUpdated", "data": {
-            "position": {"revision": {"slot": 1, "transaction_index": 0, "instruction_index": 0}, "pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D", "market": "11111111111111111111111111111111", "underlying_mint": "opdhLMLuFCTUEq3YCwdtgqfuhtMqdkHBsJf6YrHfUFF", "quote_mint": "Aa8SVbHR7yKKA6Zq2M2Yw9jGvNsZkMD6QKwCCCR7vgeA",
+            "position": {"revision": {"slot": 1, "transaction_index": 0, "instruction_index": 0}, "pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D", "market": "11111111111111111111111111111111", "underlying_mint": "opdhLMLuFCTUEq3YCwdtgqfuhtMqdkHBsJf6YrHfUFF", "underlying_symbol": "UNDER", "quote_mint": "Aa8SVbHR7yKKA6Zq2M2Yw9jGvNsZkMD6QKwCCCR7vgeA", "quote_symbol": "QUOTE",
                 "terms": {"type": "covered_call", "strike": 1}, "side": "sell", "state": "open", "quantity": 2,
                 "price": 3, "total_premium": 6, "created_at": 1, "expiry_ts": 2,
                 "underlying_decimals": 9, "quote_decimals": 6,

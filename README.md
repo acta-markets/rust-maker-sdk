@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.8.4", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.9.0", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
