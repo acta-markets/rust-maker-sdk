@@ -379,10 +379,10 @@ async fn slow_subscriber_gets_an_explicit_gap() {
     let (handle, _commands) = super::ManagedWsHandle::test_handle(1, 1);
     let mut messages = handle.subscribe_messages();
     handle.inject_message(ServerMessage::Pong(crate::ws::types::PongData {
-        server_time_unix_ms: UNIX_EPOCH,
+        server_now_at_ms: UNIX_EPOCH,
     }));
     handle.inject_message(ServerMessage::Pong(crate::ws::types::PongData {
-        server_time_unix_ms: UNIX_EPOCH,
+        server_now_at_ms: UNIX_EPOCH,
     }));
 
     assert!(matches!(
@@ -397,7 +397,7 @@ async fn slow_subscriber_gets_an_explicit_gap() {
 async fn first_subscriber_receives_bounded_since_spawn_backlog() {
     let (handle, _commands) = super::ManagedWsHandle::test_handle(1, 2);
     handle.inject_message(ServerMessage::Pong(crate::ws::types::PongData {
-        server_time_unix_ms: UNIX_EPOCH,
+        server_now_at_ms: UNIX_EPOCH,
     }));
     handle.inject_event(ManagedWsEvent::Connected);
 
@@ -414,11 +414,11 @@ async fn later_subscribers_start_at_subscription_time() {
     let (handle, _commands) = super::ManagedWsHandle::test_handle(1, 2);
     let _first = handle.subscribe_messages();
     handle.inject_message(ServerMessage::Pong(crate::ws::types::PongData {
-        server_time_unix_ms: UNIX_EPOCH,
+        server_now_at_ms: UNIX_EPOCH,
     }));
     let mut later = handle.subscribe_messages();
     handle.inject_message(ServerMessage::Pong(crate::ws::types::PongData {
-        server_time_unix_ms: UNIX_EPOCH,
+        server_now_at_ms: UNIX_EPOCH,
     }));
 
     assert_eq!(later.recv().await.unwrap().sequence, 2);
@@ -711,17 +711,16 @@ async fn authenticate_test_peer(
             server_version: "test".to_string(),
             min_supported_version: "1".to_string(),
 
-            server_time_unix_ms: std::time::UNIX_EPOCH,
+            server_now_at_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 100,
             settlement_buffer_seconds: 90,
-            rate_limits: Some(crate::ws::types::WsRateLimits {
+            rate_limits: crate::ws::types::WsRateLimits {
                 connection: crate::ws::types::RateLimit::Unlimited,
                 wallet: crate::ws::types::RateLimit::Unlimited,
                 rfqs: crate::ws::types::RateLimit::Unlimited,
-                quotes: crate::ws::types::RateLimit::Unlimited,
                 queries: crate::ws::types::RateLimit::Unlimited,
                 liquidity_provider: crate::ws::types::ProviderRateLimit::NotApplicable,
-            }),
+            },
         }),
     )
     .await;
@@ -769,7 +768,7 @@ async fn sustained_outbound_commands_do_not_starve_inbound_messages() {
         send_server_message(
             &mut socket,
             ServerMessage::Pong(crate::ws::types::PongData {
-                server_time_unix_ms: UNIX_EPOCH,
+                server_now_at_ms: UNIX_EPOCH,
             }),
         )
         .await;
@@ -825,12 +824,13 @@ async fn sustained_outbound_commands_do_not_starve_inbound_messages() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unreadable_frame_is_a_gap_and_the_session_stays_up() {
+async fn an_unreadable_frame_pulls_quotes_and_reconnects() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind websocket peer");
     let address = listener.local_addr().expect("peer address");
     let (send_tx, send_rx) = oneshot::channel();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
     let peer = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept managed connection");
         let mut socket = tokio_tungstenite::accept_async(stream)
@@ -845,43 +845,25 @@ async fn an_unreadable_frame_is_a_gap_and_the_session_stays_up() {
             ))
             .await
             .expect("send unknown frame");
-        send_server_message(
-            &mut socket,
-            ServerMessage::Pong(crate::ws::types::PongData {
-                server_time_unix_ms: UNIX_EPOCH,
-            }),
-        )
-        .await;
-        while let Some(message) = socket.next().await {
-            if message.is_err() {
-                break;
+        let mut cancel_tx = Some(cancel_tx);
+        while let Some(Ok(message)) = socket.next().await {
+            if let Message::Text(text) = message
+                && let Ok(ClientMessage::CancelAllQuotes(cancel)) = serde_json::from_str(&text)
+                && let Some(tx) = cancel_tx.take()
+            {
+                let _ = tx.send(cancel.market_pda);
             }
         }
+        listener
     });
 
     let mut config = managed_config();
     config.url = format!("ws://{address}");
     let handle = spawn_managed_ws(config).expect("spawn managed websocket");
-    let mut messages = handle.subscribe_messages();
     let mut events = handle.subscribe_events();
-    let epoch = handle.wait_until_ready().await.expect("ready session");
+    handle.wait_until_ready().await.expect("ready session");
     send_tx.send(()).expect("ask peer to send frames");
 
-    let gap = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Err(error) = messages.recv().await {
-                return error;
-            }
-        }
-    })
-    .await
-    .expect("gap arrives");
-    assert!(matches!(gap, ManagedReceiveError::Gap { skipped: 1 }));
-    let inbound = tokio::time::timeout(Duration::from_secs(2), messages.recv())
-        .await
-        .expect("next frame arrives")
-        .expect("session survives the unreadable frame");
-    assert!(matches!(inbound.message(), ServerMessage::Pong(_)));
     let unreadable = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             if let Ok(ManagedWsEvent::UnreadableFrame(frame)) = events.recv().await {
@@ -892,10 +874,21 @@ async fn an_unreadable_frame_is_a_gap_and_the_session_stays_up() {
     .await
     .expect("unreadable event arrives");
     assert_eq!(unreadable.frame_type.as_deref(), Some("BrandNewFrame"));
-    assert_eq!(handle.wait_until_ready().await.expect("still ready"), epoch);
-
+    let cancelled = tokio::time::timeout(Duration::from_secs(2), cancel_rx)
+        .await
+        .expect("CancelAllQuotes arrives")
+        .expect("peer saw the cancel");
+    assert_eq!(cancelled, crate::ws::types::QueryFilter::All {});
+    let listener = tokio::time::timeout(Duration::from_secs(5), peer)
+        .await
+        .expect("the session ends")
+        .expect("join websocket peer");
+    let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+        .await
+        .expect("the client reconnects")
+        .expect("accept reconnect");
+    drop(stream);
     handle.close().await.expect("close managed websocket");
-    peer.await.expect("join websocket peer");
 }
 
 #[test]
@@ -938,17 +931,16 @@ async fn gap_policy_reconnect_reconnects_after_a_subscriber_lags() {
                 server_version: "test".to_string(),
                 min_supported_version: "1".to_string(),
 
-                server_time_unix_ms: std::time::UNIX_EPOCH,
+                server_now_at_ms: std::time::UNIX_EPOCH,
                 min_quote_validity_seconds: 100,
                 settlement_buffer_seconds: 90,
-                rate_limits: Some(crate::ws::types::WsRateLimits {
+                rate_limits: crate::ws::types::WsRateLimits {
                     connection: crate::ws::types::RateLimit::Unlimited,
                     wallet: crate::ws::types::RateLimit::Unlimited,
                     rfqs: crate::ws::types::RateLimit::Unlimited,
-                    quotes: crate::ws::types::RateLimit::Unlimited,
                     queries: crate::ws::types::RateLimit::Unlimited,
                     liquidity_provider: crate::ws::types::ProviderRateLimit::NotApplicable,
-                }),
+                },
             }),
         )
         .await;
@@ -1137,7 +1129,7 @@ fn correlated_commands() -> [(Uuid, ClientMessage); 3] {
             rfq,
             ClientMessage::RfqRequest(RfqRequestMessage {
                 request_id: rfq,
-                market: MarketId::new(crate::Address32::new([
+                market_pda: MarketId::new(crate::Address32::new([
                     228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127,
                     212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
                 ])),
@@ -1154,7 +1146,7 @@ fn correlated_commands() -> [(Uuid, ClientMessage); 3] {
             ClientMessage::AcceptQuote(AcceptQuoteMessage {
                 request_id: accept,
                 rfq_id: Uuid::new_v4(),
-                maker: crate::Address32::new([135; 32]),
+                maker_owner: crate::Address32::new([135; 32]),
                 order_id: OrderId::new([7; 32]),
             }),
         ),
@@ -1490,7 +1482,7 @@ async fn managed_handle_rejects_rfq_buys_and_passes_spread_buy_quotes() {
     };
     let rfq = ClientMessage::RfqRequest(RfqRequestMessage {
         request_id: Uuid::new_v4(),
-        market: MarketId::new(crate::Address32::new([
+        market_pda: MarketId::new(crate::Address32::new([
             228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127, 212,
             14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
         ])),
@@ -1730,7 +1722,7 @@ async fn indicative_response_rechecks_readiness_before_enqueue() {
     let response = ClientMessage::IndicativePricesResponse(
         crate::ws::types::IndicativePricesResponseMessage {
             request_id: Uuid::new_v4(),
-            market: crate::MarketId::new(crate::Address32::new([7; 32])),
+            market_pda: crate::MarketId::new(crate::Address32::new([7; 32])),
             position_type: crate::PositionType::CoveredCall,
             side: TakerSide::Buy,
             prices: Vec::new(),
@@ -1824,7 +1816,7 @@ async fn recover_test_peer(
                         send_server_message(
                             socket,
                             ServerMessage::Pong(PongData {
-                                server_time_unix_ms: UNIX_EPOCH,
+                                server_now_at_ms: UNIX_EPOCH,
                             }),
                         )
                         .await;
@@ -1983,17 +1975,16 @@ async fn auth_error_before_close_keeps_the_close_code() {
                 server_version: "test".to_string(),
                 min_supported_version: "1".to_string(),
 
-                server_time_unix_ms: UNIX_EPOCH,
+                server_now_at_ms: UNIX_EPOCH,
                 min_quote_validity_seconds: 100,
                 settlement_buffer_seconds: 90,
-                rate_limits: Some(crate::ws::types::WsRateLimits {
+                rate_limits: crate::ws::types::WsRateLimits {
                     connection: crate::ws::types::RateLimit::Unlimited,
                     wallet: crate::ws::types::RateLimit::Unlimited,
                     rfqs: crate::ws::types::RateLimit::Unlimited,
-                    quotes: crate::ws::types::RateLimit::Unlimited,
                     queries: crate::ws::types::RateLimit::Unlimited,
                     liquidity_provider: crate::ws::types::ProviderRateLimit::NotApplicable,
-                }),
+                },
             }),
         )
         .await;

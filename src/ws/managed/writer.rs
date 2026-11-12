@@ -430,7 +430,7 @@ mod tests {
         });
         let all = ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
             request_id: Uuid::new_v4(),
-            market: crate::ws::types::QueryFilter::All {},
+            market_pda: crate::ws::types::QueryFilter::All {},
         });
         for messages in [
             [quote.clone(), cancel.clone(), all.clone()],

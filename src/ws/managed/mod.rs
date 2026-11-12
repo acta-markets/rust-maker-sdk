@@ -74,8 +74,9 @@ pub enum ManagedWsEvent {
         close: Option<ServerClose>,
     },
     Error(ManagedWsFailure),
-    /// A frame this SDK cannot decode was skipped and the session stays up. Message
-    /// receivers see `ManagedReceiveError::Gap`, so rebuild state as after any gap.
+    /// A frame this SDK cannot decode. On `/maker` and `/vault` the SDK sends
+    /// `CancelAllQuotes` and reconnects; message receivers see `ManagedReceiveError::Gap`,
+    /// so rebuild state as after any gap.
     UnreadableFrame(UnreadableFrame),
     Terminated(ManagedWsTerminationReason),
 }

@@ -19,8 +19,8 @@ pub enum MarketStatus {
 pub struct MarketInfo {
     pub products: crate::types::ProductSet,
     pub pda: Address32,
-    pub underlying: Address32,
-    pub quote: Address32,
+    pub underlying_mint: Address32,
+    pub quote_mint: Address32,
     #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
     pub is_put: bool,

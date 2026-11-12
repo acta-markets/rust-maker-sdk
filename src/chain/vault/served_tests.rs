@@ -123,7 +123,7 @@ fn swap_quote(case: &Value, tx_base64: String) -> SwapQuoteResultData {
         .to_string(),
         quoted_out_amount: num(&swap["quoted_out_amount"]).to_string(),
         minimum_out_amount: num(&swap["minimum_out_amount"]).to_string(),
-        valid_until: num(&swap["valid_until"]).to_string(),
+        valid_until: std::time::UNIX_EPOCH + std::time::Duration::from_secs(num(&swap["valid_until"])),
         staging: match serde_json::from_value::<String>(case["staging"]["mode"].clone()) {
             Ok(mode) if mode == "stage" => SwapStaging::Stage,
             Ok(_) => SwapStaging::Unstage,
@@ -285,7 +285,7 @@ fn verify(
         order_id,
         tx_base64: tx_base64.to_owned(),
         last_valid_block_height: 1,
-        signature_deadline: std::time::UNIX_EPOCH,
+        signature_deadline_at: std::time::UNIX_EPOCH,
     };
     match case["kind"].as_str().unwrap() {
         "vault_taker" => {
@@ -743,7 +743,10 @@ fn swap_terms_follow_the_request() {
             let mut changed = quote.clone();
             match field {
                 "min" => changed.minimum_out_amount = value.into(),
-                _ => changed.valid_until = value.into(),
+                _ => {
+                    changed.valid_until = std::time::UNIX_EPOCH
+                        + std::time::Duration::from_secs(value.parse().expect("seconds"));
+                }
             }
             assert!(matches!(
                 verify_swap(case, &request, &changed, &tables),
@@ -1594,7 +1597,7 @@ fn served_vault_writer_buys_verify_for_the_wallet_holder() {
             order_id: OrderId::from_hex(case["position"]["order_id"].as_str().unwrap()).unwrap(),
             tx_base64: served_tx(case),
             last_valid_block_height: 1,
-            signature_deadline: std::time::UNIX_EPOCH,
+            signature_deadline_at: std::time::UNIX_EPOCH,
         };
         let buy = VaultTradeTerms {
             side: crate::types::TakerSide::Buy,

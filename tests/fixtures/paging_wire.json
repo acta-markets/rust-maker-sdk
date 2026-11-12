@@ -3,7 +3,7 @@
     "type": "GetPositions",
     "data": {
       "request_id": "f1b3d5e7-9a2c-4d84-8e6a-4b6c8d0e2f59",
-      "market": {
+      "market_pda": {
         "type": "all"
       },
       "underlying_mint": {
@@ -121,7 +121,7 @@
     "type": "GetMakerPositions",
     "data": {
       "request_id": "a1b2c3d4-0000-4000-8000-000000000011",
-      "market": {
+      "market_pda": {
         "type": "all"
       },
       "underlying_mint": {
@@ -222,7 +222,7 @@
             "instruction_index": 1
           },
           "pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
-          "market": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+          "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
           "underlying_mint": "So11111111111111111111111111111111111111112",
           "underlying_symbol": "SOL",
           "underlying_decimals": 9,
@@ -257,7 +257,7 @@
       "cursor": {
         "type": "start"
       },
-      "market": {
+      "market_pda": {
         "type": "all"
       }
     }
@@ -282,10 +282,10 @@
             "strike": 160000000000
           },
           "side": "sell",
-          "taker": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
+          "taker_owner": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
           "quantity": 1000000000,
           "price": 5000000000,
-          "tx_signature": "1111111111111111111111111111111111111111111111111111111111111111",
+          "transaction_signature": "1111111111111111111111111111111111111111111111111111111111111111",
           "position": {
             "type": "confirmed",
             "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP"
@@ -306,7 +306,7 @@
             "covered_call",
             "call_spread"
           ],
-          "market": {
+          "market_descriptor": {
             "chain_id": 0,
             "program_id": "33Ezs5eoa16QyPW8wifnyz2nCyMEcq2crqkVBNjnTE8U",
             "market_pda": "11111111111111111111111111111111",
@@ -359,7 +359,7 @@
       ],
       "markets": [
         {
-          "market_id": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+          "market_pda": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
           "current_oi": 100000000000,
           "max_oi": 250000000000,
           "utilization": 0.4
@@ -457,8 +457,8 @@
       "markets": [
         {
           "pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
-          "underlying": "So11111111111111111111111111111111111111112",
-          "quote": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "underlying_mint": "So11111111111111111111111111111111111111112",
+          "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
           "expiry_ts": 1710600000,
           "is_put": false,
           "products": [
@@ -509,11 +509,14 @@
               "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
             ]
           },
+          "schedule": {
+            "type": "continuous"
+          },
           "session": {
             "type": "continuous"
           },
           "protocol_fees": {
-            "type": "none"
+            "type": "not_quote_token"
           }
         },
         {
@@ -525,6 +528,9 @@
           ],
           "role": {
             "type": "quote"
+          },
+          "schedule": {
+            "type": "continuous"
           },
           "session": {
             "type": "continuous"
@@ -547,7 +553,7 @@
         {
           "rfq_id": "8f3e7e6a-4f5c-4b7c-9f1d-1f2a3b4c5d6e",
           "order_id": "9d1c2a6a0c2f5e7d9b4d8d8f2a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-          "market": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+          "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
           "underlying_mint": "So11111111111111111111111111111111111111112",
           "underlying_symbol": "SOL",
           "underlying_decimals": 9,
@@ -650,7 +656,7 @@
     "type": "GetIndicativePrices",
     "data": {
       "request_id": "00000000-0000-4000-8000-000000000001",
-      "market": "11111111111111111111111111111111",
+      "market_pda": "11111111111111111111111111111111",
       "position_type": "covered_call",
       "side": "sell",
       "limit": 200,
@@ -694,6 +700,9 @@
         "step": 100000000
       },
       "reference_price": 150000000000,
+      "session": {
+        "type": "continuous"
+      },
       "markets": [
         {
           "products": [
@@ -731,7 +740,7 @@
     "type": "IndicativePrices",
     "data": {
       "request_id": "00000000-0000-4000-8000-000000000001",
-      "market": "11111111111111111111111111111111",
+      "market_pda": "11111111111111111111111111111111",
       "position_type": "covered_call",
       "side": "sell",
       "freshness": {

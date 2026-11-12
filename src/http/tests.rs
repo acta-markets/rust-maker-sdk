@@ -4,6 +4,10 @@ use std::net::TcpListener;
 use serde_json::Value;
 
 use super::types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
+use super::types::{
+    Atoms, DepositWindow, ExposureDecimals, ExposureSpot, Moneyness, PositionClose, VaultBalances,
+    VaultGeneration, VaultMetadataState, VaultStaging, VaultStatsState, VaultTvl, WindowReturn,
+};
 use super::{
     CountLimit, HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultCapacity,
     VaultExposure, VaultLeg, VaultPositionProduct, VaultPositionRole, VaultPositionStatus,
@@ -18,6 +22,10 @@ const MARKETS: &str = include_str!("../../tests/fixtures/http_markets.json");
 const POSITIONS: &str = include_str!("../../tests/fixtures/http_vault_positions.json");
 const VENUE: &str = include_str!("../../tests/fixtures/http_venue.json");
 const TOKENS: &str = include_str!("../../tests/fixtures/http_tokens.json");
+
+fn unix(seconds: u64) -> std::time::SystemTime {
+    std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)
+}
 
 fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(json: &str) -> T {
     let decoded: T = serde_json::from_str(json).unwrap();
@@ -37,67 +45,99 @@ fn vaults_round_trip_the_backend_shape() {
     assert_eq!(
         full.capacity,
         VaultCapacity::Limited {
-            cap_limit: "1000".into(),
-            remaining: "860".into()
+            cap_limit: 1000,
+            remaining: 860
         }
     );
-    assert_eq!(full.tvl_usd_1e9.as_deref(), Some("18000"));
-    assert_eq!(full.depositors_in_generation, Some(11));
-    let staging = full.staging.as_ref().unwrap();
-    assert_eq!(staging.from_leg, VaultLeg::Second);
     assert_eq!(
-        (
-            staging.amount.as_str(),
-            staging.staged_at.as_str(),
-            staging.generation.as_str()
-        ),
-        ("70", "1700000050", "2")
+        full.tvl_usd,
+        VaultTvl::Priced {
+            value_1e9: 18000,
+            price_published_at: unix(1_702_600_050)
+        }
     );
-    let premium = full.premium.as_deref().unwrap();
-    assert_eq!(premium[0].generation.paid.as_deref(), Some("7"));
-    assert!(premium[1].generation.paid.is_none());
-    assert_eq!(full.fees.as_ref().unwrap().realized_fee_value, "6");
-    let performance = full.performance.as_ref().unwrap();
-    assert!(performance.covered);
-    assert_eq!(performance.capital_generation, full.capital_generation);
-    assert!(performance.returns.d7.is_none());
-    assert_eq!(performance.returns.d30.as_ref().unwrap().return_pct, 1.5);
-    assert_eq!(performance.cycles_completed, Some(4));
     assert_eq!(
-        full.metadata
-            .as_ref()
-            .map(|m| (m.name.as_str(), m.twitter.as_deref())),
-        Some(("SOL vault", Some("acta_markets")))
+        full.staging,
+        VaultStaging::Staged {
+            mint: full_staging_mint(full),
+            from_leg: VaultLeg::Second,
+            amount: 70,
+            staged_at: unix(1_700_000_050),
+            generation: 2,
+        }
+    );
+    let VaultStatsState::Current { generation, .. } = &full.stats else {
+        panic!("current stats");
+    };
+    let VaultGeneration::Covered {
+        premium,
+        fees,
+        depositors,
+        performance,
+        ..
+    } = generation
+    else {
+        panic!("covered generation");
+    };
+    assert_eq!(*depositors, 11);
+    assert_eq!(premium[0].generation.paid, Atoms::Available { atoms: 7 });
+    assert_eq!(premium[1].generation.paid, Atoms::Unavailable {});
+    assert_eq!(fees.realized_fee_value, 6);
+    assert_eq!(performance.returns.d7, WindowReturn::InsufficientHistory {});
+    assert!(matches!(
+        performance.returns.d30,
+        WindowReturn::Available { return_pct, .. } if return_pct == 1.5
+    ));
+    assert_eq!(performance.cycles_completed, 4);
+    let VaultMetadataState::Set(metadata) = &full.metadata else {
+        panic!("metadata");
+    };
+    assert_eq!(
+        (metadata.name.as_str(), metadata.twitter.as_deref()),
+        ("SOL vault", Some("acta_markets"))
     );
 
-    assert_eq!(minimal.metadata, None);
-    assert_eq!(minimal.staging, None);
-    assert!(minimal.main_balance.is_none() && minimal.deposit_window_set_ts.is_none());
+    assert_eq!(minimal.metadata, VaultMetadataState::None {});
+    assert_eq!(minimal.staging, VaultStaging::None {});
+    assert_eq!(minimal.balances, VaultBalances::Unobserved {});
+    assert_eq!(minimal.deposit_window, DepositWindow::Unset {});
     assert_eq!(minimal.capacity, VaultCapacity::Unlimited {});
-    assert!(minimal.premium.is_none() && minimal.fees.is_none() && minimal.tvl_usd_1e9.is_none());
-    let performance = minimal.performance.as_ref().unwrap();
-    assert!(!performance.covered);
-    assert!(performance.returns.all.is_none() && performance.cycles_completed.is_none());
+    assert_eq!(minimal.tvl_usd, VaultTvl::Unpriced {});
+    assert!(matches!(
+        minimal.stats,
+        VaultStatsState::Current {
+            generation: VaultGeneration::None {},
+            ..
+        }
+    ));
+}
+
+fn full_staging_mint(vault: &super::Vault) -> crate::Address32 {
+    match vault.staging {
+        VaultStaging::Staged { mint, .. } => mint,
+        VaultStaging::None {} => panic!("staged"),
+    }
 }
 
 #[test]
 fn vault_exposure_round_trips_the_backend_shape() {
     let exposure: VaultExposure = round_trip(EXPOSURE);
-    assert_eq!(exposure.as_of, "1702600005");
+    assert_eq!(exposure.as_of, unix(1_702_600_005));
     let [call, put, unpriced] = exposure.positions.as_slice() else {
         panic!("three positions");
     };
     assert_eq!(call.role, VaultPositionRole::Writer);
-    assert_eq!(call.itm, Some(true));
-    assert_eq!(call.intrinsic.as_deref(), Some("-20000000"));
+    assert!(matches!(call.moneyness, Moneyness::Available { itm: true, .. }));
+    assert_eq!(call.intrinsic, Atoms::Available { atoms: -20_000_000 });
     assert_eq!(put.position_type, VaultPositionType::CashSecuredPut);
     assert_eq!(put.status, VaultPositionStatus::Funded);
-    assert!(unpriced.spot.is_none() && unpriced.quote_decimals.is_none());
+    assert_eq!(unpriced.spot, ExposureSpot::Unpriced {});
+    assert_eq!(unpriced.decimals, ExposureDecimals::Unknown {});
     assert_eq!(
-        exposure.totals[0].outstanding_intrinsic.as_deref(),
-        Some("-10000000")
+        exposure.totals[0].outstanding_intrinsic,
+        Atoms::Available { atoms: -10_000_000 }
     );
-    assert!(exposure.totals[1].notional_at_strike.is_none());
+    assert_eq!(exposure.totals[1].notional_at_strike, Atoms::Unavailable {});
 }
 
 #[test]
@@ -128,7 +168,7 @@ fn venue_round_trips_the_backend_shape() {
 #[test]
 fn tokens_round_trip_the_backend_shape() {
     let response: TokensResponse = round_trip(TOKENS);
-    let [usdc, sol] = response.tokens.as_slice() else {
+    let [sol, usdc] = response.tokens.as_slice() else {
         panic!("two tokens");
     };
     let TokenRole::Underlying {
@@ -156,14 +196,14 @@ fn vault_positions_round_trip_the_backend_shape() {
     assert_eq!(put.position_type, VaultPositionType::CashSecuredPut);
     assert_eq!(put.status, VaultPositionStatus::Funded);
     assert_eq!(call.role, VaultPositionRole::Holder);
-    assert_eq!(call.is_otm, Some(true));
+    assert!(matches!(call.close, PositionClose::Closed { is_otm: true, .. }));
     assert!(response.next_cursor.is_some());
 
-    assert_eq!(put.product, VaultPositionProduct::Physical);
+    assert_eq!(put.product, VaultPositionProduct::Physical {});
 
     let mut value: Value = serde_json::from_str(POSITIONS).unwrap();
     value["positions"][0]["product"] = serde_json::json!({
-        "kind": "spread",
+        "type": "spread",
         "upper_strike": "160000000000",
         "collateral": "20000000",
     });
@@ -178,8 +218,8 @@ fn vault_positions_round_trip_the_backend_shape() {
         assert_eq!(
             response.positions[0].product,
             VaultPositionProduct::Spread {
-                upper_strike: "160000000000".into(),
-                collateral: "20000000".into(),
+                upper_strike: 160_000_000_000,
+                collateral: 20_000_000,
             }
         );
     }
@@ -238,7 +278,7 @@ async fn client_reads_public_routes() {
     let client = HttpClient::new(base).unwrap();
     assert_eq!(client.vaults().await.unwrap().len(), 2);
     let vault = client.vault(crate::Address32::new([0; 32])).await.unwrap();
-    assert!(vault.metadata.is_none());
+    assert_eq!(vault.metadata, VaultMetadataState::None {});
     assert_eq!(
         client
             .markets(&MarketFilter::default())
@@ -353,17 +393,17 @@ fn venue_requires_max_page_size() {
 async fn vault_requests_page_at_the_route_maximum() {
     let row = |wallet: &str| {
         serde_json::json!({
-            "wallet": wallet, "shares": "90", "created_at": "1", "transaction_signature": null,
+            "wallet": wallet, "shares": "90", "created_at": "1", "transaction": { "type": "unknown" },
         })
     };
     let (base, server) = serve(vec![
         (
             "200 OK",
-            serde_json::json!({ "requests": [row("a")], "next_cursor": "c" }).to_string(),
+            serde_json::json!({ "requests": [row("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi")], "next_cursor": "c" }).to_string(),
         ),
         (
             "200 OK",
-            serde_json::json!({ "requests": [row("b")], "next_cursor": null }).to_string(),
+            serde_json::json!({ "requests": [row("3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL")], "next_cursor": null }).to_string(),
         ),
     ]);
     let client = HttpClient::new(base).unwrap();
@@ -373,17 +413,17 @@ async fn vault_requests_page_at_the_route_maximum() {
         .unwrap();
     assert_eq!(requests.len(), 2);
     let paths = server.join().unwrap();
-    assert!(paths[0].ends_with("/withdraw-requests?limit=100"));
-    assert!(paths[1].ends_with("/withdraw-requests?limit=100&cursor=c"));
+    assert!(paths[0].ends_with("/withdraw-requests?limit=200"));
+    assert!(paths[1].ends_with("/withdraw-requests?limit=200&cursor=c"));
 }
 
 #[tokio::test]
 async fn vault_cycles_decode_a_running_cycle() {
     let cycle = serde_json::json!({
-        "cycle_number": "4", "capital_generation": "0", "expiry": "1793606400",
-        "started_at": "1793520522", "finished_at": null, "share_price_start": "1028295748",
-        "share_price_end": null, "equity_start": "5141478741", "equity_end": null,
-        "positions_opened": 19, "positions_settled": 0, "return_pct": null,
+        "cycle_number": "4", "capital_generation": { "type": "known", "generation": "0" },
+        "expiry_ts": "1793606400", "started_at": "1793520522", "share_price_start": "1028295748",
+        "equity_start": "5141478741", "state": { "type": "running" },
+        "positions_opened": 19, "positions_settled": 0,
         "performance_fee_assessed": "0", "management_fee_assessed": "0",
     });
     let (base, server) = serve(vec![(
@@ -396,5 +436,6 @@ async fn vault_cycles_decode_a_running_cycle() {
         .await
         .unwrap();
     assert_eq!(cycles[0].positions_opened, 19);
+    assert_eq!(cycles[0].state, super::types::CycleState::Running {});
     assert_eq!(server.join().unwrap().len(), 1);
 }

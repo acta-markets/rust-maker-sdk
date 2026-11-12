@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.9.0", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.10.0", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -255,7 +255,7 @@ use `request_page` and keep the returned cursor as an opaque value.
 
 On the wire, WS lists take `limit` (at most 200) and `Cursor::Start {}` or
 `Cursor::After { id }`, and return `next_cursor`, `null` on the last page. REST lists
-take an optional `limit` (default 50, at most 200, 100 for vault requests) and an
+take an optional `limit` (default 50, at most 200) and an
 optional `cursor`: omit it for the first page, then pass `next_cursor` as is.
 
 ## Documentation

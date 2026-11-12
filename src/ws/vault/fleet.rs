@@ -76,7 +76,7 @@ pub enum FleetListing {
     Pending,
     /// Vault PDAs whose current delegate grant names the operator, listed
     /// while the catalog feed is live.
-    Listed(Arc<BTreeSet<String>>),
+    Listed(Arc<BTreeSet<crate::Address32>>),
     /// The latest listing failed or the catalog feed is down; the last
     /// listing is no longer known current.
     Failed(Arc<str>),
@@ -409,6 +409,10 @@ mod tests {
         (base, requested)
     }
 
+    fn pda(base58: &str) -> crate::Address32 {
+        crate::Address32::from_base58(base58).expect("fixture")
+    }
+
     fn listed(pdas: &[&str]) -> (&'static str, String) {
         let all: serde_json::Value = serde_json::from_str(VAULTS).unwrap();
         let vaults: Vec<_> = all["vaults"]
@@ -470,17 +474,16 @@ mod tests {
                 server_version: "test".into(),
                 min_supported_version: crate::WS_PROTOCOL_VERSION.into(),
 
-                server_time_unix_ms: std::time::UNIX_EPOCH,
+                server_now_at_ms: std::time::UNIX_EPOCH,
                 min_quote_validity_seconds: 100,
                 settlement_buffer_seconds: 90,
-                rate_limits: Some(crate::ws::types::WsRateLimits {
+                rate_limits: crate::ws::types::WsRateLimits {
                     connection: crate::ws::types::RateLimit::Unlimited,
                     wallet: crate::ws::types::RateLimit::Unlimited,
                     rfqs: crate::ws::types::RateLimit::Unlimited,
-                    quotes: crate::ws::types::RateLimit::Unlimited,
                     queries: crate::ws::types::RateLimit::Unlimited,
                     liquidity_provider: crate::ws::types::ProviderRateLimit::NotApplicable,
-                }),
+                },
             }),
         )
         .await;
@@ -564,7 +567,7 @@ mod tests {
         subscribe(&mut socket, &wallet).await;
         assert_eq!(
             next(&mut listings).await,
-            FleetListing::Listed(Arc::new(BTreeSet::from([FIRST.to_owned()])))
+            FleetListing::Listed(Arc::new(BTreeSet::from([pda(FIRST)])))
         );
         send(
             &mut socket,
@@ -575,10 +578,7 @@ mod tests {
         .await;
         assert_eq!(
             next(&mut listings).await,
-            FleetListing::Listed(Arc::new(BTreeSet::from([
-                FIRST.to_owned(),
-                SECOND.to_owned()
-            ])))
+            FleetListing::Listed(Arc::new(BTreeSet::from([pda(FIRST), pda(SECOND)])))
         );
         let expected = format!("/api/v1/vaults?delegate={wallet}&limit=200");
         for _ in 0..2 {

@@ -157,7 +157,7 @@ fn quote(case: &serde_json::Value, rfq_id: Uuid, price: u64) -> ServerMessage {
             strike: Strike::new(num(&p["strike"])),
         },
         side: TakerSide::Sell,
-        maker: crate::Address32::from_base58(case["maker_owner"].as_str().unwrap())
+        maker_owner: crate::Address32::from_base58(case["maker_owner"].as_str().unwrap())
             .expect("valid fixture"),
         price: Price::new(price),
         valid_until: QuoteExpiry::from_unix_seconds(num(&p["valid_until"])),
@@ -258,7 +258,7 @@ async fn serve_sale(
         panic!("expected RfqRequest");
     };
     assert_eq!(
-        rfq.market.as_str(),
+        rfq.market_pda.as_str(),
         case["position"]["market"].as_str().unwrap()
     );
     let rfq_id = Uuid::new_v4();
@@ -291,7 +291,7 @@ async fn serve_sale(
             order_id: accept.order_id,
             tx_base64: case["served"]["tx_base64"].as_str().unwrap().to_owned(),
             last_valid_block_height: SERVED_HEIGHT,
-            signature_deadline: std::time::SystemTime::now() + Duration::from_secs(60),
+            signature_deadline_at: std::time::SystemTime::now() + Duration::from_secs(60),
         }),
     )
     .await;
@@ -694,7 +694,7 @@ fn spread_quote(
         rfq_id,
         terms: sale.terms,
         side: TakerSide::Sell,
-        maker: crate::Address32::from_base58(case["maker_owner"].as_str().unwrap())
+        maker_owner: crate::Address32::from_base58(case["maker_owner"].as_str().unwrap())
             .expect("valid fixture"),
         price: Price::new(num(&p["price"])),
         valid_until: QuoteExpiry::from_unix_seconds(num(&p["valid_until"])),
@@ -793,7 +793,7 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
                     order_id: quote.order_id,
                     tx_base64: tx_base64.clone(),
                     last_valid_block_height: SERVED_HEIGHT,
-                    signature_deadline: std::time::SystemTime::now() + Duration::from_secs(60),
+                    signature_deadline_at: std::time::SystemTime::now() + Duration::from_secs(60),
                 };
                 verify_vault_open(&to_sign, &intent, &[fixture_table(&case)], BOUNDS)
                     .unwrap_or_else(|error| panic!("spread served transaction rejected: {error}"));
@@ -836,7 +836,7 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
                     order_id: quote.order_id,
                     tx_base64,
                     last_valid_block_height: SERVED_HEIGHT,
-                    signature_deadline: std::time::SystemTime::now() + Duration::from_secs(60),
+                    signature_deadline_at: std::time::SystemTime::now() + Duration::from_secs(60),
                 }),
             )
             .await;

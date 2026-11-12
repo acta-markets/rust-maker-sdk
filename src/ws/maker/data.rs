@@ -634,7 +634,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({
                 "next_cursor": next, "request_id": "00000000-0000-0000-0000-000000000000",
                 "underlying_symbol": "SOL", "underlying_decimals": 9, "quote_symbol": "USDC", "quote_decimals": 6,
-                "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "reference_price": 1,
+                "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "reference_price": 1, "session": { "type": "continuous" },
                 "markets": [{ "products": ["covered_call"], "market_pda": "11111111111111111111111111111111",
                     "expiry_ts": 10, "is_put": false,
                     "indicatives": [{ "position_type": "covered_call", "side": side, "freshness": { "type": "no_data" },
@@ -766,7 +766,7 @@ mod tests {
         [
         serde_json::json!({"type": "MakerCapsUpdated", "data": {"caps_snapshot": caps, "reason": "lifecycle"}}),
         serde_json::json!({"type": "PositionUpdated", "data": {
-            "position": {"revision": {"slot": 1, "transaction_index": 0, "instruction_index": 0}, "pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D", "market": "11111111111111111111111111111111", "underlying_mint": "opdhLMLuFCTUEq3YCwdtgqfuhtMqdkHBsJf6YrHfUFF", "underlying_symbol": "UNDER", "quote_mint": "Aa8SVbHR7yKKA6Zq2M2Yw9jGvNsZkMD6QKwCCCR7vgeA", "quote_symbol": "QUOTE",
+            "position": {"revision": {"slot": 1, "transaction_index": 0, "instruction_index": 0}, "pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D", "market_pda": "11111111111111111111111111111111", "underlying_mint": "opdhLMLuFCTUEq3YCwdtgqfuhtMqdkHBsJf6YrHfUFF", "underlying_symbol": "UNDER", "quote_mint": "Aa8SVbHR7yKKA6Zq2M2Yw9jGvNsZkMD6QKwCCCR7vgeA", "quote_symbol": "QUOTE",
                 "terms": {"type": "covered_call", "strike": 1}, "side": "sell", "state": "open", "quantity": 2,
                 "price": 3, "total_premium": 6, "created_at": 1, "expiry_ts": 2,
                 "underlying_decimals": 9, "quote_decimals": 6,
@@ -774,8 +774,8 @@ mod tests {
             "update_type": "created"
         }}),
         serde_json::json!({"type": "TradeExecuted", "data": {"trade": {
-            "id": "00000000-0000-0000-0000-000000000001", "market": "11111111111111111111111111111111", "terms": {"type": "covered_call", "strike": 1}, "side": "sell",
-            "quantity": 2, "price": 3, "taker": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T", "maker": "7rJSLqoFCCqN39ztKiotFqaxwxEtycG4Fm8XzF4Bvx2M", "tx_signature": "s", "executed_at": 1
+            "id": "00000000-0000-0000-0000-000000000001", "market_pda": "11111111111111111111111111111111", "terms": {"type": "covered_call", "strike": 1}, "side": "sell",
+            "quantity": 2, "price": 3, "taker_owner":"GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T", "maker_pda": "7rJSLqoFCCqN39ztKiotFqaxwxEtycG4Fm8XzF4Bvx2M", "transaction_signature": "s", "executed_at": 1
         }}}),
     ].into_iter().map(|value| serde_json::from_value(value).unwrap()).collect()
     }

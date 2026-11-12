@@ -12,7 +12,8 @@ use super::{
 use crate::ws::client::PreparedClientMessage;
 use crate::ws::error::WsClientError;
 use crate::ws::managed::SendAwaitError;
-use crate::ws::types::{ClientMessage, ServerMessage};
+use crate::ws::managed::MakerWsEndpoint;
+use crate::ws::types::{CancelAllQuotesMessage, ClientMessage, QueryFilter, ServerMessage};
 
 pub(super) async fn handle_ws_read(
     read_result: Option<crate::ws::error::WsResult<ServerMessage>>,
@@ -50,6 +51,11 @@ pub(super) async fn handle_ws_read(
             }
             inbound.publish_unreadable();
             send_event(events_tx, ManagedWsEvent::UnreadableFrame(*frame));
+            // The unread frame may be a fill or a cancel this session never saw.
+            if matches!(config.endpoint, MakerWsEndpoint::Quote | MakerWsEndpoint::Vault) {
+                withdraw_quotes(lanes, config.write_timeout).await;
+            }
+            return Some((AuthenticatedSessionEnd::Disconnected, false));
         }
         Some(Err(error)) => {
             send_event(
@@ -61,6 +67,24 @@ pub(super) async fn handle_ws_read(
         None => return Some((AuthenticatedSessionEnd::Disconnected, false)),
     }
     None
+}
+
+/// Writes `CancelAllQuotes` and waits until the socket took it; the session ends either way.
+async fn withdraw_quotes(lanes: &WriterLanes, write_timeout: std::time::Duration) {
+    let cancel = ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
+        request_id: uuid::Uuid::new_v4(),
+        market_pda: QueryFilter::All {},
+    });
+    let Ok(prepared) = PreparedClientMessage::new(&cancel) else {
+        return;
+    };
+    let (written_tx, written_rx) = tokio::sync::oneshot::channel();
+    if lanes
+        .frame_with_receipt(prepared, None, Some(written_tx))
+        .is_ok()
+    {
+        let _ = timeout(write_timeout, written_rx).await;
+    }
 }
 
 async fn handle_session_message(

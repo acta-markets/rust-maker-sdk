@@ -41,9 +41,9 @@ pub enum CapError {
     },
 
     #[strum(serialize = "market_oi_cap_exceeded")]
-    #[error("Market OI cap exceeded for {market_id} ({current}/{limit})")]
+    #[error("Market OI cap exceeded for {market_pda} ({current}/{limit})")]
     MarketOiCapExceeded {
-        market_id: String,
+        market_pda: String,
         current: Quantity,
         limit: Quantity,
     },

@@ -33,7 +33,7 @@ use crate::chain::vault::{
 use super::config::VaultOperatorConfig;
 use super::gate::SendGate;
 use super::projection::VaultProjectionReceiver;
-use super::tx::{VaultTxError, ensure_deadline_ahead, ensure_system_time_ahead};
+use super::tx::{VaultTxError, ensure_system_time_ahead};
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -295,7 +295,7 @@ impl VaultOperatorClient {
             .into());
         }
         let transaction = verify_vault_open(to_sign, intent, tables, bounds)?;
-        ensure_system_time_ahead("signature_deadline", to_sign.signature_deadline)?;
+        ensure_system_time_ahead("signature_deadline", to_sign.signature_deadline_at)?;
         let (tx_base64, participant_signature) =
             transaction.sign_with_participant_signature(self.operator.as_ref())?;
         Ok((
@@ -339,7 +339,7 @@ impl VaultOperatorClient {
         bounds: ComputeBudgetBounds,
     ) -> Result<SwapSubmitData, VaultTxError> {
         let transaction = verify_vault_swap(intent, tables, bounds)?;
-        ensure_deadline_ahead("valid_until", &intent.quote.valid_until)?;
+        ensure_system_time_ahead("valid_until", intent.quote.valid_until)?;
         Ok(SwapSubmitData {
             request_id: Uuid::new_v4(),
             execution_id: intent.quote.execution_id,

@@ -84,7 +84,7 @@ pub struct MakerPositionsMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnrenderablePositionInfo {
     pub pda: Address32,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     /// Keyset-cursor key, so a page may end on an unrenderable row.
     #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
@@ -105,7 +105,7 @@ pub struct MyQuotesMessage {
 pub struct MakerQuoteInfo {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub underlying_mint: Address32,
     pub underlying_symbol: String,
     pub underlying_decimals: u8,
@@ -209,10 +209,10 @@ pub struct MakerTradeInfo {
     pub quote_decimals: u8,
     pub terms: OptionTerms,
     pub side: TakerSide,
-    pub taker: Address32,
+    pub taker_owner: Address32,
     pub quantity: Quantity,
     pub price: Price,
-    pub tx_signature: String,
+    pub transaction_signature: String,
     pub position: TradePosition,
     #[serde_as(as = "UnixSeconds")]
     pub confirmed_at: SystemTime,
@@ -255,6 +255,28 @@ pub struct EarnAssetSummary {
     pub nearest_expiry_ts: SystemTime,
 }
 
+/// Whether the underlying's price feed trades now. Outside a session the oracle price is the
+/// last one published.
+#[serde_as]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MarketSession {
+    /// The feed's schedule is open around the clock.
+    Continuous {},
+    Open {
+        #[serde_as(as = "UnixSeconds")]
+        closes_at: SystemTime,
+    },
+    Closed {
+        #[serde_as(as = "UnixSeconds")]
+        opens_at: SystemTime,
+    },
+    /// Closed with no session in the next two weeks.
+    ClosedIndefinitely {},
+    /// Pyth publishes no schedule for the feed, or it is not loaded yet.
+    Unknown {},
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenMarketsInfoData {
@@ -267,6 +289,7 @@ pub struct TokenMarketsInfoData {
     pub quote_decimals: Decimals,
     pub size_rule: PositionSizeRule,
     pub reference_price: Price,
+    pub session: MarketSession,
     pub markets: Vec<TokenMarketEntry>,
 }
 
@@ -296,7 +319,7 @@ pub struct IndicativePricesMessage {
     #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
     pub next_cursor: Option<String>,
     pub request_id: Uuid,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub position_type: PositionType,
     pub side: TakerSide,
     pub freshness: IndicativeFreshness,
@@ -478,7 +501,7 @@ pub struct SponsoredTxToSignData {
     pub tx_base64: String,
     pub last_valid_block_height: u64,
     #[serde_as(as = "UnixSeconds")]
-    pub signature_deadline: SystemTime,
+    pub signature_deadline_at: SystemTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -490,7 +513,7 @@ pub struct OrderAcceptedData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderSubmittedData {
     pub order_id: OrderId,
-    pub tx_signature: String,
+    pub transaction_signature: String,
     pub order_version: OrderVersion,
 }
 
@@ -556,9 +579,9 @@ pub struct PositionOpenedEvent {
     /// Canonical instruction coordinate within `signature`.
     pub instruction_index: i16,
     pub slot: Slot,
-    pub market: MarketId,
-    pub maker: Address32,
-    pub taker: Address32,
+    pub market_pda: MarketId,
+    pub maker_pda: Address32,
+    pub taker_owner: Address32,
     pub terms: OptionTerms,
     pub side: TakerSide,
     pub quantity: Quantity,
@@ -572,7 +595,7 @@ pub struct MarketCreatedEvent {
     pub signature: String,
     pub instruction_index: i16,
     pub slot: Slot,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub underlying_mint: Address32,
     pub quote_mint: Address32,
     #[serde_as(as = "UnixSeconds")]
@@ -585,7 +608,7 @@ pub struct MarketFinalizedEvent {
     pub signature: String,
     pub instruction_index: i16,
     pub slot: Slot,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub settlement_price: Price,
 }
 
@@ -594,7 +617,7 @@ pub struct MakerRegisteredEvent {
     pub signature: String,
     pub instruction_index: i16,
     pub slot: Slot,
-    pub owner: Address32,
+    pub maker_owner: Address32,
     pub maker_pda: Address32,
     pub quote_signing: Address32,
 }
@@ -604,7 +627,7 @@ pub struct PositionSettledEvent {
     pub signature: String,
     pub instruction_index: i16,
     pub slot: Slot,
-    pub position: Address32,
+    pub position_pda: Address32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -612,7 +635,7 @@ pub struct PositionLiquidatedEvent {
     pub signature: String,
     pub instruction_index: i16,
     pub slot: Slot,
-    pub position: Address32,
+    pub position_pda: Address32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

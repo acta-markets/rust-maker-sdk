@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 client
                     .get_maker_positions(GetMakerPositionsMessage {
                         request_id: uuid::Uuid::new_v4(),
-                        market: QueryFilter::All {},
+                        market_pda: QueryFilter::All {},
                         underlying_mint: QueryFilter::All {},
                         status: vec![PositionStatus::Open, PositionStatus::Funded],
                         min_expiry_ts: TimeBound::Unbounded {},

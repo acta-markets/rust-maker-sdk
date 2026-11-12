@@ -1,25 +1,6 @@
 {
   "tokens": [
     {
-      "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      "symbol": "USDC",
-      "decimals": 6,
-      "oracle_feed_ids": [
-        "eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
-      ],
-      "role": {
-        "type": "quote"
-      },
-      "session": {
-        "type": "continuous"
-      },
-      "protocol_fees": {
-        "type": "quote",
-        "premium_bps": 100,
-        "volume_bps": 10
-      }
-    },
-    {
       "mint": "So11111111111111111111111111111111111111112",
       "symbol": "SOL",
       "decimals": 9,
@@ -38,11 +19,36 @@
           "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
         ]
       },
+      "schedule": {
+        "type": "unknown"
+      },
       "session": {
-        "type": "continuous"
+        "type": "unknown"
       },
       "protocol_fees": {
-        "type": "none"
+        "type": "not_quote_token"
+      }
+    },
+    {
+      "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "symbol": "USDC",
+      "decimals": 6,
+      "oracle_feed_ids": [
+        "eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
+      ],
+      "role": {
+        "type": "quote"
+      },
+      "schedule": {
+        "type": "unknown"
+      },
+      "session": {
+        "type": "unknown"
+      },
+      "protocol_fees": {
+        "type": "quote",
+        "premium_bps": 100,
+        "volume_bps": 10
       }
     }
   ],

@@ -156,7 +156,7 @@ impl ServerError {
             Self::QuoteExpired | Self::SignatureTimeout => Refresh,
             Self::QuoteLocked { reason } => match reason {
                 QuoteLockedReason::OrderSubmitted => Reconcile,
-                QuoteLockedReason::RfqLocked => Stop,
+                QuoteLockedReason::RfqLocked => Refresh,
             },
             Self::OracleNotReady
             | Self::OraclePriceStale { .. }
@@ -203,6 +203,7 @@ impl ServerError {
                 | ClaimErrorReason::Reserved => FixRequest,
                 ClaimErrorReason::NotRegistered => Stop,
             },
+            Self::QuoteNotFound | Self::UnknownOrder => Refresh,
             Self::QuoteExpiryTooShort { .. }
             | Self::InvalidStrike
             | Self::InvalidValidUntil
@@ -210,13 +211,10 @@ impl ServerError {
             | Self::InvalidPositionType
             | Self::InvalidMarket { .. }
             | Self::WrongEndpoint { .. } => FixRequest,
+            Self::RfqAlreadyLocked => Reconcile,
+            Self::RfqNotFound | Self::RfqNotActive => Refresh,
             Self::Unauthorized { .. }
-            | Self::RfqNotFound
-            | Self::RfqNotActive
-            | Self::RfqAlreadyLocked
             | Self::InvalidState { .. }
-            | Self::QuoteNotFound
-            | Self::UnknownOrder
             | Self::DbDisabled { .. }
             | Self::InviteRequired => Stop,
         }

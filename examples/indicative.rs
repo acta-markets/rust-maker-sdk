@@ -1,4 +1,8 @@
 //! Respond to indicative price requests from the server.
+//!
+//! The server sends `IndicativePricesRequest` only to makers subscribed to the RFQ channel of
+//! the requested side: `Rfqs` for taker sells, `TakerBuyRfqs` for taker buys. A request carries
+//! no size: prices are per underlying unit, and the server treats them as stale after 60 s.
 
 mod common;
 
@@ -37,6 +41,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .await?;
             }
+            ServerMessage::AuthSuccess(_) => {
+                client
+                    .subscribe(SubscribeData {
+                        products: acta_maker_sdk::ProductSet::ALL,
+                        request_id: uuid::Uuid::new_v4(),
+                        channels: vec![WsChannel::Rfqs, WsChannel::TakerBuyRfqs],
+                        underlying_mints: vec![],
+                        quote_mints: vec![],
+                    })
+                    .await?;
+            }
             ServerMessage::IndicativePricesRequest(req) => {
                 let prices: Vec<IndicativeStrikePrice> = req
                     .strikes
@@ -50,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 client
                     .indicative_prices_response(IndicativePricesResponseMessage {
                         request_id: req.request_id,
-                        market: MarketId::new(req.market.market_pda),
+                        market_pda: MarketId::new(req.market_descriptor.market_pda),
                         position_type: req.position_type,
                         side: req.side,
                         prices,
@@ -59,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 println!(
                     "responded to indicative request for {}",
-                    req.market.market_pda
+                    req.market_descriptor.market_pda
                 );
             }
             ServerMessage::AuthError(error) => return Err(format!("{error:?}").into()),

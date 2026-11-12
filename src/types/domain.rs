@@ -72,7 +72,7 @@ pub struct TokenCapInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketCapInfo {
-    pub market_id: MarketId,
+    pub market_pda: MarketId,
     pub current_oi: Quantity,
     pub max_oi: Quantity,
     pub utilization: f64,

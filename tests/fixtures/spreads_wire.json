@@ -3,7 +3,7 @@
     "type": "RfqRequest",
     "data": {
       "request_id": "00000000-0000-0000-0000-000000000001",
-      "market": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+      "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
       "terms": {
         "type": "call_spread",
         "lower_strike": 100000000000,
@@ -18,7 +18,7 @@
     "type": "RfqRequest",
     "data": {
       "request_id": "00000000-0000-0000-0000-000000000001",
-      "market": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+      "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
       "terms": {
         "type": "put_spread",
         "lower_strike": 100000000000,
@@ -49,7 +49,7 @@
   "ReplaceQuote": {
     "type": "ReplaceQuote",
     "data": {
-      "old_order_id": "0101010101010101010101010101010101010101010101010101010101010101",
+      "replaced_order_id": "0101010101010101010101010101010101010101010101010101010101010101",
       "rfq_id": "00000000-0000-0000-0000-000000000001",
       "terms": {
         "type": "call_spread",
@@ -68,7 +68,7 @@
     "type": "RfqBroadcast",
     "data": {
       "rfq_id": "00000000-0000-0000-0000-000000000001",
-      "market": {
+      "market_descriptor": {
         "chain_id": 0,
         "program_id": "GgBaCs3NCBuZN12kCJgAW63ydqohFkHEdfdEXBPzLHq",
         "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
@@ -87,7 +87,7 @@
       "side": "sell",
       "quantity": 1000000,
       "expires_at": 1799999800,
-      "taker": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
+      "taker_owner": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
       "order_options": [
         {
           "type": "call_spread",
@@ -95,7 +95,7 @@
           "upper_strike": 120000000000
         }
       ],
-      "sent_at_unix_ms": 1799999770000
+      "sent_at_ms": 1799999770000
     }
   },
   "QuoteReceived": {
@@ -108,7 +108,7 @@
         "upper_strike": 120000000000
       },
       "side": "sell",
-      "maker": "A87ysNWAmmqQHafLSQGbYSLhtcV3BjXctR88EWuSobGP",
+      "maker_owner": "A87ysNWAmmqQHafLSQGbYSLhtcV3BjXctR88EWuSobGP",
       "price": 1000000000,
       "valid_until": 1799999900,
       "nonce": 999,
@@ -123,7 +123,7 @@
       "positions": [
         {
           "pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
-          "market": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+          "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
           "underlying_mint": "4WfbkL2bewdXcoxpqjjau4FynhwCt4KeEiSYKLESRfgy",
           "underlying_symbol": "UNDER",
           "quote_mint": "7g3yp1HFGur2nvsU1PsqivfT3C21v1pFrKq99T5hLDzM",
@@ -174,7 +174,7 @@
     "type": "CheckQuote",
     "data": {
       "request_id": "00000000-0000-0000-0000-000000000001",
-      "market_id": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+      "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
       "quantity": 1000000,
       "price": 1000000000,
       "terms": {

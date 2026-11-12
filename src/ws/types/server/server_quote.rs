@@ -73,11 +73,11 @@ pub struct QuoteFilledMessage {
     pub expiry_ts: SystemTime,
     pub terms: OptionTerms,
     pub side: TakerSide,
-    pub taker: Address32,
+    pub taker_owner: Address32,
     pub price: Price,
     pub quantity: Quantity,
     pub position_pda: Address32,
-    pub tx_signature: String,
+    pub transaction_signature: String,
     #[serde_as(as = "UnixSeconds")]
     pub filled_at: SystemTime,
 }
@@ -129,13 +129,13 @@ pub struct QuoteRejectedMessage {
 pub struct QuoteSelectedMessage {
     pub rfq_id: Uuid,
     pub order_id: OrderId,
-    pub taker: Address32,
+    pub taker_owner: Address32,
     pub price: Price,
     pub quantity: Quantity,
     pub terms: OptionTerms,
     pub side: TakerSide,
     #[serde_as(as = "UnixSeconds")]
-    pub signature_deadline: SystemTime,
+    pub signature_deadline_at: SystemTime,
 }
 
 #[serde_as]
@@ -190,7 +190,7 @@ pub struct QuoteReceivedMessage {
     pub rfq_id: Uuid,
     pub terms: OptionTerms,
     pub side: TakerSide,
-    pub maker: Address32,
+    pub maker_owner: Address32,
     pub price: Price,
     pub valid_until: QuoteExpiry,
     pub nonce: Nonce,

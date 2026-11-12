@@ -130,7 +130,7 @@ fn server_message_parses_cases() {
                         "rfq_id": rfq_id,
                         "terms": {"type": "covered_call", "strike": 1},
                         "side": "sell",
-                        "maker": "A87ysNWAmmqQHafLSQGbYSLhtcV3BjXctR88EWuSobGP",
+                        "maker_owner": "A87ysNWAmmqQHafLSQGbYSLhtcV3BjXctR88EWuSobGP",
                         "price": 2,
                         "valid_until": 3,
                         "nonce": 4,
@@ -153,7 +153,7 @@ fn server_message_parses_cases() {
                     "instruction_index": 0,
                     "signature": "sig",
                     "slot": 1,
-                    "owner": "67vHA8qZGCJKw1UNGUJZME4MwEWDRGWzp7MGvsut43A8",
+                    "maker_owner": "67vHA8qZGCJKw1UNGUJZME4MwEWDRGWzp7MGvsut43A8",
                     "maker_pda": "AtmZsVb7FzNqY2vM7XGjLggYS5hWKPZEGJo8tRUKQyh9",
                     "quote_signing": "B2NTpbB7KZUcVJRmgYk4g6LJfNGpHiiyw98tdWhk5bMG"
                 }
@@ -253,7 +253,7 @@ fn market_descriptors_parses_oracle_pdas() {
             "request_id": "00000000-0000-0000-0000-000000000099",
             "markets": [
                 {
-                    "market": {
+                    "market_descriptor": {
                         "chain_id": 0,
                         "program_id": "56sH1MNVmTQrgJkE5jx1n5UywSXwaRCzPk8kbDPJxtg8",
                         "market_pda": "EgEPSuJi5yUcefuRPUj1gokToN9evHXzGi1kmgAqykRo",
@@ -371,7 +371,7 @@ fn indicative_prices_response_requires_request_id() {
     let msg = ServerMessage::IndicativePrices(IndicativePricesMessage {
         next_cursor: None,
         request_id,
-        market: acta_maker_sdk::MarketId::new(acta_maker_sdk::Address32::new([
+        market_pda: acta_maker_sdk::MarketId::new(acta_maker_sdk::Address32::new([
             228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127, 212,
             14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
         ])),
@@ -383,7 +383,7 @@ fn indicative_prices_response_requires_request_id() {
     let json = serde_json::to_string(&msg).expect("serialize indicative prices");
     assert!(json.contains("\"request_id\""));
 
-    let missing_request_id = r#"{"type":"IndicativePrices","data":{ "next_cursor": null,"market":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9","position_type":"covered_call","freshness":{"type":"no_data"},"strikes":[]}}"#;
+    let missing_request_id = r#"{"type":"IndicativePrices","data":{ "next_cursor": null,"market_pda":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9","position_type":"covered_call","freshness":{"type":"no_data"},"strikes":[]}}"#;
     let err = serde_json::from_str::<ServerMessage>(missing_request_id)
         .expect_err("request_id must be mandatory");
     assert!(err.to_string().contains("request_id"));
@@ -446,17 +446,16 @@ fn welcome_roundtrip() {
         server_version: "0.5.0".to_string(),
         min_supported_version: "1.0.0".to_string(),
 
-        server_time_unix_ms: UNIX_EPOCH + Duration::from_millis(1_700_000_000_000),
+        server_now_at_ms: UNIX_EPOCH + Duration::from_millis(1_700_000_000_000),
         min_quote_validity_seconds: 100,
         settlement_buffer_seconds: 90,
-        rate_limits: Some(acta_maker_sdk::ws::types::WsRateLimits {
+        rate_limits: acta_maker_sdk::ws::types::WsRateLimits {
             connection: acta_maker_sdk::ws::types::RateLimit::Unlimited,
             wallet: acta_maker_sdk::ws::types::RateLimit::Unlimited,
             rfqs: acta_maker_sdk::ws::types::RateLimit::Unlimited,
-            quotes: acta_maker_sdk::ws::types::RateLimit::Unlimited,
             queries: acta_maker_sdk::ws::types::RateLimit::Unlimited,
             liquidity_provider: acta_maker_sdk::ws::types::ProviderRateLimit::NotApplicable,
-        }),
+        },
     });
     let json = serde_json::to_string(&msg).unwrap();
     let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
@@ -464,7 +463,7 @@ fn welcome_roundtrip() {
         ServerMessage::Welcome(data) => {
             assert_eq!(data.protocol_version, "1.0.0");
             assert_eq!(
-                data.server_time_unix_ms,
+                data.server_now_at_ms,
                 UNIX_EPOCH + Duration::from_millis(1_700_000_000_000)
             );
         }
@@ -508,11 +507,11 @@ fn quote_filled_names_its_market() {
             "expiry_ts": 1_700_000_000,
             "terms": {"type": "cash_secured_put", "strike": 86_000_000_000_u64},
             "side": "sell",
-            "taker": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
+            "taker_owner": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
             "price": 50_000_000,
             "quantity": 3_500_000_000_u64,
             "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
-            "tx_signature": "sig",
+            "transaction_signature": "sig",
             "filled_at": 1_699_999_000,
         },
     });
@@ -553,7 +552,7 @@ fn rfq_broadcast_roundtrip() {
     let rfq_id = Uuid::new_v4();
     let msg = ServerMessage::RfqBroadcast(RfqBroadcastMessage {
         rfq_id,
-        market: MarketDescriptor {
+        market_descriptor: MarketDescriptor {
             chain_id: acta_maker_sdk::ChainId::new(0),
             program_id: acta_maker_sdk::Address32::new([61; 32]),
             market_pda: acta_maker_sdk::Address32::from_base58(
@@ -573,8 +572,8 @@ fn rfq_broadcast_roundtrip() {
         side: TakerSide::Sell,
         quantity: Quantity::new(10),
         expires_at: UNIX_EPOCH + Duration::from_secs(1_700_000_100),
-        taker: acta_maker_sdk::Address32::new([60; 32]),
-        sent_at_unix_ms: UNIX_EPOCH + Duration::from_millis(1_700_000_099_250),
+        taker_owner: acta_maker_sdk::Address32::new([60; 32]),
+        sent_at_ms: UNIX_EPOCH + Duration::from_millis(1_700_000_099_250),
         order_options: vec![OptionTerms::CoveredCall {
             strike: Strike::new(100),
         }],
@@ -587,7 +586,7 @@ fn rfq_broadcast_roundtrip() {
             assert_eq!(data.terms.strike(), Strike::new(100));
             assert_eq!(data.order_options.len(), 1);
             assert_eq!(
-                data.sent_at_unix_ms,
+                data.sent_at_ms,
                 UNIX_EPOCH + Duration::from_millis(1_700_000_099_250)
             );
         }
@@ -599,11 +598,11 @@ fn rfq_broadcast_roundtrip() {
 fn rfq_broadcast_requires_sent_at() {
     let raw = r#"{"type":"RfqBroadcast","data":{
         "rfq_id":"6f0a4b6e-0000-4000-8000-000000000001",
-        "market":{"chain_id":0,"program_id":"2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D","market_pda":"7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs","underlying_mint":"opdhLMLuFCTUEq3YCwdtgqfuhtMqdkHBsJf6YrHfUFF",
+        "market_descriptor":{"chain_id":0,"program_id":"2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D","market_pda":"7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs","underlying_mint":"opdhLMLuFCTUEq3YCwdtgqfuhtMqdkHBsJf6YrHfUFF",
                   "quote_mint":"Aa8SVbHR7yKKA6Zq2M2Yw9jGvNsZkMD6QKwCCCR7vgeA","expiry_ts":1700000000,"is_put":false,
                   "collateral_mint":"48UTVdfmJax7bRvUZK4PwPYFmRz4PPU4PzJez1e26baD","settlement_mint":"HWKURC2rEgX95mP3DiGiGZcSeHYwJCwPMwPPy7TViv4"},
         "terms":{"type":"covered_call","strike":100},"side":"sell","quantity":10,
-        "expires_at":1700000100,"taker":"GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T","order_options":[]}}"#;
+        "expires_at":1700000100,"taker_owner":"GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T","order_options":[]}}"#;
     assert!(parse_server_message(raw).is_err());
 }
 
@@ -670,7 +669,7 @@ fn terms_and_side_are_required_and_terms_are_closed_tagged_unions() {
         "type": "RfqRequest",
         "data": {
             "request_id": Uuid::nil(),
-            "market": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",
+            "market_pda": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",
             "terms": {
                 "type": "call_spread",
                 "lower_strike": 100,
@@ -713,7 +712,7 @@ fn check_quote_and_quote_received_carry_strict_terms_side_and_net_price() {
         "type": "CheckQuote",
         "data": {
             "request_id": Uuid::nil(),
-            "market_id": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",
+            "market_pda": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",
             "quantity": 1,
             "price": 2,
             "terms": {
@@ -738,7 +737,7 @@ fn check_quote_and_quote_received_carry_strict_terms_side_and_net_price() {
             "rfq_id": Uuid::nil(),
             "terms": {"type": "call_spread", "lower_strike": 100, "upper_strike": 120},
             "side": "sell",
-            "maker": "A87ysNWAmmqQHafLSQGbYSLhtcV3BjXctR88EWuSobGP",
+            "maker_owner": "A87ysNWAmmqQHafLSQGbYSLhtcV3BjXctR88EWuSobGP",
             "price": 2,
             "valid_until": 3,
             "nonce": 4,
@@ -800,7 +799,7 @@ fn rfq_created_and_position_payouts_require_their_strict_keys() {
             "request_id": Uuid::nil(),
             "positions": [{
                 "pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
-                "market": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",
+                "market_pda": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",
                 "underlying_mint": "4WfbkL2bewdXcoxpqjjau4FynhwCt4KeEiSYKLESRfgy",
                 "underlying_symbol": "UNDER",
                 "quote_mint": "7g3yp1HFGur2nvsU1PsqivfT3C21v1pFrKq99T5hLDzM",
@@ -1117,7 +1116,7 @@ fn cancel_all_quotes_ack_roundtrip() {
 fn replace_quote_roundtrip() {
     let rfq_id = Uuid::new_v4();
     let msg = ClientMessage::ReplaceQuote(ReplaceQuoteMessage {
-        old_order_id: OrderId([0xaa; 32]),
+        replaced_order_id: OrderId([0xaa; 32]),
         rfq_id,
         terms: OptionTerms::CoveredCall {
             strike: Strike::new(100_000_000_000),
@@ -1131,12 +1130,12 @@ fn replace_quote_roundtrip() {
     });
     let json = serde_json::to_string(&msg).unwrap();
     assert!(json.contains("\"type\":\"ReplaceQuote\""));
-    assert!(json.contains("\"old_order_id\""));
+    assert!(json.contains("\"replaced_order_id\""));
     let parsed: ClientMessage = serde_json::from_str(&json).unwrap();
     match parsed {
         ClientMessage::ReplaceQuote(data) => {
             assert_eq!(data.rfq_id, rfq_id);
-            assert_eq!(data.old_order_id, OrderId([0xaa; 32]));
+            assert_eq!(data.replaced_order_id, OrderId([0xaa; 32]));
         }
         _ => panic!("Expected ReplaceQuote"),
     }
@@ -1228,10 +1227,10 @@ fn unknown_types_and_codes_are_rejected() {
 #[test]
 fn chain_event_identity_requires_instruction_index() {
     assert!(parse_server_message(
-        r#"{"type":"ChainEvent","data":{"event_type":"PositionSettled","signature":"sig","slot":1,"position":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP"}}"#,
+        r#"{"type":"ChainEvent","data":{"event_type":"PositionSettled","signature":"sig","slot":1,"position_pda":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP"}}"#,
     ).is_err());
     let identified = parse_server_message(
-        r#"{"type":"ChainEvent","data":{"event_type":"PositionSettled","signature":"sig","instruction_index":3,"slot":1,"position":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP"}}"#,
+        r#"{"type":"ChainEvent","data":{"event_type":"PositionSettled","signature":"sig","instruction_index":3,"slot":1,"position_pda":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP"}}"#,
     )
     .unwrap();
 
@@ -1296,7 +1295,7 @@ fn default_request_messages_receive_unique_non_nil_ids() {
 fn indicative_price_response_is_not_treated_as_an_acknowledged_request() {
     let message = ClientMessage::IndicativePricesResponse(IndicativePricesResponseMessage {
         request_id: Uuid::new_v4(),
-        market: MarketId::new(acta_maker_sdk::Address32::new([
+        market_pda: MarketId::new(acta_maker_sdk::Address32::new([
             228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127, 212,
             14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
         ])),
@@ -1340,7 +1339,7 @@ fn maker_positions_reports_rows_the_server_cannot_describe() {
             "positions": [],
             "unrenderable": [{
                 "pda": "HYe9CryCnQ3ZviCwoG8X7REFoSBK7HCjrhWWMpNtTah1",
-                "market": "G5ca7M9SYp8uTzN6rGe1BWrZAtqnNqb1FyBVTnjVNNGs",
+                "market_pda": "G5ca7M9SYp8uTzN6rGe1BWrZAtqnNqb1FyBVTnjVNNGs",
                 "created_at": 1_710_000_000,
                 "missing": ["underlying_symbol", "quote_decimals"]
             }],
@@ -1359,7 +1358,7 @@ fn maker_positions_reports_rows_the_server_cannot_describe() {
             .unwrap()
     );
     assert_eq!(
-        data.unrenderable[0].market,
+        data.unrenderable[0].market_pda,
         MarketId::new(acta_maker_sdk::Address32::new([
             224, 13, 216, 227, 148, 24, 8, 96, 220, 157, 76, 69, 181, 212, 22, 40, 163, 23, 3, 127,
             86, 55, 215, 95, 9, 41, 3, 226, 42, 178, 145, 20
@@ -1458,7 +1457,7 @@ fn spread_liability_caps_decode() {
         ),
     ] {
         let raw = format!(
-            r#"{{"type":"RfqSkipped","data":{{"rfq_id":"00000000-0000-0000-0000-00000000002a","market_id":"Ebjh5RZR799aVdZR9yePMNmEVmGibvjM3Zqr4kEegSbS","quantity":5,"cap_detail":{{"{code}":{{"quote_mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","current":7,"limit":9}}}}}}}}"#
+            r#"{{"type":"RfqSkipped","data":{{"rfq_id":"00000000-0000-0000-0000-00000000002a","market_pda":"Ebjh5RZR799aVdZR9yePMNmEVmGibvjM3Zqr4kEegSbS","quantity":5,"cap_detail":{{"{code}":{{"quote_mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","current":7,"limit":9}}}}}}}}"#
         );
         match serde_json::from_str::<ServerMessage>(&raw).unwrap() {
             ServerMessage::RfqSkipped(data) => assert_eq!(data.cap_detail.code(), expected),
@@ -1469,7 +1468,7 @@ fn spread_liability_caps_decode() {
 
 #[test]
 fn rfq_skipped_requires_cap_detail() {
-    let raw = r#"{"type":"RfqSkipped","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","market_id":"Ebjh5RZR799aVdZR9yePMNmEVmGibvjM3Zqr4kEegSbS","quantity":5,"cap_detail":{"maker_position_cap_exceeded":{"current":10,"limit":10}}}}"#;
+    let raw = r#"{"type":"RfqSkipped","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","market_pda":"Ebjh5RZR799aVdZR9yePMNmEVmGibvjM3Zqr4kEegSbS","quantity":5,"cap_detail":{"maker_position_cap_exceeded":{"current":10,"limit":10}}}}"#;
     match serde_json::from_str::<ServerMessage>(raw).unwrap() {
         ServerMessage::RfqSkipped(data) => {
             assert!(matches!(
@@ -1483,7 +1482,7 @@ fn rfq_skipped_requires_cap_detail() {
         _ => panic!("Expected RfqSkipped"),
     }
 
-    let legacy = r#"{"type":"RfqSkipped","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","market_id":"Ebjh5RZR799aVdZR9yePMNmEVmGibvjM3Zqr4kEegSbS","quantity":5,"reason":"other"}}"#;
+    let legacy = r#"{"type":"RfqSkipped","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","market_pda":"Ebjh5RZR799aVdZR9yePMNmEVmGibvjM3Zqr4kEegSbS","quantity":5,"reason":"other"}}"#;
     assert!(serde_json::from_str::<ServerMessage>(legacy).is_err());
 }
 
@@ -1592,7 +1591,7 @@ fn lifecycle_identity_fields_are_required() {
                 "type": "OrderSubmitted",
                 "data": {
                     "order_id": order_id.as_str(),
-                    "tx_signature": "signature",
+                    "transaction_signature": "signature",
                     "order_version": 2,
                 },
             }),
@@ -1688,7 +1687,7 @@ fn reference_frames_decode() {
         "type": "Tokens",
         "data": { "next_cursor": null,
             "request_id": "00000000-0000-0000-0000-000000000000",
-            "tokens": [{ "mint": "bvgRxX4i3TVxu72eSGE1dkLjPMunReapc72mEmn3E6U", "symbol": "SOL", "decimals": 9, "oracle_feed_ids": [], "role": { "type": "underlying", "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "strike_tick": 500000000, "quote_mints": ["63QRh6CpNaGpV13A7eV99sdKhBE2z1Yh8knawNfMqqbm"] }, "session": { "type": "pyth_schedule", "schedule": "America/New_York;0930-1600,0930-1600,0930-1600,0930-1600,0930-1600,C,C;" }, "protocol_fees": { "type": "none" } }]
+            "tokens": [{ "mint": "bvgRxX4i3TVxu72eSGE1dkLjPMunReapc72mEmn3E6U", "symbol": "SOL", "decimals": 9, "oracle_feed_ids": [], "role": { "type": "underlying", "size_rule": { "min_size": 1, "max_size": 10, "step": 1 }, "strike_tick": 500000000, "quote_mints": ["63QRh6CpNaGpV13A7eV99sdKhBE2z1Yh8knawNfMqqbm"] }, "schedule": { "type": "pyth", "spec": "America/New_York;0930-1600,0930-1600,0930-1600,0930-1600,0930-1600,C,C;" }, "session": { "type": "closed", "opens_at": 1710000000 }, "protocol_fees": { "type": "not_quote_token" } }]
         }
     }))
     .unwrap();
@@ -1721,7 +1720,7 @@ fn reference_frames_decode() {
 fn settlement_variants_require_exact_fields() {
     use acta_maker_sdk::ws::types::PositionSettlement;
     for value in [
-        json!({"type":"physical","settlement_price":100,"is_otm":true}),
+        json!({"type":"physical","settlement_price":100,"is_otm":true,"holder":{"collateral_atoms":0,"settlement_atoms":200},"writer":{"collateral_atoms":2,"settlement_atoms":0}}),
         json!({"type":"cash","settlement_price":100,"holder_payoff":0,"writer_return":12}),
     ] {
         let decoded: PositionSettlement = serde_json::from_value(value.clone()).unwrap();
@@ -1729,7 +1728,7 @@ fn settlement_variants_require_exact_fields() {
     }
     for value in [
         json!({"type":"open","holder_payoff":null}),
-        json!({"type":"physical","settlement_price":100}),
+        json!({"type":"physical","settlement_price":100,"is_otm":true}),
         json!({"type":"cash","settlement_price":100,"holder_payoff":0}),
         json!({"type":"cash","settlement_price":100,"holder_payoff":null,"writer_return":1}),
         json!({"type":"unknown"}),
@@ -1764,7 +1763,7 @@ fn position_state_has_one_required_tag_and_no_open_settlement() {
         json!({"state":"open"}),
         json!({"state":"funded"}),
         json!({"state":"liquidated"}),
-        json!({"state":"settled","settlement":{"type":"physical","settlement_price":100,"is_otm":true}}),
+        json!({"state":"settled","settlement":{"type":"physical","settlement_price":100,"is_otm":true,"holder":{"collateral_atoms":0,"settlement_atoms":200},"writer":{"collateral_atoms":2,"settlement_atoms":0}}}),
         json!({"state":"settled","settlement":{"type":"cash","settlement_price":100,"holder_payoff":0,"writer_return":12}}),
         json!({"state":"terminal_pending","slot":9,"outcome":{"type":"settled","is_otm":true}}),
         json!({"state":"terminal_pending","slot":4,"outcome":{"type":"liquidated"}}),
@@ -1807,17 +1806,3 @@ fn quote_races_are_told_apart_from_faults() {
     }
 }
 
-#[test]
-fn welcome_from_an_older_server_has_no_rate_limits() {
-    let frame = serde_json::json!({"type": "Welcome", "data": {
-        "protocol_version": "1.0.0", "server_version": "old", "min_supported_version": "1.0.0",
-        "server_time_unix_ms": 1_700_000_000_123u64, "min_quote_validity_seconds": 60,
-        "settlement_buffer_seconds": 50
-    }});
-    match serde_json::from_value(frame).unwrap() {
-        acta_maker_sdk::ws::types::ServerMessage::Welcome(welcome) => {
-            assert!(welcome.rate_limits.is_none())
-        }
-        other => panic!("expected Welcome, got {other:?}"),
-    }
-}

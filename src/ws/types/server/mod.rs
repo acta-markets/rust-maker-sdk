@@ -332,14 +332,12 @@ pub struct WelcomeData {
     pub server_version: String,
     pub min_supported_version: String,
     #[serde_as(as = "UnixMillis")]
-    pub server_time_unix_ms: SystemTime,
+    pub server_now_at_ms: SystemTime,
     /// Earliest accepted quote `valid_until` is now plus this.
     pub min_quote_validity_seconds: u32,
     /// A quote stays executable only while `valid_until - settlement_buffer_seconds > now`.
     pub settlement_buffer_seconds: u32,
-    /// `None` from servers that predate it; their limits are the documented defaults.
-    #[serde(default)]
-    pub rate_limits: Option<WsRateLimits>,
+    pub rate_limits: WsRateLimits,
 }
 
 /// Message budgets of this connection. A message costs 1, `SwapQuote` 5 and
@@ -352,7 +350,6 @@ pub struct WsRateLimits {
     pub wallet: RateLimit,
     /// The per-category limits below reject only the message, with `rate_limited`.
     pub rfqs: RateLimit,
-    pub quotes: RateLimit,
     pub queries: RateLimit,
     /// Once a maker or Vault operator authenticates, this replaces all limits above.
     pub liquidity_provider: ProviderRateLimit,
@@ -387,7 +384,7 @@ pub struct VersionMismatchData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PongData {
     #[serde_as(as = "UnixMillis")]
-    pub server_time_unix_ms: SystemTime,
+    pub server_now_at_ms: SystemTime,
 }
 
 impl ServerMessage {

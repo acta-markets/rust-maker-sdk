@@ -580,7 +580,7 @@ async fn receive_client(
             send_server(
                 socket,
                 ServerMessage::Pong(crate::ws::types::PongData {
-                    server_time_unix_ms: std::time::SystemTime::now(),
+                    server_now_at_ms: std::time::SystemTime::now(),
                 }),
             )
             .await;
@@ -612,17 +612,16 @@ async fn send_welcome(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net
             server_version: "test".to_string(),
             min_supported_version: crate::WS_PROTOCOL_VERSION.to_string(),
 
-            server_time_unix_ms: std::time::UNIX_EPOCH,
+            server_now_at_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 100,
             settlement_buffer_seconds: 90,
-            rate_limits: Some(crate::ws::types::WsRateLimits {
+            rate_limits: crate::ws::types::WsRateLimits {
                 connection: crate::ws::types::RateLimit::Unlimited,
                 wallet: crate::ws::types::RateLimit::Unlimited,
                 rfqs: crate::ws::types::RateLimit::Unlimited,
-                quotes: crate::ws::types::RateLimit::Unlimited,
                 queries: crate::ws::types::RateLimit::Unlimited,
                 liquidity_provider: crate::ws::types::ProviderRateLimit::NotApplicable,
-            }),
+            },
         }),
     )
     .await;
@@ -822,7 +821,7 @@ async fn pending_subscription_does_not_block_cancellation() {
                     send_server(
                         socket,
                         ServerMessage::Pong(crate::ws::types::PongData {
-                            server_time_unix_ms: std::time::SystemTime::UNIX_EPOCH,
+                            server_now_at_ms: std::time::SystemTime::UNIX_EPOCH,
                         }),
                     )
                     .await;
@@ -874,7 +873,7 @@ async fn pending_subscription_does_not_block_cancellation() {
         let request_id = uuid::Uuid::new_v4();
         let reply = handle.send_await(ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
             request_id,
-            market: crate::ws::types::QueryFilter::All {},
+            market_pda: crate::ws::types::QueryFilter::All {},
         }), Duration::from_secs(1)).await.unwrap();
         assert!(matches!(&*reply, ServerMessage::CancelAllQuotesAck(ack) if ack.request_id == request_id));
     }).await.expect("subscription must not stall trading commands");

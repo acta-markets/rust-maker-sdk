@@ -421,7 +421,11 @@ pub fn verify_vault_swap(
             "minimum output is below the operator's floor",
         ));
     }
-    let valid_until = parse_amount(&quote.valid_until, "valid_until")?;
+    let valid_until = quote
+        .valid_until
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| VaultIntentError::Terms("valid_until is before the Unix epoch"))?
+        .as_secs();
 
     let served = ServedMessage::decode(&quote.tx_base64, tables)?;
     let payer = vault.args.actor;

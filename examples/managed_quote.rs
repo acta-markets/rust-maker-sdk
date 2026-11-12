@@ -151,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::info!(
                     rfq = %fill.rfq_id,
                     position = %fill.position_pda,
-                    tx = %fill.tx_signature,
+                    tx = %fill.transaction_signature,
                     "filled"
                 );
             }

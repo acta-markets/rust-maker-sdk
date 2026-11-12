@@ -188,7 +188,7 @@ pub struct QuoteMessage {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplaceQuoteMessage {
-    pub old_order_id: OrderId,
+    pub replaced_order_id: OrderId,
     pub rfq_id: Uuid,
     pub terms: OptionTerms,
     pub side: TakerSide,
@@ -206,9 +206,9 @@ pub struct BatchQuotesMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqRequestMessage {
-    /// Also the idempotency key: a repeated `request_id` returns the RFQ it created.
+    /// Also the idempotency key: a repeat while the RFQ is open fails with `duplicate_rfq_id`, which proves the first one created it.
     pub request_id: Uuid,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub terms: OptionTerms,
     pub side: TakerSide,
     pub quantity: Quantity,
@@ -219,14 +219,14 @@ pub struct RfqRequestMessage {
 pub struct AcceptQuoteMessage {
     pub request_id: Uuid,
     pub rfq_id: Uuid,
-    pub maker: Address32,
+    pub maker_owner: Address32,
     pub order_id: OrderId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndicativePricesRequestMessage {
     pub request_id: Uuid,
-    pub market: MarketDescriptor,
+    pub market_descriptor: MarketDescriptor,
     pub position_type: PositionType,
     pub side: TakerSide,
     pub strikes: Vec<Strike>,
@@ -235,7 +235,7 @@ pub struct IndicativePricesRequestMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndicativePricesResponseMessage {
     pub request_id: Uuid,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub position_type: PositionType,
     pub side: TakerSide,
     pub prices: Vec<IndicativeStrikePrice>,

@@ -114,19 +114,19 @@
       }
     },
     {
-      "action": "stop",
+      "action": "refresh",
       "error": {
         "type": "RfqNotFound"
       }
     },
     {
-      "action": "stop",
+      "action": "refresh",
       "error": {
         "type": "RfqNotActive"
       }
     },
     {
-      "action": "stop",
+      "action": "reconcile",
       "error": {
         "type": "RfqAlreadyLocked"
       }
@@ -141,7 +141,7 @@
       }
     },
     {
-      "action": "stop",
+      "action": "refresh",
       "error": {
         "data": {
           "reason": "rfq_locked"
@@ -159,7 +159,7 @@
       }
     },
     {
-      "action": "stop",
+      "action": "refresh",
       "error": {
         "type": "QuoteNotFound"
       }
@@ -198,7 +198,7 @@
       }
     },
     {
-      "action": "stop",
+      "action": "refresh",
       "error": {
         "type": "UnknownOrder"
       }

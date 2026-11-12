@@ -127,7 +127,7 @@ pub(super) async fn establish(
                     cursor: Cursor::Start {},
 
                     request_id: Uuid::new_v4(),
-                    market: crate::ws::types::QueryFilter::All {},
+                    market_pda: crate::ws::types::QueryFilter::All {},
                     underlying_mint: crate::ws::types::QueryFilter::All {},
                     status: vec![
                         crate::ws::types::PositionStatus::Open,
@@ -404,7 +404,7 @@ fn reconciliation_pages(
             // not traverse the wallet's terminal history just to reach those groups.
             pages.push(ClientMessage::GetMakerPositions(GetMakerPositionsMessage {
                 request_id: Uuid::new_v4(),
-                market: QueryFilter::All {},
+                market_pda: QueryFilter::All {},
                 underlying_mint: QueryFilter::All {},
                 status: vec![PositionStatus::Open, PositionStatus::Funded],
                 min_expiry_ts: TimeBound::Unbounded {},

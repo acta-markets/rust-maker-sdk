@@ -17,6 +17,11 @@ pub use types::{
     VaultPositionRole, VaultPositionStatus, VaultPositionType, VaultPremium, VaultReturns,
     VaultStaging, VaultWithdrawRequest, Venue, WindowReturn,
 };
+pub use types::{
+    Atoms, CycleGeneration, CycleReturn, CycleState, DepositWindow, ExposureDecimals, ExposureSpot,
+    GenerationStart, Metric, Moneyness, PositionClose, Transaction, VaultBalances, VaultGeneration,
+    VaultMetadataState, VaultStatsState, VaultTvl,
+};
 use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 use types::{VaultCyclesResponse, VaultRequestsResponse};
 
@@ -41,9 +46,9 @@ pub enum HttpError {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MarketFilter {
-    pub underlying: Option<crate::Address32>,
-    pub quote: Option<crate::Address32>,
-    pub expiry: Option<u64>,
+    pub underlying_mint: Option<crate::Address32>,
+    pub quote_mint: Option<crate::Address32>,
+    pub expiry_ts: Option<u64>,
     pub is_put: Option<bool>,
     pub active: Option<bool>,
 }
@@ -51,14 +56,14 @@ pub struct MarketFilter {
 impl MarketFilter {
     fn query(&self) -> String {
         let mut params = Vec::new();
-        if let Some(underlying) = &self.underlying {
-            params.push(format!("underlying={underlying}"));
+        if let Some(underlying) = &self.underlying_mint {
+            params.push(format!("underlying_mint={underlying}"));
         }
-        if let Some(quote) = &self.quote {
-            params.push(format!("quote={quote}"));
+        if let Some(quote) = &self.quote_mint {
+            params.push(format!("quote_mint={quote}"));
         }
-        if let Some(expiry) = self.expiry {
-            params.push(format!("expiry={expiry}"));
+        if let Some(expiry) = self.expiry_ts {
+            params.push(format!("expiry_ts={expiry}"));
         }
         if let Some(is_put) = self.is_put {
             params.push(format!("is_put={is_put}"));
@@ -209,7 +214,7 @@ impl HttpClient {
 
     async fn vault_requests<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, HttpError> {
         let response: VaultRequestsResponse<T> = crate::paging::fetch_all(
-            |cursor| async move { self.get(&Self::page_path(path, 100, &cursor)?).await },
+            |cursor| async move { self.get(&Self::page_path(path, 200, &cursor)?).await },
             |all: &VaultRequestsResponse<T>| all.next_cursor.as_deref(),
             |all, page| {
                 all.requests.extend(page.requests);

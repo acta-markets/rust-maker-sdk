@@ -15,5 +15,6 @@
     "value": 50
   },
   "pre_expiry_cutoff_seconds": 10800,
-  "max_page_size": 200
+  "max_page_size": 200,
+  "max_batch_quotes": 50
 }

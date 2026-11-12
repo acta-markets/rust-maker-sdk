@@ -11,7 +11,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
-use super::tx::ensure_deadline_ahead_at;
+use super::tx::ensure_ahead;
 use super::{VaultOperatorClient, VaultOperatorConfig, VaultRequestError, VaultTxError};
 use crate::orders::{BytesSigner, SignerLike};
 use crate::types::ids::OrderId;
@@ -95,7 +95,7 @@ async fn receive_client(socket: &mut Socket) -> ClientMessage {
             send_server(
                 socket,
                 ServerMessage::Pong(PongData {
-                    server_time_unix_ms: std::time::UNIX_EPOCH,
+                    server_now_at_ms: std::time::UNIX_EPOCH,
                 }),
             )
             .await;
@@ -145,17 +145,16 @@ async fn vault_handshake_response(socket: &mut Socket, response: ServerMessage) 
             server_version: "test".to_string(),
             min_supported_version: crate::WS_PROTOCOL_VERSION.to_string(),
 
-            server_time_unix_ms: std::time::UNIX_EPOCH,
+            server_now_at_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 100,
             settlement_buffer_seconds: 90,
-            rate_limits: Some(crate::ws::types::WsRateLimits {
+            rate_limits: crate::ws::types::WsRateLimits {
                 connection: crate::ws::types::RateLimit::Unlimited,
                 wallet: crate::ws::types::RateLimit::Unlimited,
                 rfqs: crate::ws::types::RateLimit::Unlimited,
-                quotes: crate::ws::types::RateLimit::Unlimited,
                 queries: crate::ws::types::RateLimit::Unlimited,
                 liquidity_provider: crate::ws::types::ProviderRateLimit::NotApplicable,
-            }),
+            },
         }),
     )
     .await;
@@ -232,7 +231,7 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
                         instruction_index: 0,
                     },
                     pda: crate::Address32::new([11; 32]),
-                    market: crate::types::MarketId::new(crate::Address32::new([
+                    market_pda: crate::types::MarketId::new(crate::Address32::new([
                         228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96,
                         127, 212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
                     ])),
@@ -544,7 +543,7 @@ async fn swap_quote_is_correlated_and_times_out_without_a_reply() {
                 in_amount: request.amount.clone(),
                 quoted_out_amount: "990".to_string(),
                 minimum_out_amount: "985".to_string(),
-                valid_until: "0".to_string(),
+                valid_until: std::time::UNIX_EPOCH,
                 staging: crate::ws::types::server::SwapStaging::None,
             }),
         )
@@ -748,7 +747,7 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
         client
             .rfq_request(RfqRequestMessage {
                 request_id: Uuid::new_v4(),
-                market: MarketId::new(crate::Address32::new([
+                market_pda: MarketId::new(crate::Address32::new([
                     228, 214, 147, 210, 78, 100, 108, 183, 135, 132, 38, 34, 93, 144, 210, 96, 127,
                     212, 14, 46, 124, 130, 244, 207, 130, 70, 178, 204, 62, 13, 236, 184,
                 ])),
@@ -764,7 +763,7 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
         .accept_quote(AcceptQuoteMessage {
             request_id: Uuid::new_v4(),
             rfq_id: Uuid::new_v4(),
-            maker: crate::Address32::new([113; 32]),
+            maker_owner: crate::Address32::new([113; 32]),
             order_id: OrderId::new([5; 32]),
         })
         .await
@@ -859,23 +858,13 @@ fn assert_signed_by(signed_base64: &str, slot: usize, signer: &BytesSigner) {
 
 #[test]
 fn deadlines_are_checked_before_signing() {
-    assert_eq!(
-        ensure_deadline_ahead_at("submit_before", "100", 99).expect("ahead"),
-        100
-    );
+    assert_eq!(ensure_ahead("submit_before", 100, 99).expect("ahead"), 100);
     assert!(matches!(
-        ensure_deadline_ahead_at("submit_before", "100", 100),
+        ensure_ahead("submit_before", 100, 100),
         Err(VaultTxError::Expired {
             field: "submit_before",
             deadline: 100,
             now: 100
-        })
-    ));
-    assert!(matches!(
-        ensure_deadline_ahead_at("valid_until", "soon", 1),
-        Err(VaultTxError::InvalidDeadline {
-            field: "valid_until",
-            ..
         })
     ));
 }
@@ -1222,7 +1211,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         order_id: OrderId::from_hex(p["order_id"].as_str().unwrap()).unwrap(),
         tx_base64: case["served"]["tx_base64"].as_str().unwrap().to_owned(),
         last_valid_block_height: 1,
-        signature_deadline: std::time::SystemTime::now() + Duration::from_secs(60),
+        signature_deadline_at: std::time::SystemTime::now() + Duration::from_secs(60),
     };
     let signed = client
         .verify_and_sign_sponsored_tx(&to_sign, &intent, &table(case), bounds)
@@ -1251,7 +1240,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         )))
     ));
     let expired = crate::ws::types::SponsoredTxToSignData {
-        signature_deadline: std::time::UNIX_EPOCH,
+        signature_deadline_at: std::time::UNIX_EPOCH,
         ..to_sign.clone()
     };
     assert!(matches!(
@@ -1287,7 +1276,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         in_amount: "1000000".into(),
         quoted_out_amount: "2000".into(),
         minimum_out_amount: "1990".into(),
-        valid_until: "1000100".into(),
+        valid_until: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_100),
         staging: crate::ws::types::server::SwapStaging::None,
     };
     let route = |name: &str| {

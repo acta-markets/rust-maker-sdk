@@ -131,7 +131,7 @@ pub struct MarketDescriptor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketDescriptorInfo {
     pub products: crate::types::ProductSet,
-    pub market: MarketDescriptor,
+    pub market_descriptor: MarketDescriptor,
     pub underlying_oracle_pda: Address32,
     pub quote_oracle_pda: Address32,
     pub underlying_decimals: Decimals,
@@ -148,7 +148,9 @@ pub struct TokenInfo {
     pub decimals: Decimals,
     pub oracle_feed_ids: Vec<String>,
     pub role: TokenRole,
-    pub session: TradingSession,
+    pub schedule: TradingSchedule,
+    /// Whether the feed trades now; times are absolute, so a cached copy stays readable.
+    pub session: crate::ws::types::server::MarketSession,
     pub protocol_fees: TokenProtocolFees,
 }
 
@@ -157,24 +159,26 @@ pub struct TokenInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TokenProtocolFees {
-    /// Not a quote token, or its config is not projected yet.
-    None {},
+    /// The token is an underlying; markets are not quoted in it.
+    NotQuoteToken {},
+    /// A quote token whose on-chain fee config is not projected yet. Not a zero fee.
+    Unavailable {},
     Quote {
         premium_bps: u16,
         volume_bps: u16,
     },
 }
 
-/// When the token's price feed trades. Outside a Pyth session the oracle price is the last one published.
+/// The token's price feed schedule; `session` is its state now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum TradingSession {
+pub enum TradingSchedule {
+    /// No price feed schedule is known for the token yet.
+    Unknown {},
     Continuous {},
     /// Pyth `attributes.schedule`: `TZ;Mon,..,Sun;MMDD/spec,...`, each spec `O` (open all day),
     /// `C` (closed) or `HHMM-HHMM` windows joined by `&`; holiday entries replace that date's weekday entry.
-    PythSchedule {
-        schedule: String,
-    },
+    Pyth { spec: String },
 }
 
 /// Only underlyings have option sizing and a strike grid.
@@ -233,13 +237,25 @@ pub struct GlobalStats {
     pub active_rfqs: u32,
 }
 
+/// Atoms of the collateral and settlement mints one side of a physical position received.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceivedAtoms {
+    pub collateral_atoms: crate::types::Balance,
+    pub settlement_atoms: crate::types::Balance,
+}
+
 /// Settlement facts: cash amounts are quote atoms; open positions have no settlement facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PositionSettlement {
+    /// What each side received. The collateral mint is the underlying for a covered call and
+    /// the quote for a cash-secured put; the settlement mint is the other one.
     Physical {
         settlement_price: Price,
         is_otm: bool,
+        holder: ReceivedAtoms,
+        writer: ReceivedAtoms,
     },
     /// An unfunded ITM buy: all collateral returned to the writer.
     NotExercised { settlement_price: Price },
@@ -279,7 +295,7 @@ pub enum PendingTerminalOutcome {
 pub struct PositionInfo {
     pub revision: crate::types::ids::PositionRevision,
     pub pda: Address32,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub underlying_mint: Address32,
     pub underlying_symbol: String,
     pub underlying_decimals: u8,
@@ -318,14 +334,14 @@ pub enum UnderlyingPrice {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeInfo {
     pub id: uuid::Uuid,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub terms: OptionTerms,
     pub side: TakerSide,
     pub quantity: Quantity,
     pub price: Price,
-    pub taker: Address32,
-    pub maker: Address32,
-    pub tx_signature: String,
+    pub taker_owner: Address32,
+    pub maker_pda: Address32,
+    pub transaction_signature: String,
     #[serde_as(as = "UnixSeconds")]
     pub executed_at: SystemTime,
 }

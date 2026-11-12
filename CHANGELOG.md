@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.10.0 - 2026-11-12
+
+Breaking: address and time fields are renamed after what they hold. The protocol string stays
+`1.0.0`, so an older client passes `Hello` and then fails on the renamed fields. The program and
+the order ID preimage are unchanged; signatures stay valid.
+
+| Was | Now | Where |
+|---|---|---|
+| `market` (address or filter) | `market_pda` | `RfqRequest`, `PositionInfo`, `TradeInfo`, `ActiveRfqInfo`, `MyActiveRfqInfo`, `MakerQuoteInfo`, indicative prices, `GetPositions`, `GetMakerPositions`, `GetMyTrades`, `CancelAllQuotes`, `PositionOpened`, `MarketCreated`, `MarketFinalized` |
+| `market` (descriptor object) | `market_descriptor` | `RfqBroadcast`, `IndicativePricesRequest`, `MarketDescriptorInfo` |
+| `market_id` | `market_pda` | `RfqSkipped`, `CheckQuote`, `MarketCapInfo`, cap error `market_oi_cap_exceeded` |
+| `maker` (owner wallet) | `maker_owner` | `QuoteReceived`, `QuotesUpdate`, `AcceptQuote`, `RfqClosed.winner` |
+| `maker` (maker PDA) | `maker_pda` | `TradeInfo`, `PositionOpened` |
+| `owner` | `maker_owner` | `MakerRegistered` |
+| `owner` | `maker_owner` | HTTP `/makers` |
+| `taker` | `taker_owner` | `TradeInfo`, `MakerTradeInfo`, `RfqBroadcast`, `ActiveRfqInfo`, `QuoteFilled`, `QuoteSelected`, `PositionOpened` |
+| `tx_signature` | `transaction_signature` | `TradeInfo`, `MakerTradeInfo`, `QuoteFilled`, `OrderSubmitted` |
+| `vault` | `vault_pda` | HTTP vault positions, depositors and depositor events |
+| `counterparty` | `counterparty_owner` | HTTP vault positions |
+| `active_expiry` | `active_expiry_ts` | HTTP vault |
+| `position` | `position_pda` | `PositionSettled`, `PositionLiquidated`, HTTP vault positions and exposure |
+| `underlying`, `quote` | `underlying_mint`, `quote_mint` | `MarketInfo` (WS and `GET /markets`) |
+| `old_order_id` | `replaced_order_id` | `ReplaceQuote` |
+| `sent_at_unix_ms` | `sent_at_ms` | `RfqBroadcast` |
+| `server_time_unix_ms` | `server_now_at_ms` | `Welcome`, `Pong` |
+| `signature_deadline` | `signature_deadline_at` | `QuoteSelected`, `SponsoredTxToSign` |
+| `expiry` | `expiry_ts` | HTTP vault cycles and exposure |
+| `event_time` | `occurred_at` | HTTP depositor events and vault cycles |
+| `from_time`, `to_time` | `window_start_at`, `window_end_at` | HTTP vault performance windows |
+| `spot_time`, `price_time` | `spot_published_at`, `price_published_at` | HTTP vault exposure, vault |
+| `deposit_window_set_ts`, `last_hwm_reset_ts`, `last_hwm_update_ts`, `last_settlement_ts` | `*_at` | HTTP vault |
+| `capital_fallback_delay_secs` | `capital_fallback_delay_seconds` | HTTP vault |
+| query `underlying`, `quote`, `expiry` | `underlying_mint`, `quote_mint`, `expiry_ts` | `GET /markets`; the old names return 400 instead of an unfiltered list |
+
+- `RfqAlreadyLocked` is `reconcile`: another of your orders holds the RFQ, and `MyActiveRfqs` shows it in `lock`. `RfqNotFound` and `RfqNotActive` are `refresh`. All three were `stop`.
+- `TokenInfo.protocol_fees` is `quote { … }`, `not_quote_token` or `unavailable` (was `none` for both). `unavailable` is not a zero fee.
+- `TokenMarketsInfo.session`: `continuous`, `open { closes_at }`, `closed { opens_at }`, `closed_indefinitely` (no session in two weeks) or `unknown` (no schedule published or loaded), from the underlying's price-feed schedule.
+- A settled physical position's `settlement` says what each side received: `holder` and `writer`, each `{ collateral_atoms, settlement_atoms }`. Out of the money the holder gets its settlement deposit back only if it made one.
+- `SwapQuoteResult.valid_until` is a number of Unix seconds, like every other `valid_until`.
+- HTTP vault routes no longer use `null` for absent facts; each group is a tagged union: `balances` (`observed` or `unobserved`), `deposit_window`, `staging` (`none` or `staged`), `tvl_usd` (`priced` or `unpriced`), `stats` (`not_indexed`, `behind` or `current` with its `generation`), `metadata` (`none` or `set`); derived amounts are `{ "type": "available", "atoms" }` or `unavailable`, windowed metrics `available` or `insufficient_history`. Positions carry `funded_amount`, `close` (`open` or `closed { closed_at, is_otm }`) and `transaction`; exposure rows `decimals`, `spot`, `moneyness`, `intrinsic`; cycles `capital_generation` and `state` (`running`, `priced`, `finished`); depositors `deposit_request`, `withdraw_request` (`none` or `pending`), `totals` (`none` or `recorded`) and `boundary_price`. `product` is tagged by `type`, not `kind`. `null` remains only in `next_cursor` and the operator's free-text metadata.
+- `QuoteLocked { rfq_locked }`, `QuoteNotFound` and `UnknownOrder` are `refresh` (were `stop`): they are races with state that moved on.
+- `Welcome.rate_limits` no longer has `quotes`: quote messages need maker or Vault authentication, after which the shared `liquidity_provider` bucket is the only limit.
+- `TokenInfo.session` (was the raw schedule) is now whether the feed trades now, the same union as `TokenMarketsInfo.session`: `continuous`, `open { closes_at }`, `closed { opens_at }`, `closed_indefinitely` or `unknown`. The schedule moved to `TokenInfo.schedule`: `unknown`, `continuous` or `pyth { spec }` (was `pyth_schedule { schedule }`). The token list is rebuilt at each session change.
+- Rust field names equal the wire names; `http::MarketFilter` sends the new query parameters.
+- HTTP types are typed: addresses are `Address32`, times `SystemTime`, amounts `u64`, `u128` or `i128` (decimal strings on the wire). `FleetListing::Listed` holds `Address32`.
+- `VaultTxError::InvalidDeadline` is gone: no deadline arrives as a string.
+- `Welcome.rate_limits` is required; the fallback to built-in defaults for older servers is gone.
+- The managed client sends `CancelAllQuotes` and reconnects on a frame it cannot read on `/maker` and `/vault` (it kept the session and the quotes before). `ManagedWsEvent::UnreadableFrame` still fires first.
+- Vault request lists page with `limit=200`, the route maximum (was 100).
+- `http::Venue::max_batch_quotes`: the most quotes one `BatchQuotes` message may carry.
+- Example `indicative` subscribes to `Rfqs` and `TakerBuyRfqs`; without a subscription the
+  server sends no `IndicativePricesRequest`.
+- Example `maker_state`: custody balances from `MyCaps`, reconciling in-flight fills with
+  `GetOrderStatus` after a reconnect, and reading `PositionSettlement` of settled positions.
+
 ## 0.9.0 - 2026-11-11
 
 Breaking: the wire no longer uses `null` for absent facts; they are tagged unions. The protocol

@@ -335,7 +335,7 @@ impl WsClient {
     ) -> WsResult<()> {
         self.send(&ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
             request_id: Uuid::new_v4(),
-            market,
+            market_pda: market,
         }))
         .await
     }

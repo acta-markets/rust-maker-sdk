@@ -41,7 +41,7 @@ async fn client_frame(socket: &mut Socket) -> Option<ClientMessage> {
                     server_send(
                         socket,
                         &ServerMessage::Pong(PongData {
-                            server_time_unix_ms: UNIX_EPOCH,
+                            server_now_at_ms: UNIX_EPOCH,
                         }),
                     )
                     .await;
@@ -66,17 +66,16 @@ async fn authenticate_peer(socket: &mut Socket) {
             server_version: "loopback".to_string(),
             min_supported_version: WS_PROTOCOL_VERSION.to_string(),
 
-            server_time_unix_ms: std::time::UNIX_EPOCH,
+            server_now_at_ms: std::time::UNIX_EPOCH,
             min_quote_validity_seconds: 60,
             settlement_buffer_seconds: 50,
-            rate_limits: Some(acta_maker_sdk::ws::types::WsRateLimits {
+            rate_limits: acta_maker_sdk::ws::types::WsRateLimits {
                 connection: acta_maker_sdk::ws::types::RateLimit::Unlimited,
                 wallet: acta_maker_sdk::ws::types::RateLimit::Unlimited,
                 rfqs: acta_maker_sdk::ws::types::RateLimit::Unlimited,
-                quotes: acta_maker_sdk::ws::types::RateLimit::Unlimited,
                 queries: acta_maker_sdk::ws::types::RateLimit::Unlimited,
                 liquidity_provider: acta_maker_sdk::ws::types::ProviderRateLimit::NotApplicable,
-            }),
+            },
         }),
     )
     .await;
@@ -205,7 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             server_send(
                                 &mut socket,
                                 &ServerMessage::Pong(PongData {
-                                    server_time_unix_ms: UNIX_EPOCH,
+                                    server_now_at_ms: UNIX_EPOCH,
                                 }),
                             )
                             .await;

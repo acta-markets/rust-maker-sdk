@@ -3,6 +3,9 @@ use crate::types::ids::OrderId;
 use crate::types::{VaultDelegatePermissions, VaultOperatorKind, VaultStagingStep, VaultSwapMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use crate::types::unix_time::UnixSeconds;
+use serde_with::serde_as;
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultAuthSuccessData {
@@ -28,6 +31,7 @@ pub struct VaultCatalogChangedData {
     pub vault_pda: Address32,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapQuoteResultData {
     pub request_id: Uuid,
@@ -38,7 +42,8 @@ pub struct SwapQuoteResultData {
     pub in_amount: String,
     pub quoted_out_amount: String,
     pub minimum_out_amount: String,
-    pub valid_until: String,
+    #[serde_as(as = "UnixSeconds")]
+    pub valid_until: SystemTime,
     /// `none` for one-transaction swaps; once `stage` confirms, re-request (new id) for `unstage`.
     pub staging: SwapStaging,
 }

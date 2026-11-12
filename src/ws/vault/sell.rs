@@ -236,7 +236,7 @@ impl VaultOperatorClient {
             connection_epoch,
             ClientMessage::RfqRequest(RfqRequestMessage {
                 request_id,
-                market: crate::MarketId::new(crate::Address32::new(sale.market_pda.to_bytes())),
+                market_pda: crate::MarketId::new(crate::Address32::new(sale.market_pda.to_bytes())),
                 terms: sale.terms,
                 side: TakerSide::Sell,
                 quantity: sale.quantity,
@@ -283,7 +283,7 @@ impl VaultOperatorClient {
                             ClientMessage::AcceptQuote(AcceptQuoteMessage {
                                 request_id: Uuid::new_v4(),
                                 rfq_id: quote.rfq_id,
-                                maker: quote.maker,
+                                maker_owner: quote.maker_owner,
                                 order_id: quote.order_id,
                             }),
                         )
@@ -322,7 +322,7 @@ impl VaultOperatorClient {
     ) -> Result<(SignedSale, crate::ws::types::SubmitSignedSponsoredTxData), SaleError<D::Error>>
     {
         let writer = desk.writer().await.map_err(SaleError::Desk)?;
-        let maker = Pubkey::from(quote.maker);
+        let maker = Pubkey::from(quote.maker_owner);
         let counterparty = Counterparty::load(chain, maker).await?;
         let keeper = chain.hot_authority().await?;
         let tables = chain

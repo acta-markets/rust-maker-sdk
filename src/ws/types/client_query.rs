@@ -11,7 +11,7 @@ use crate::types::{MarketId, OptionTerms, OrderId, PositionType, Price, Quantity
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetPositionsMessage {
     pub request_id: Uuid,
-    pub market: QueryFilter<Address32>,
+    pub market_pda: QueryFilter<Address32>,
     pub underlying_mint: QueryFilter<Address32>,
     pub status: Vec<PositionStatus>,
     pub min_expiry_ts: TimeBound,
@@ -23,7 +23,7 @@ impl Default for GetPositionsMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            market: QueryFilter::All {},
+            market_pda: QueryFilter::All {},
             underlying_mint: QueryFilter::All {},
             status: Vec::new(),
             limit: 50,
@@ -91,7 +91,7 @@ pub struct GetMyCapsMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckQuoteMessage {
     pub request_id: Uuid,
-    pub market_id: MarketId,
+    pub market_pda: MarketId,
     pub quantity: Quantity,
     /// Gross price per underlying unit in quote units, scaled by 1e9, as on `Quote`.
     pub price: Price,
@@ -157,7 +157,7 @@ impl Default for GetMyActiveRfqsMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMakerPositionsMessage {
     pub request_id: Uuid,
-    pub market: QueryFilter<Address32>,
+    pub market_pda: QueryFilter<Address32>,
     pub underlying_mint: QueryFilter<Address32>,
     pub status: Vec<PositionStatus>,
     pub min_expiry_ts: TimeBound,
@@ -224,14 +224,14 @@ impl Default for GetMarketsForMakerMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelAllQuotesMessage {
     pub request_id: Uuid,
-    pub market: QueryFilter<Address32>,
+    pub market_pda: QueryFilter<Address32>,
 }
 
 impl Default for CancelAllQuotesMessage {
     fn default() -> Self {
         Self {
             request_id: Uuid::new_v4(),
-            market: QueryFilter::All {},
+            market_pda: QueryFilter::All {},
         }
     }
 }
@@ -241,7 +241,7 @@ pub struct GetIndicativePricesMessage {
     pub limit: u32,
     pub cursor: Cursor,
     pub request_id: Uuid,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub position_type: PositionType,
     pub side: TakerSide,
 }
@@ -252,7 +252,7 @@ pub struct GetMyTradesMessage {
     pub request_id: Uuid,
     pub limit: u32,
     pub cursor: Cursor,
-    pub market: QueryFilter<Address32>,
+    pub market_pda: QueryFilter<Address32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

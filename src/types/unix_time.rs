@@ -53,6 +53,29 @@ impl<'de> DeserializeAs<'de, SystemTime> for UnixMillis {
     }
 }
 
+/// Whole Unix seconds as a decimal string, as the HTTP API sends them.
+pub struct UnixSecondsString;
+
+impl SerializeAs<SystemTime> for UnixSecondsString {
+    fn serialize_as<S: Serializer>(source: &SystemTime, serializer: S) -> Result<S::Ok, S::Error> {
+        let seconds = source
+            .duration_since(UNIX_EPOCH)
+            .map_err(serde::ser::Error::custom)?
+            .as_secs();
+        serializer.collect_str(&seconds)
+    }
+}
+
+impl<'de> DeserializeAs<'de, SystemTime> for UnixSecondsString {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<SystemTime, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let seconds = text.parse::<u64>().map_err(serde::de::Error::custom)?;
+        UNIX_EPOCH
+            .checked_add(Duration::from_secs(seconds))
+            .ok_or_else(|| serde::de::Error::custom("unix timestamp exceeds SystemTime"))
+    }
+}
+
 #[cfg(test)]
 #[path = "unix_time_tests.rs"]
 mod tests;

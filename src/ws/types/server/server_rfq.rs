@@ -45,7 +45,7 @@ pub enum YourQuote {
 pub enum RfqWinner {
     None,
     Winner {
-        maker: Address32,
+        maker_owner: Address32,
         price: Price,
         transaction: WinnerTransaction,
     },
@@ -74,17 +74,17 @@ pub struct RfqClosedMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqBroadcastMessage {
     pub rfq_id: Uuid,
-    pub market: MarketDescriptor,
+    pub market_descriptor: MarketDescriptor,
     pub terms: OptionTerms,
     pub side: TakerSide,
     pub quantity: Quantity,
     #[serde_as(as = "UnixSeconds")]
     pub expires_at: SystemTime,
-    pub taker: Address32,
+    pub taker_owner: Address32,
     pub order_options: Vec<RfqOrderOption>,
     /// Server emission time; compare with [`ManagedInbound::received_at`](crate::ws::managed::ManagedInbound::received_at) to measure delivery delay.
     #[serde_as(as = "UnixMillis")]
-    pub sent_at_unix_ms: SystemTime,
+    pub sent_at_ms: SystemTime,
 }
 
 /// Another maker's quote was accepted; the RFQ takes no quotes until it closes or becomes available again.
@@ -111,7 +111,7 @@ pub struct RfqAvailableAgainMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqSkippedMessage {
     pub rfq_id: Uuid,
-    pub market_id: MarketId,
+    pub market_pda: MarketId,
     pub quantity: Quantity,
     /// Pre-broadcast, so `maker_insufficient_balance.required` is always `0`.
     pub cap_detail: crate::types::errors::CapError,
@@ -121,9 +121,9 @@ pub struct RfqSkippedMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveRfqInfo {
     pub rfq_id: Uuid,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     /// Taker public key included in the `order_id` preimage.
-    pub taker: Address32,
+    pub taker_owner: Address32,
     pub terms: OptionTerms,
     pub side: TakerSide,
     pub quantity: Quantity,
@@ -154,7 +154,7 @@ pub enum MyActiveRfqState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MyActiveRfqInfo {
     pub rfq_id: Uuid,
-    pub market: MarketId,
+    pub market_pda: MarketId,
     pub terms: OptionTerms,
     pub side: TakerSide,
     pub quantity: Quantity,

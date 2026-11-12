@@ -74,8 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let chain = rfq.terms.to_chain();
                 let (Some(upper), Some(underlying), Some(quote_token)) = (
                     rfq.terms.upper_strike(),
-                    tokens.get(&rfq.market.underlying_mint),
-                    tokens.get(&rfq.market.quote_mint),
+                    tokens.get(&rfq.market_descriptor.underlying_mint),
+                    tokens.get(&rfq.market_descriptor.quote_mint),
                 ) else {
                     continue;
                 };

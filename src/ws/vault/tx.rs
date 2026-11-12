@@ -5,11 +5,6 @@ use crate::chain::vault::VaultIntentError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum VaultTxError {
-    #[error("{field} `{deadline}` is not a unix timestamp")]
-    InvalidDeadline {
-        field: &'static str,
-        deadline: String,
-    },
     #[error("{field} has passed: deadline {deadline}, now {now}")]
     Expired {
         field: &'static str,
@@ -20,29 +15,6 @@ pub enum VaultTxError {
     ClockBeforeEpoch,
     #[error(transparent)]
     Intent(#[from] VaultIntentError),
-}
-
-pub(super) fn ensure_deadline_ahead(
-    field: &'static str,
-    deadline: &str,
-) -> Result<u64, VaultTxError> {
-    ensure_deadline_ahead_at(field, deadline, unix_now()?)
-}
-
-pub(super) fn ensure_deadline_ahead_at(
-    field: &'static str,
-    deadline: &str,
-    now: u64,
-) -> Result<u64, VaultTxError> {
-    let deadline_secs =
-        deadline
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| VaultTxError::InvalidDeadline {
-                field,
-                deadline: deadline.to_owned(),
-            })?;
-    ensure_ahead(field, deadline_secs, now)
 }
 
 pub(super) fn ensure_system_time_ahead(
@@ -56,7 +28,7 @@ pub(super) fn ensure_system_time_ahead(
     ensure_ahead(field, deadline_secs, unix_now()?)
 }
 
-fn ensure_ahead(field: &'static str, deadline: u64, now: u64) -> Result<u64, VaultTxError> {
+pub(super) fn ensure_ahead(field: &'static str, deadline: u64, now: u64) -> Result<u64, VaultTxError> {
     if now >= deadline {
         return Err(VaultTxError::Expired {
             field,

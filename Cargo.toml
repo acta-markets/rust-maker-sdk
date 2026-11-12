@@ -1,6 +1,6 @@
 [package]
 name = "acta-maker-sdk"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -104,6 +104,10 @@ required-features = ["ws-client", "http", "chain-rpc"]
 
 [[example]]
 name = "loopback_latency"
+required-features = ["ws-client"]
+
+[[example]]
+name = "maker_state"
 required-features = ["ws-client"]
 
 [[example]]

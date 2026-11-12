@@ -10,7 +10,7 @@ fn server_frames_parse_with_a_bare_integer_expiry() {
     let quote_received = r#"{"type":"QuoteReceived","data":{
         "rfq_id":"6f0a4b6e-0000-4000-8000-000000000001",
         "terms":{"type":"covered_call","strike":100000000000},"side":"sell",
-        "maker":"d4Sdh8BP11q3E6NbEi1Qrn9DbPXg2XKZnX2Pcvemge1","price":5000000,
+        "maker_owner":"d4Sdh8BP11q3E6NbEi1Qrn9DbPXg2XKZnX2Pcvemge1","price":5000000,
         "valid_until":1800000123,"nonce":7,
         "order_id":"00000000000000000000000000000000000000000000000000000000000000aa",
         "net_price":1}}"#;
@@ -45,7 +45,7 @@ fn server_frames_parse_with_a_bare_integer_expiry() {
 fn a_known_frame_parses_as_its_type() {
     let quote_received = r#"{"type":"QuoteReceived","data":{
         "rfq_id":"6f0a4b6e-0000-4000-8000-000000000001",
-        "terms":{"type":"covered_call","strike":1},"side":"sell","maker":"7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs","price":1,
+        "terms":{"type":"covered_call","strike":1},"side":"sell","maker_owner":"7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs","price":1,
         "valid_until":1800000123,"nonce":1,
         "order_id":"00000000000000000000000000000000000000000000000000000000000000aa",
         "net_price":1}}"#;

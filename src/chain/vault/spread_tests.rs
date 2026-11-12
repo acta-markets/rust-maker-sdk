@@ -367,7 +367,7 @@ fn verify_served_with_tables(
         order_id: OrderId::new(order_id),
         tx_base64: compile_with_tables(keeper, ixs, tables),
         last_valid_block_height: 1,
-        signature_deadline: std::time::UNIX_EPOCH,
+        signature_deadline_at: std::time::UNIX_EPOCH,
     };
     verify_vault_open(&to_sign, intent, tables, BOUNDS).map(|_| ())
 }

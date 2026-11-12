@@ -39,17 +39,17 @@ fn feed(t: &mut QuoteOutcomeTracker, kind: &str, extra: Value) {
 
 fn selected() -> Value {
     json!({
-        "taker":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":1, "quantity":1,
+        "taker_owner":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":1, "quantity":1,
         "terms":{"type":"covered_call","strike":1}, "side":"sell",
-        "signature_deadline":1
+        "signature_deadline_at":1
     })
 }
 
 fn filled() -> Value {
     json!({
         "market_pda":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9", "terms":{"type":"covered_call","strike":1}, "side":"sell",
-        "taker":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":1, "quantity":1, "position_pda":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
-        "tx_signature":"tx", "filled_at":1
+        "taker_owner":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":1, "quantity":1, "position_pda":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
+        "transaction_signature":"tx", "filled_at":1
     })
 }
 
@@ -70,7 +70,7 @@ fn acknowledged_selected_closed_then_filled() {
     feed(&mut t, "RfqClosed", closed("filled"));
     assert!(!t.outcome().is_terminal());
     feed(&mut t, "QuoteFilled", filled());
-    assert!(matches!(t.outcome(), QuoteOutcome::Filled(m) if m.tx_signature == "tx"));
+    assert!(matches!(t.outcome(), QuoteOutcome::Filled(m) if m.transaction_signature == "tx"));
     t.check(8, t.deadline);
     feed(&mut t, "QuoteExpired", json!({"reason":"expired"}));
     assert!(matches!(t.outcome(), QuoteOutcome::Filled(_)));

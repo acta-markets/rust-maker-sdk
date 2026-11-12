@@ -137,11 +137,11 @@ impl RfqBinding {
 
         Ok(Self {
             rfq_id: rfq.rfq_id,
-            chain_id: rfq.market.chain_id.value(),
+            chain_id: rfq.market_descriptor.chain_id.value(),
             program_id: expected_program,
             market,
             market_expiry,
-            taker: rfq.taker.0,
+            taker: rfq.taker_owner.0,
             terms,
             quantity: rfq.quantity,
             offered_terms,
@@ -210,7 +210,7 @@ fn validate_market_binding(
     use QuoteBuildError::MarketBinding;
     use solana_pubkey::Pubkey;
 
-    let descriptor = &rfq.market;
+    let descriptor = &rfq.market_descriptor;
     if descriptor.chain_id.value() != 0 {
         return Err(MarketBinding("chain_id"));
     }
@@ -548,7 +548,7 @@ impl QuoteMessage {
     #[must_use]
     pub fn into_replacement(self, old_order_id: OrderId) -> ReplaceQuoteMessage {
         ReplaceQuoteMessage {
-            old_order_id,
+            replaced_order_id: old_order_id,
             rfq_id: self.rfq_id,
             terms: self.terms,
             side: self.side,

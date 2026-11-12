@@ -1,4 +1,5 @@
 {
+  "next_cursor": null,
   "vaults": [
     {
       "vault_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
@@ -17,7 +18,7 @@
       "phase": "active",
       "safety": "normal",
       "capabilities": 5,
-      "active_expiry": "1703000000",
+      "active_expiry_ts": "1703000000",
       "open_positions": "2",
       "total_shares": "100",
       "share_price": "1100000000",
@@ -33,23 +34,30 @@
       "management_fee_bps": 200,
       "manager_stake_min_bps": 500,
       "share_price_hwm": "1200000000",
-      "last_hwm_update_ts": "40",
-      "last_hwm_reset_ts": "41",
-      "last_settlement_ts": "42",
+      "last_hwm_update_at": "40",
+      "last_hwm_reset_at": "41",
+      "last_settlement_at": "42",
       "capacity": {
         "type": "limited",
         "cap_limit": "1000",
         "remaining": "860"
       },
-      "capital_fallback_delay_secs": "43200",
-      "deposit_window_set_ts": "1700000000",
-      "main_balance": "900",
-      "second_balance": "80",
-      "balance_updated_at": "43",
-      "live_share_supply": "80",
-      "observed_manager_stake_shares": "20",
-      "balance_chain_slot": "1000",
+      "capital_fallback_delay_seconds": "43200",
+      "deposit_window": {
+        "type": "set",
+        "set_at": "1700000000"
+      },
+      "balances": {
+        "type": "observed",
+        "main": "900",
+        "second": "80",
+        "live_share_supply": "80",
+        "manager_stake_shares": "20",
+        "observed_at": "43",
+        "slot": "1000"
+      },
       "staging": {
+        "type": "staged",
         "mint": "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN",
         "from_leg": "second",
         "amount": "70",
@@ -69,66 +77,108 @@
         "signature": "signature",
         "event_index": 12
       },
-      "created_at": "1700000000",
-      "generation_started_at": "1700000100",
-      "tvl_usd_1e9": "18000",
-      "price_time": "1702600050",
-      "premium": [
-        {
-          "quote_mint": "6URwbPipuA4MJLG7LCRRZuWnms3JZ9cRG3z9indXWz8G",
-          "cycle": {
-            "received": "5",
-            "paid": "0"
+      "tvl_usd": {
+        "type": "priced",
+        "value_1e9": "18000",
+        "price_published_at": "1702600050"
+      },
+      "stats": {
+        "type": "current",
+        "created_at": "1700000000",
+        "computed_at": "1702600060",
+        "generation": {
+          "type": "covered",
+          "started": {
+            "type": "at",
+            "at": "1700000100"
           },
-          "generation": {
-            "received": "50",
-            "paid": "7"
-          }
-        },
-        {
-          "quote_mint": "6YMEjhBqVTMaSRWcmVkLrnHZ22FWEDJEpTeonAg8GKSy",
-          "cycle": {
-            "received": "0",
-            "paid": "0"
+          "premium": [
+            {
+              "quote_mint": "6URwbPipuA4MJLG7LCRRZuWnms3JZ9cRG3z9indXWz8G",
+              "cycle": {
+                "received": "5",
+                "paid": {
+                  "type": "available",
+                  "atoms": "0"
+                }
+              },
+              "generation": {
+                "received": "50",
+                "paid": {
+                  "type": "available",
+                  "atoms": "7"
+                }
+              }
+            },
+            {
+              "quote_mint": "6YMEjhBqVTMaSRWcmVkLrnHZ22FWEDJEpTeonAg8GKSy",
+              "cycle": {
+                "received": "0",
+                "paid": {
+                  "type": "available",
+                  "atoms": "0"
+                }
+              },
+              "generation": {
+                "received": "1",
+                "paid": {
+                  "type": "unavailable"
+                }
+              }
+            }
+          ],
+          "fees": {
+            "management_fee_assessed": "3",
+            "performance_fee_assessed": "4",
+            "realized_fee_value": "6"
           },
-          "generation": {
-            "received": "1",
-            "paid": null
+          "depositors": 11,
+          "performance": {
+            "returns": {
+              "7d": {
+                "type": "insufficient_history"
+              },
+              "30d": {
+                "type": "available",
+                "return_pct": 1.5,
+                "window_start_at": "1700000100",
+                "window_end_at": "1702600000"
+              },
+              "90d": {
+                "type": "insufficient_history"
+              },
+              "all": {
+                "type": "available",
+                "return_pct": 2.0,
+                "window_start_at": "1700000100",
+                "window_end_at": "1702600000"
+              }
+            },
+            "apy_30d": {
+              "type": "available",
+              "value": 19.9
+            },
+            "apy_90d": {
+              "type": "insufficient_history"
+            },
+            "max_drawdown_pct": {
+              "type": "available",
+              "value": 0.5
+            },
+            "worst_cycle_return_pct": {
+              "type": "available",
+              "value": -0.25
+            },
+            "losing_cycles": {
+              "type": "available",
+              "value": 1
+            },
+            "cycles_completed": 4
           }
         }
-      ],
-      "fees": {
-        "management_fee_assessed": "3",
-        "performance_fee_assessed": "4",
-        "realized_fee_value": "6"
-      },
-      "depositors_in_generation": 11,
-      "performance": {
-        "capital_generation": "8",
-        "computed_at": "1702600060",
-        "covered": true,
-        "returns": {
-          "7d": null,
-          "30d": {
-            "return_pct": 1.5,
-            "from_time": "1700000100",
-            "to_time": "1702600000"
-          },
-          "90d": null,
-          "all": {
-            "return_pct": 2.0,
-            "from_time": "1700000100",
-            "to_time": "1702600000"
-          }
-        },
-        "apy_30d": 19.9,
-        "apy_90d": null,
-        "max_drawdown_pct": 0.5,
-        "worst_cycle_return_pct": -0.25,
-        "losing_cycles": 1,
-        "cycles_completed": 4
       },
       "metadata": {
+        "type": "set",
         "name": "SOL vault",
         "curator": "Acta",
         "strategy": "Weekly covered calls",
@@ -155,7 +205,7 @@
       "phase": "idle",
       "safety": "normal",
       "capabilities": 5,
-      "active_expiry": "0",
+      "active_expiry_ts": "0",
       "open_positions": "0",
       "total_shares": "100",
       "share_price": "1100000000",
@@ -171,21 +221,22 @@
       "management_fee_bps": 200,
       "manager_stake_min_bps": 500,
       "share_price_hwm": "1200000000",
-      "last_hwm_update_ts": "40",
-      "last_hwm_reset_ts": "41",
-      "last_settlement_ts": "42",
+      "last_hwm_update_at": "40",
+      "last_hwm_reset_at": "41",
+      "last_settlement_at": "42",
       "capacity": {
         "type": "unlimited"
       },
-      "capital_fallback_delay_secs": "43200",
-      "deposit_window_set_ts": null,
-      "main_balance": null,
-      "second_balance": null,
-      "balance_updated_at": null,
-      "live_share_supply": null,
-      "observed_manager_stake_shares": null,
-      "balance_chain_slot": null,
-      "staging": null,
+      "capital_fallback_delay_seconds": "43200",
+      "deposit_window": {
+        "type": "unset"
+      },
+      "balances": {
+        "type": "unobserved"
+      },
+      "staging": {
+        "type": "none"
+      },
       "staged_generation": "2",
       "policy": {
         "max_open_positions": 12,
@@ -199,32 +250,20 @@
         "signature": "signature",
         "event_index": 12
       },
-      "created_at": "1700000000",
-      "generation_started_at": null,
-      "tvl_usd_1e9": null,
-      "price_time": null,
-      "premium": null,
-      "fees": null,
-      "depositors_in_generation": null,
-      "performance": {
-        "capital_generation": "8",
-        "computed_at": "1702600060",
-        "covered": false,
-        "returns": {
-          "7d": null,
-          "30d": null,
-          "90d": null,
-          "all": null
-        },
-        "apy_30d": null,
-        "apy_90d": null,
-        "max_drawdown_pct": null,
-        "worst_cycle_return_pct": null,
-        "losing_cycles": null,
-        "cycles_completed": null
+      "tvl_usd": {
+        "type": "unpriced"
       },
-      "metadata": null
+      "stats": {
+        "type": "current",
+        "created_at": "1700000000",
+        "computed_at": "1702600060",
+        "generation": {
+          "type": "none"
+        }
+      },
+      "metadata": {
+        "type": "none"
+      }
     }
-  ],
-  "next_cursor": null
+  ]
 }

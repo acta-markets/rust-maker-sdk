@@ -7,7 +7,7 @@ fn descriptors_response_fills_decimals_by_market_pda() {
         "data": { "next_cursor": null,
             "request_id": "00000000-0000-0000-0000-000000000099",
             "markets": [{
-                "market": {
+                "market_descriptor": {
                     "chain_id": 0,
                     "program_id": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D",
                     "market_pda": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",

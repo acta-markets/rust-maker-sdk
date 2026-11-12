@@ -210,11 +210,11 @@ fn vault_swap_results_roundtrip_without_claiming_chain_confirmation() {
         in_amount: "42".to_string(),
         quoted_out_amount: "41".to_string(),
         minimum_out_amount: "40".to_string(),
-        valid_until: "123".to_string(),
+        valid_until: std::time::UNIX_EPOCH + std::time::Duration::from_secs(123),
         staging: acta_maker_sdk::ws::types::server::SwapStaging::None,
     });
     let expected = format!(
-        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","last_valid_block_height":77,"in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":"123","staging":"none"}}}}"#
+        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","last_valid_block_height":77,"in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":123,"staging":"none"}}}}"#
     );
     let ServerMessage::SwapQuoteResult(data) = assert_server_wire(&quote, &expected) else {
         panic!("expected SwapQuoteResult");
