@@ -85,8 +85,8 @@ fn strict_terms_reject_mixed_or_unknown_legs() {
     let mut physical_with_upper = frames["RfqRequest"].clone();
     physical_with_upper["data"]["terms"] = serde_json::json!({
         "type": "covered_call",
-        "strike": 100_000_000_000_u64,
-        "upper_strike": 120_000_000_000_u64,
+        "strike": "100000000000",
+        "upper_strike": "120000000000",
     });
     assert!(serde_json::from_value::<ClientMessage>(physical_with_upper).is_err());
 }

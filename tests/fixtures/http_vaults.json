@@ -9,7 +9,7 @@
       "primary_delegate": "GgBaCs3NCBuZN12kCJgAW63ydqohFkHEdfdEXBPzLHq",
       "main_mint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
       "second_mint": "QWmroo4YnnMqYW3cnxWkFdaTxGD3P7vMSzwMHGbUzwF",
-      "second_leg_generation": "0",
+      "second_leg_generation": 0,
       "share_mint": "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx",
       "main_token_program": "legacy_spl",
       "second_token_program": "token_2022",
@@ -18,12 +18,12 @@
       "phase": "active",
       "safety": "normal",
       "capabilities": 5,
-      "active_expiry_ts": "1703000000",
-      "open_positions": "2",
+      "active_expiry_ts": 1703000000,
+      "open_positions": 2,
       "total_shares": "100",
       "share_price": "1100000000",
       "equity": "120",
-      "capital_generation": "8",
+      "capital_generation": 8,
       "accepting_deposits": true,
       "equity_computed": false,
       "pending_deposit_count": 2,
@@ -34,18 +34,18 @@
       "management_fee_bps": 200,
       "manager_stake_min_bps": 500,
       "share_price_hwm": "1200000000",
-      "last_hwm_update_at": "40",
-      "last_hwm_reset_at": "41",
-      "last_settlement_at": "42",
+      "last_hwm_update_at": 40,
+      "last_hwm_reset_at": 41,
+      "last_settlement_at": 42,
       "capacity": {
         "type": "limited",
         "cap_limit": "1000",
         "remaining": "860"
       },
-      "capital_fallback_delay_seconds": "43200",
+      "capital_fallback_delay_seconds": 43200,
       "deposit_window": {
         "type": "set",
-        "set_at": "1700000000"
+        "set_at": 1700000000
       },
       "balances": {
         "type": "observed",
@@ -53,26 +53,26 @@
         "second": "80",
         "live_share_supply": "80",
         "manager_stake_shares": "20",
-        "observed_at": "43",
-        "slot": "1000"
+        "observed_at": 43,
+        "slot": 1000
       },
       "staging": {
         "type": "staged",
         "mint": "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN",
         "from_leg": "second",
         "amount": "70",
-        "staged_at": "1700000050",
-        "generation": "2"
+        "staged_at": 1700000050,
+        "generation": 2
       },
-      "staged_generation": "2",
+      "staged_generation": 2,
       "policy": {
         "max_open_positions": 12,
         "max_rebalance_drift_bps": 100,
         "min_main_liquidity_bps": 500
       },
       "projection": {
-        "version": "10",
-        "slot": "11",
+        "version": 10,
+        "slot": 11,
         "transaction_index": 3,
         "signature": "signature",
         "event_index": 12
@@ -80,17 +80,17 @@
       "tvl_usd": {
         "type": "priced",
         "value_1e9": "18000",
-        "price_published_at": "1702600050"
+        "price_published_at": 1702600050
       },
       "stats": {
         "type": "current",
-        "created_at": "1700000000",
-        "computed_at": "1702600060",
+        "created_at": 1700000000,
+        "computed_at": 1702600060,
         "generation": {
           "type": "covered",
           "started": {
             "type": "at",
-            "at": "1700000100"
+            "at": 1700000100
           },
           "premium": [
             {
@@ -141,8 +141,8 @@
               "30d": {
                 "type": "available",
                 "return_pct": 1.5,
-                "window_start_at": "1700000100",
-                "window_end_at": "1702600000"
+                "window_start_at": 1700000100,
+                "window_end_at": 1702600000
               },
               "90d": {
                 "type": "insufficient_history"
@@ -150,8 +150,8 @@
               "all": {
                 "type": "available",
                 "return_pct": 2.0,
-                "window_start_at": "1700000100",
-                "window_end_at": "1702600000"
+                "window_start_at": 1700000100,
+                "window_end_at": 1702600000
               }
             },
             "apy_30d": {
@@ -196,7 +196,7 @@
       "primary_delegate": "GgBaCs3NCBuZN12kCJgAW63ydqohFkHEdfdEXBPzLHq",
       "main_mint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
       "second_mint": "QWmroo4YnnMqYW3cnxWkFdaTxGD3P7vMSzwMHGbUzwF",
-      "second_leg_generation": "0",
+      "second_leg_generation": 0,
       "share_mint": "3NAM1YJMhSPvtAkmGTRABe1hYZN3aE2hZHKy3JZy9fHk",
       "main_token_program": "legacy_spl",
       "second_token_program": "token_2022",
@@ -205,12 +205,12 @@
       "phase": "idle",
       "safety": "normal",
       "capabilities": 5,
-      "active_expiry_ts": "0",
-      "open_positions": "0",
+      "active_expiry_ts": 0,
+      "open_positions": 0,
       "total_shares": "100",
       "share_price": "1100000000",
       "equity": "120",
-      "capital_generation": "8",
+      "capital_generation": 8,
       "accepting_deposits": true,
       "equity_computed": false,
       "pending_deposit_count": 2,
@@ -221,13 +221,13 @@
       "management_fee_bps": 200,
       "manager_stake_min_bps": 500,
       "share_price_hwm": "1200000000",
-      "last_hwm_update_at": "40",
-      "last_hwm_reset_at": "41",
-      "last_settlement_at": "42",
+      "last_hwm_update_at": 40,
+      "last_hwm_reset_at": 41,
+      "last_settlement_at": 42,
       "capacity": {
         "type": "unlimited"
       },
-      "capital_fallback_delay_seconds": "43200",
+      "capital_fallback_delay_seconds": 43200,
       "deposit_window": {
         "type": "unset"
       },
@@ -237,15 +237,15 @@
       "staging": {
         "type": "none"
       },
-      "staged_generation": "2",
+      "staged_generation": 2,
       "policy": {
         "max_open_positions": 12,
         "max_rebalance_drift_bps": 100,
         "min_main_liquidity_bps": 500
       },
       "projection": {
-        "version": "10",
-        "slot": "11",
+        "version": 10,
+        "slot": 11,
         "transaction_index": 3,
         "signature": "signature",
         "event_index": 12
@@ -255,8 +255,8 @@
       },
       "stats": {
         "type": "current",
-        "created_at": "1700000000",
-        "computed_at": "1702600060",
+        "created_at": 1700000000,
+        "computed_at": 1702600060,
         "generation": {
           "type": "none"
         }

@@ -3,7 +3,7 @@ use serde_with::{DisplayFromStr, serde_as};
 use std::time::SystemTime;
 
 use crate::Address32;
-use crate::types::unix_time::UnixSecondsString;
+use crate::types::unix_time::UnixSeconds;
 
 pub use crate::types::VaultLeg;
 use crate::ws::types::{MarketInfo, TokenInfo};
@@ -29,9 +29,8 @@ pub struct Vault {
     /// `normal`, `frozen`, `emergency_unwind`, `withdraw_only` or `closing`.
     pub safety: String,
     pub capabilities: u32,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub active_expiry_ts: SystemTime,
-    #[serde_as(as = "DisplayFromStr")]
     pub open_positions: u64,
     #[serde_as(as = "DisplayFromStr")]
     pub total_shares: u64,
@@ -39,9 +38,7 @@ pub struct Vault {
     pub share_price: u64,
     #[serde_as(as = "DisplayFromStr")]
     pub equity: u64,
-    #[serde_as(as = "DisplayFromStr")]
     pub capital_generation: u64,
-    #[serde_as(as = "DisplayFromStr")]
     pub second_leg_generation: u64,
     pub accepting_deposits: bool,
     pub equity_computed: bool,
@@ -56,21 +53,19 @@ pub struct Vault {
     pub manager_stake_min_bps: u16,
     #[serde_as(as = "DisplayFromStr")]
     pub share_price_hwm: u64,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub last_hwm_update_at: SystemTime,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub last_hwm_reset_at: SystemTime,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub last_settlement_at: SystemTime,
     pub capacity: VaultCapacity,
-    #[serde_as(as = "DisplayFromStr")]
     pub capital_fallback_delay_seconds: u64,
     pub deposit_window: DepositWindow,
     pub balances: VaultBalances,
 
     pub staging: VaultStaging,
     /// The next stage carries `staged_generation + 1`.
-    #[serde_as(as = "DisplayFromStr")]
     pub staged_generation: u64,
     pub policy: VaultPolicy,
     pub projection: ProjectionCursor,
@@ -114,10 +109,9 @@ pub enum VaultStaging {
         from_leg: VaultLeg,
         #[serde_as(as = "DisplayFromStr")]
         amount: u64,
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         staged_at: SystemTime,
         /// The open slot's generation; an unstage names it.
-        #[serde_as(as = "DisplayFromStr")]
         generation: u64,
     },
 }
@@ -128,7 +122,7 @@ pub enum VaultStaging {
 pub enum DepositWindow {
     Unset {},
     Set {
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         set_at: SystemTime,
     },
 }
@@ -148,9 +142,8 @@ pub enum VaultBalances {
         live_share_supply: u64,
         #[serde_as(as = "DisplayFromStr")]
         manager_stake_shares: u64,
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         observed_at: SystemTime,
-        #[serde_as(as = "DisplayFromStr")]
         slot: u64,
     },
 }
@@ -164,7 +157,7 @@ pub enum VaultTvl {
     Priced {
         #[serde_as(as = "DisplayFromStr")]
         value_1e9: u128,
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         price_published_at: SystemTime,
     },
 }
@@ -221,13 +214,13 @@ pub enum Transaction {
 pub enum VaultStatsState {
     NotIndexed {},
     Behind {
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         created_at: SystemTime,
     },
     Current {
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         created_at: SystemTime,
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         computed_at: SystemTime,
         generation: VaultGeneration,
     },
@@ -253,7 +246,7 @@ pub enum VaultGeneration {
 pub enum GenerationStart {
     NoCheckpoint {},
     At {
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         at: SystemTime,
     },
 }
@@ -283,9 +276,7 @@ pub struct VaultPolicy {
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectionCursor {
-    #[serde_as(as = "DisplayFromStr")]
     pub version: u64,
-    #[serde_as(as = "DisplayFromStr")]
     pub slot: u64,
     pub transaction_index: u32,
     pub signature: String,
@@ -365,9 +356,9 @@ pub enum WindowReturn {
     InsufficientHistory {},
     Available {
         return_pct: f64,
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         window_start_at: SystemTime,
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         window_end_at: SystemTime,
     },
 }
@@ -395,9 +386,9 @@ pub struct VaultPosition {
     pub funded_amount: Atoms<u64>,
     pub status: VaultPositionStatus,
     pub close: PositionClose,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub acquired_at: SystemTime,
     pub transaction: Transaction,
 }
@@ -408,7 +399,7 @@ pub struct VaultPosition {
 pub enum PositionClose {
     Open {},
     Closed {
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         closed_at: SystemTime,
         is_otm: bool,
     },
@@ -462,7 +453,7 @@ pub struct VaultExposure {
     pub next_cursor: Option<String>,
     pub vault_pda: Address32,
     /// Unix seconds the positions were read; never older than 15 s.
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub as_of: SystemTime,
     pub positions: Vec<VaultExposurePosition>,
     pub totals: Vec<VaultExposureTotal>,
@@ -481,7 +472,7 @@ pub struct VaultExposurePosition {
     pub strike: u64,
     #[serde_as(as = "DisplayFromStr")]
     pub quantity: u64,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
     pub underlying_mint: Address32,
     pub quote_mint: Address32,
@@ -507,7 +498,7 @@ pub enum ExposureSpot {
     Priced {
         #[serde_as(as = "DisplayFromStr")]
         price: u64,
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         published_at: SystemTime,
     },
 }
@@ -532,12 +523,11 @@ pub struct VaultExposureTotal {
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VaultCycle {
-    #[serde_as(as = "DisplayFromStr")]
     pub cycle_number: u64,
     pub capital_generation: CycleGeneration,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub expiry_ts: SystemTime,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub started_at: SystemTime,
     #[serde_as(as = "DisplayFromStr")]
     pub share_price_start: u64,
@@ -558,10 +548,7 @@ pub struct VaultCycle {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CycleGeneration {
     Unknown {},
-    Known {
-        #[serde_as(as = "DisplayFromStr")]
-        generation: u64,
-    },
+    Known { generation: u64 },
 }
 
 #[serde_as]
@@ -578,7 +565,7 @@ pub enum CycleState {
         return_pct: CycleReturn,
     },
     Finished {
-        #[serde_as(as = "UnixSecondsString")]
+        #[serde_as(as = "UnixSeconds")]
         finished_at: SystemTime,
         #[serde_as(as = "DisplayFromStr")]
         share_price_end: u64,
@@ -603,7 +590,7 @@ pub struct VaultDepositRequest {
     pub wallet: Address32,
     #[serde_as(as = "DisplayFromStr")]
     pub amount: u64,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
     pub transaction: Transaction,
 }
@@ -615,7 +602,7 @@ pub struct VaultWithdrawRequest {
     pub wallet: Address32,
     #[serde_as(as = "DisplayFromStr")]
     pub shares: u64,
-    #[serde_as(as = "UnixSecondsString")]
+    #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
     pub transaction: Transaction,
 }

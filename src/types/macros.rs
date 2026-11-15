@@ -1,19 +1,10 @@
 macro_rules! define_numeric_newtype {
     ($(#[$meta:meta])* $name:ident, $inner:ty) => {
+        define_numeric_newtype!(@base $(#[$meta])* #[derive(Serialize, Deserialize)] $name, $inner);
+    };
+    (@base $(#[$meta:meta])* $name:ident, $inner:ty) => {
         $(#[$meta])*
-        #[derive(
-            Debug,
-            Default,
-            Clone,
-            Copy,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Hash,
-            Serialize,
-            Deserialize,
-        )]
+        #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name($inner);
 
         impl $name {
@@ -43,6 +34,25 @@ macro_rules! define_numeric_newtype {
         impl From<$name> for $inner {
             fn from(value: $name) -> Self {
                 value.0
+            }
+        }
+    };
+}
+
+/// A `u64` token amount or full-range identifier; a JSON decimal string on the wire.
+macro_rules! define_decimal_newtype {
+    ($(#[$meta:meta])* $name:ident) => {
+        define_numeric_newtype!(@base $(#[$meta])* $name, u64);
+
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_str(&self.0)
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                $crate::wire::deserialize_decimal_u64(deserializer).map(Self)
             }
         }
     };

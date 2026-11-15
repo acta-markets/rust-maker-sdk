@@ -1,6 +1,6 @@
 {
   "vault_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
-  "as_of": "1702600005",
+  "as_of": 1702600005,
   "positions": [
     {
       "position_pda": "7Z8ftDAzMvoyXnGEJye8DurzgQQXLAbYCaeeesM7UKHa",
@@ -10,7 +10,7 @@
       "status": "open",
       "strike": "140000000000",
       "quantity": "2000000000",
-      "expiry_ts": "1703000000",
+      "expiry_ts": 1703000000,
       "underlying_mint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
       "quote_mint": "6URwbPipuA4MJLG7LCRRZuWnms3JZ9cRG3z9indXWz8G",
       "decimals": {
@@ -21,7 +21,7 @@
       "spot": {
         "type": "priced",
         "price": "150000000000",
-        "published_at": "1702600000"
+        "published_at": 1702600000
       },
       "moneyness": {
         "type": "available",
@@ -41,7 +41,7 @@
       "status": "funded",
       "strike": "155000000000",
       "quantity": "2000000000",
-      "expiry_ts": "1703000000",
+      "expiry_ts": 1703000000,
       "underlying_mint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
       "quote_mint": "6URwbPipuA4MJLG7LCRRZuWnms3JZ9cRG3z9indXWz8G",
       "decimals": {
@@ -52,7 +52,7 @@
       "spot": {
         "type": "priced",
         "price": "150000000000",
-        "published_at": "1702600000"
+        "published_at": 1702600000
       },
       "moneyness": {
         "type": "available",
@@ -72,7 +72,7 @@
       "status": "open",
       "strike": "140000000000",
       "quantity": "2000000000",
-      "expiry_ts": "1703000000",
+      "expiry_ts": 1703000000,
       "underlying_mint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
       "quote_mint": "6YMEjhBqVTMaSRWcmVkLrnHZ22FWEDJEpTeonAg8GKSy",
       "decimals": {

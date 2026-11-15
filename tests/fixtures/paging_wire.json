@@ -231,13 +231,13 @@
           "quote_decimals": 6,
           "terms": {
             "type": "covered_call",
-            "strike": 160000000000
+            "strike": "160000000000"
           },
           "side": "sell",
           "state": "open",
-          "quantity": 1000000000,
-          "price": 5000000000,
-          "total_premium": 4975000,
+          "quantity": "1000000000",
+          "price": "5000000000",
+          "total_premium": "4975000",
           "created_at": 1710000042,
           "expiry_ts": 1710600000,
           "underlying_price": {
@@ -279,12 +279,12 @@
           "quote_decimals": 6,
           "terms": {
             "type": "covered_call",
-            "strike": 160000000000
+            "strike": "160000000000"
           },
           "side": "sell",
           "taker_owner": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
-          "quantity": 1000000000,
-          "price": 5000000000,
+          "quantity": "1000000000",
+          "price": "5000000000",
           "transaction_signature": "1111111111111111111111111111111111111111111111111111111111111111",
           "position": {
             "type": "confirmed",
@@ -322,9 +322,9 @@
           "underlying_decimals": 9,
           "quote_decimals": 6,
           "size_rule": {
-            "min_size": 1000000000,
-            "max_size": 100000000000,
-            "step": 1000000000
+            "min_size": "1000000000",
+            "max_size": "100000000000",
+            "step": "1000000000"
           },
           "underlying_symbol": "SOL",
           "quote_symbol": "USDC"
@@ -352,16 +352,16 @@
         {
           "underlying_mint": "So11111111111111111111111111111111111111112",
           "symbol": "SOL",
-          "current_oi": 500000000000,
-          "max_oi": 1000000000000,
+          "current_oi": "500000000000",
+          "max_oi": "1000000000000",
           "utilization": 0.5
         }
       ],
       "markets": [
         {
           "market_pda": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
-          "current_oi": 100000000000,
-          "max_oi": 250000000000,
+          "current_oi": "100000000000",
+          "max_oi": "250000000000",
           "utilization": 0.4
         }
       ],
@@ -369,8 +369,8 @@
         {
           "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
           "symbol": "USDC",
-          "current_notional": 2000000000,
-          "max_notional": 10000000000,
+          "current_notional": "2000000000",
+          "max_notional": "10000000000",
           "utilization": 0.2
         }
       ],
@@ -378,11 +378,11 @@
         {
           "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
           "symbol": "USDC",
-          "current_liability": 50000000,
+          "current_liability": "50000000",
           "policy": {
             "type": "limited",
-            "max_liability": 100000000,
-            "headroom": 50000000
+            "max_liability": "100000000",
+            "headroom": "50000000"
           }
         }
       ],
@@ -411,8 +411,8 @@
         {
           "underlying_mint": "So11111111111111111111111111111111111111112",
           "symbol": "SOL",
-          "current": 800000000000,
-          "limit": 2000000000000
+          "current": "800000000000",
+          "limit": "2000000000000"
         }
       ],
       "balances": [
@@ -420,20 +420,20 @@
           "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
           "symbol": "USDC",
           "decimals": 6,
-          "deposited": 5000000000,
-          "committed": 3200000000,
-          "available": 1800000000
+          "deposited": "5000000000",
+          "committed": "3200000000",
+          "available": "1800000000"
         }
       ],
       "quote_liabilities": [
         {
           "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
           "symbol": "USDC",
-          "current_liability": 20000000,
+          "current_liability": "20000000",
           "policy": {
             "type": "limited",
-            "max_liability": 100000000,
-            "headroom": 80000000
+            "max_liability": "100000000",
+            "headroom": "80000000"
           }
         }
       ],
@@ -500,11 +500,11 @@
           "role": {
             "type": "underlying",
             "size_rule": {
-              "min_size": 100000000,
-              "max_size": 1000000000000,
-              "step": 100000000
+              "min_size": "100000000",
+              "max_size": "1000000000000",
+              "step": "100000000"
             },
-            "strike_tick": 500000000,
+            "strike_tick": "500000000",
             "quote_mints": [
               "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
             ]
@@ -562,11 +562,11 @@
           "quote_decimals": 6,
           "terms": {
             "type": "covered_call",
-            "strike": 160000000000
+            "strike": "160000000000"
           },
           "side": "sell",
-          "price": 5000000000,
-          "quantity": 1000000000,
+          "price": "5000000000",
+          "quantity": "1000000000",
           "valid_until": 1710000120,
           "state": {
             "type": "active",
@@ -616,8 +616,8 @@
           {
             "underlying_mint": "So11111111111111111111111111111111111111112",
             "symbol": "SOL",
-            "current": 50000000000,
-            "limit": 200000000000
+            "current": "50000000000",
+            "limit": "200000000000"
           }
         ],
         "balances": [
@@ -625,20 +625,20 @@
             "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             "symbol": "USDC",
             "decimals": 6,
-            "deposited": 1000000000,
-            "committed": 500000000,
-            "available": 500000000
+            "deposited": "1000000000",
+            "committed": "500000000",
+            "available": "500000000"
           }
         ],
         "quote_liabilities": [
           {
             "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             "symbol": "USDC",
-            "current_liability": 20000000,
+            "current_liability": "20000000",
             "policy": {
               "type": "limited",
-              "max_liability": 100000000,
-              "headroom": 80000000
+              "max_liability": "100000000",
+              "headroom": "80000000"
             }
           }
         ]
@@ -695,11 +695,11 @@
       "quote_symbol": "USDC",
       "quote_decimals": 6,
       "size_rule": {
-        "min_size": 100000000,
-        "max_size": 10000000000,
-        "step": 100000000
+        "min_size": "100000000",
+        "max_size": "10000000000",
+        "step": "100000000"
       },
-      "reference_price": 150000000000,
+      "reference_price": "150000000000",
       "session": {
         "type": "continuous"
       },
@@ -722,10 +722,10 @@
               },
               "strikes": [
                 {
-                  "strike": 160000000000,
+                  "strike": "160000000000",
                   "price": {
                     "type": "quoted",
-                    "price": 50000000
+                    "price": "50000000"
                   }
                 }
               ]
@@ -749,14 +749,14 @@
       },
       "strikes": [
         {
-          "strike": 450000000000,
+          "strike": "450000000000",
           "price": {
             "type": "quoted",
-            "price": 5000000
+            "price": "5000000"
           }
         },
         {
-          "strike": 460000000000,
+          "strike": "460000000000",
           "price": {
             "type": "none"
           }
@@ -782,8 +782,8 @@
             "max": 18.7
           },
           "cap_filled_pct": 0.45,
-          "cap_total": 100000000000,
-          "cap_used": 45000000000,
+          "cap_total": "100000000000",
+          "cap_used": "45000000000",
           "strikes_count": 3,
           "nearest_market_pda": "11111111111111111111111111111111",
           "markets_count": 2,

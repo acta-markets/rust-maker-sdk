@@ -39,16 +39,16 @@ fn feed(t: &mut QuoteOutcomeTracker, kind: &str, extra: Value) {
 
 fn selected() -> Value {
     json!({
-        "taker_owner":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":1, "quantity":1,
-        "terms":{"type":"covered_call","strike":1}, "side":"sell",
+        "taker_owner":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":"1", "quantity":"1",
+        "terms":{"type":"covered_call","strike":"1"}, "side":"sell",
         "signature_deadline_at":1
     })
 }
 
 fn filled() -> Value {
     json!({
-        "market_pda":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9", "terms":{"type":"covered_call","strike":1}, "side":"sell",
-        "taker_owner":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":1, "quantity":1, "position_pda":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
+        "market_pda":"GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9", "terms":{"type":"covered_call","strike":"1"}, "side":"sell",
+        "taker_owner":"5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84", "price":"1", "quantity":"1", "position_pda":"75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
         "transaction_signature":"tx", "filled_at":1
     })
 }
@@ -133,7 +133,7 @@ fn closure_status_is_order_specific_and_filled_waits_for_details() {
         let mut t = tracker();
         let mut close = closed("filled");
         close["your_quote"] =
-            json!({"type":"quoted","order_id":t.order_id,"status":status,"price":1});
+            json!({"type":"quoted","order_id":t.order_id,"status":status,"price":"1"});
         feed(&mut t, "RfqClosed", close.clone());
         assert_eq!(t.outcome().is_terminal(), terminal);
         match status {
@@ -294,7 +294,7 @@ fn acknowledged_but_unselected_order_loses_when_rfq_fills() {
         feed(&mut t, "QuoteAcknowledged", json!({}));
         let mut close = closed("filled");
         if personalized {
-            close["your_quote"] = json!({"type":"quoted","order_id":OrderId::new([2;32]),"status":"filled","price":1});
+            close["your_quote"] = json!({"type":"quoted","order_id":OrderId::new([2;32]),"status":"filled","price":"1"});
         }
         feed(&mut t, "RfqClosed", close);
         assert!(matches!(

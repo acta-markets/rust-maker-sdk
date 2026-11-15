@@ -393,7 +393,7 @@ fn venue_requires_max_page_size() {
 async fn vault_requests_page_at_the_route_maximum() {
     let row = |wallet: &str| {
         serde_json::json!({
-            "wallet": wallet, "shares": "90", "created_at": "1", "transaction": { "type": "unknown" },
+            "wallet": wallet, "shares": "90", "created_at": 1, "transaction": { "type": "unknown" },
         })
     };
     let (base, server) = serve(vec![
@@ -420,8 +420,8 @@ async fn vault_requests_page_at_the_route_maximum() {
 #[tokio::test]
 async fn vault_cycles_decode_a_running_cycle() {
     let cycle = serde_json::json!({
-        "cycle_number": "4", "capital_generation": { "type": "known", "generation": "0" },
-        "expiry_ts": "1793606400", "started_at": "1793520522", "share_price_start": "1028295748",
+        "cycle_number": 4, "capital_generation": { "type": "known", "generation": 0 },
+        "expiry_ts": 1793606400, "started_at": 1793520522, "share_price_start": "1028295748",
         "equity_start": "5141478741", "state": { "type": "running" },
         "positions_opened": 19, "positions_settled": 0,
         "performance_fee_assessed": "0", "management_fee_assessed": "0",

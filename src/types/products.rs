@@ -87,7 +87,7 @@ mod tests {
         assert!(policy.contains(PositionType::CashPut));
         assert_eq!(serde_json::to_string(&policy).unwrap(), r#"["cash_put"]"#);
         let terms: crate::types::OptionTerms =
-            serde_json::from_str(r#"{"type":"cash_put","strike":100}"#).unwrap();
+            serde_json::from_str(r#"{"type":"cash_put","strike":"100"}"#).unwrap();
         assert_eq!(terms.position_type(), PositionType::CashPut);
         assert_eq!(u8::from(terms.to_chain().position_type()), 3);
         assert_eq!(terms.strike().value(), 100);
@@ -95,11 +95,11 @@ mod tests {
         assert_eq!(terms.upper_strike().unwrap().value(), 100);
         assert_eq!(
             serde_json::to_string(&terms).unwrap(),
-            r#"{"type":"cash_put","strike":100}"#
+            r#"{"type":"cash_put","strike":"100"}"#
         );
         assert!(
             serde_json::from_str::<crate::types::OptionTerms>(
-                r#"{"type":"cash_put","strike":100,"lower_strike":0}"#
+                r#"{"type":"cash_put","strike":"100","lower_strike":"0"}"#
             )
             .is_err()
         );

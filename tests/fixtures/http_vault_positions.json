@@ -22,8 +22,8 @@
       "close": {
         "type": "open"
       },
-      "created_at": "10",
-      "acquired_at": "11",
+      "created_at": 10,
+      "acquired_at": 11,
       "transaction": {
         "type": "known",
         "signature": "sig"
@@ -52,11 +52,11 @@
       "status": "settled",
       "close": {
         "type": "closed",
-        "closed_at": "12",
+        "closed_at": 12,
         "is_otm": true
       },
-      "created_at": "10",
-      "acquired_at": "11",
+      "created_at": 10,
+      "acquired_at": 11,
       "transaction": {
         "type": "known",
         "signature": "sig"

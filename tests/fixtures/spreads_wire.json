@@ -6,11 +6,11 @@
       "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
       "terms": {
         "type": "call_spread",
-        "lower_strike": 100000000000,
-        "upper_strike": 120000000000
+        "lower_strike": "100000000000",
+        "upper_strike": "120000000000"
       },
       "side": "sell",
-      "quantity": 1000000,
+      "quantity": "1000000",
       "timeout_seconds": 30
     }
   },
@@ -21,11 +21,11 @@
       "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
       "terms": {
         "type": "put_spread",
-        "lower_strike": 100000000000,
-        "upper_strike": 120000000000
+        "lower_strike": "100000000000",
+        "upper_strike": "120000000000"
       },
       "side": "sell",
-      "quantity": 1000000,
+      "quantity": "1000000",
       "timeout_seconds": 30
     }
   },
@@ -35,13 +35,13 @@
       "rfq_id": "00000000-0000-0000-0000-000000000001",
       "terms": {
         "type": "call_spread",
-        "lower_strike": 100000000000,
-        "upper_strike": 120000000000
+        "lower_strike": "100000000000",
+        "upper_strike": "120000000000"
       },
       "side": "sell",
-      "price": 1000000000,
+      "price": "1000000000",
       "valid_until": 1799999900,
-      "nonce": 999,
+      "nonce": "999",
       "order_id": "0101010101010101010101010101010101010101010101010101010101010101",
       "signature": "maker-ed25519-base64"
     }
@@ -53,13 +53,13 @@
       "rfq_id": "00000000-0000-0000-0000-000000000001",
       "terms": {
         "type": "call_spread",
-        "lower_strike": 100000000000,
-        "upper_strike": 120000000000
+        "lower_strike": "100000000000",
+        "upper_strike": "120000000000"
       },
       "side": "sell",
-      "price": 1000000000,
+      "price": "1000000000",
       "valid_until": 1799999900,
-      "nonce": 1000,
+      "nonce": "1000",
       "order_id": "0202020202020202020202020202020202020202020202020202020202020202",
       "signature": "maker-ed25519-base64"
     }
@@ -81,18 +81,18 @@
       },
       "terms": {
         "type": "call_spread",
-        "lower_strike": 100000000000,
-        "upper_strike": 120000000000
+        "lower_strike": "100000000000",
+        "upper_strike": "120000000000"
       },
       "side": "sell",
-      "quantity": 1000000,
+      "quantity": "1000000",
       "expires_at": 1799999800,
       "taker_owner": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
       "order_options": [
         {
           "type": "call_spread",
-          "lower_strike": 100000000000,
-          "upper_strike": 120000000000
+          "lower_strike": "100000000000",
+          "upper_strike": "120000000000"
         }
       ],
       "sent_at_ms": 1799999770000
@@ -104,16 +104,16 @@
       "rfq_id": "00000000-0000-0000-0000-000000000001",
       "terms": {
         "type": "call_spread",
-        "lower_strike": 100000000000,
-        "upper_strike": 120000000000
+        "lower_strike": "100000000000",
+        "upper_strike": "120000000000"
       },
       "side": "sell",
       "maker_owner": "A87ysNWAmmqQHafLSQGbYSLhtcV3BjXctR88EWuSobGP",
-      "price": 1000000000,
+      "price": "1000000000",
       "valid_until": 1799999900,
-      "nonce": 999,
+      "nonce": "999",
       "order_id": "0101010101010101010101010101010101010101010101010101010101010101",
-      "net_price": 1000000000
+      "net_price": "1000000000"
     }
   },
   "Positions": {
@@ -130,22 +130,22 @@
           "quote_symbol": "QUOTE",
           "terms": {
             "type": "call_spread",
-            "lower_strike": 100000000000,
-            "upper_strike": 120000000000
+            "lower_strike": "100000000000",
+            "upper_strike": "120000000000"
           },
           "side": "sell",
-          "quantity": 1000000,
-          "price": 1000000000,
-          "total_premium": 990000,
+          "quantity": "1000000",
+          "price": "1000000000",
+          "total_premium": "990000",
           "created_at": 1799999770,
           "expiry_ts": 1800000000,
           "underlying_decimals": 6,
           "quote_decimals": 6,
           "settlement": {
             "type": "cash",
-            "settlement_price": 110000000000,
-            "holder_payoff": 10000000,
-            "writer_return": 10000000
+            "settlement_price": "110000000000",
+            "holder_payoff": "10000000",
+            "writer_return": "10000000"
           },
           "revision": {
             "slot": 100,
@@ -175,12 +175,12 @@
     "data": {
       "request_id": "00000000-0000-0000-0000-000000000001",
       "market_pda": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
-      "quantity": 1000000,
-      "price": 1000000000,
+      "quantity": "1000000",
+      "price": "1000000000",
       "terms": {
         "type": "call_spread",
-        "lower_strike": 100000000000,
-        "upper_strike": 120000000000
+        "lower_strike": "100000000000",
+        "upper_strike": "120000000000"
       },
       "side": "sell"
     }

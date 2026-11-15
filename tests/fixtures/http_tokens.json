@@ -10,11 +10,11 @@
       "role": {
         "type": "underlying",
         "size_rule": {
-          "min_size": 100000000,
-          "max_size": 1000000000000,
-          "step": 10000000
+          "min_size": "100000000",
+          "max_size": "1000000000000",
+          "step": "10000000"
         },
-        "strike_tick": 500000000,
+        "strike_tick": "500000000",
         "quote_mints": [
           "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
         ]

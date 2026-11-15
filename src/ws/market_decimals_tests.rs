@@ -23,7 +23,7 @@ fn descriptors_response_fills_decimals_by_market_pda() {
                 "quote_oracle_pda": "5E7ARf86php4DmyzznNjNqHJVaNMzUG83bvNK9aXw6Ge",
                 "underlying_decimals": 9,
                 "quote_decimals": 6,
-                "size_rule": { "min_size": 1, "max_size": 100, "step": 1 },
+                "size_rule": { "min_size": "1", "max_size": "100", "step": "1" },
                 "underlying_symbol": "SOL",
                 "quote_symbol": "USDC"
             }]

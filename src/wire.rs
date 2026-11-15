@@ -9,6 +9,22 @@ where
     <Option<T> as serde::Deserialize>::deserialize(deserializer)
 }
 
+/// Reads a `u64` sent as a canonical JSON decimal string: ASCII digits, no leading zero.
+pub fn deserialize_decimal_u64<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u64, D::Error> {
+    let text = <String as serde::Deserialize>::deserialize(deserializer)?;
+    if text.is_empty()
+        || !text.bytes().all(|b| b.is_ascii_digit())
+        || (text.len() > 1 && text.starts_with('0'))
+    {
+        return Err(serde::de::Error::custom(format!(
+            "expected a decimal u64 string, got {text:?}"
+        )));
+    }
+    text.parse().map_err(serde::de::Error::custom)
+}
+
 #[derive(Debug, Error)]
 pub enum WireError {
     #[error("invalid hex: {0}")]

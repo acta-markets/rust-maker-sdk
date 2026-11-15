@@ -9,7 +9,7 @@
       "status": "finalized",
       "settlement": {
         "type": "fixed",
-        "price": 150000000000
+        "price": "150000000000"
       },
       "products": [
         "cash_secured_put",

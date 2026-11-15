@@ -4,22 +4,19 @@ use serde::{Deserialize, Serialize};
 
 define_bytes32_newtype!(OrderId);
 
-define_numeric_newtype!(
+define_decimal_newtype!(
     /// Strike price, 1e9 fixed-point per one unit of the underlying
     /// ([`PRICE_SCALE`](crate::PRICE_SCALE)), independent of mint decimals.
-    Strike,
-    u64
+    Strike
 );
-define_numeric_newtype!(
+define_decimal_newtype!(
     /// Gross premium per one unit of the underlying, 1e9 fixed-point
     /// ([`PRICE_SCALE`](crate::PRICE_SCALE)), independent of mint decimals.
-    Price,
-    u64
+    Price
 );
-define_numeric_newtype!(
+define_decimal_newtype!(
     /// Order size in the underlying mint's atomic units.
-    Quantity,
-    u64
+    Quantity
 );
 
 impl Price {
@@ -34,7 +31,7 @@ impl Price {
     }
 }
 
-define_numeric_newtype!(Nonce, u64);
+define_decimal_newtype!(Nonce);
 define_numeric_newtype!(RfqVersion, u64);
 define_numeric_newtype!(OrderVersion, u64);
 
@@ -53,8 +50,8 @@ impl OrderVersion {
 define_numeric_newtype!(Slot, u64);
 define_numeric_newtype!(ChainId, u64);
 define_numeric_newtype!(DurationSeconds, u64);
-define_numeric_newtype!(Volume, u64);
-define_numeric_newtype!(Balance, u64);
+define_decimal_newtype!(Volume);
+define_decimal_newtype!(Balance);
 
 define_numeric_newtype!(QuoteCount, u32);
 define_numeric_newtype!(TradeCount, u32);

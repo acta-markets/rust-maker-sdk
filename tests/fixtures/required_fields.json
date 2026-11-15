@@ -70,10 +70,10 @@
         },
         "terms": {
           "type": "covered_call",
-          "strike": 100
+          "strike": "100"
         },
         "side": "sell",
-        "quantity": 10,
+        "quantity": "10",
         "expires_at": 1700000000,
         "taker_owner": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T",
         "order_options": [],
@@ -95,11 +95,11 @@
         "taker_owner": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
         "terms": {
           "type": "covered_call",
-          "strike": 100
+          "strike": "100"
         },
         "side": "sell",
-        "quantity": 10,
-        "price": 1,
+        "quantity": "10",
+        "price": "1",
         "order_id": "0101010101010101010101010101010101010101010101010101010101010101"
       }
     }
@@ -131,7 +131,7 @@
         "instruction_index": 2,
         "slot": 7,
         "market_pda": "7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs",
-        "settlement_price": 100
+        "settlement_price": "100"
       }
     }
   },
@@ -187,12 +187,12 @@
         "expiry_ts": 1700000000,
         "terms": {
           "type": "covered_call",
-          "strike": 100
+          "strike": "100"
         },
         "side": "sell",
         "taker_owner": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T",
-        "price": 1,
-        "quantity": 10,
+        "price": "1",
+        "quantity": "10",
         "position_pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D",
         "transaction_signature": "sig",
         "filled_at": 1700000000
@@ -210,12 +210,12 @@
         "expiry_ts": 1700000000,
         "terms": {
           "type": "covered_call",
-          "strike": 100
+          "strike": "100"
         },
         "side": "sell",
         "taker_owner": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T",
-        "price": 1,
-        "quantity": 10,
+        "price": "1",
+        "quantity": "10",
         "position_pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D",
         "transaction_signature": "sig",
         "filled_at": 1700000000

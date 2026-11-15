@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0 - 2026-11-15
+
+Breaking: one number encoding on WS and HTTP. The protocol string stays `1.0.0`, so an older
+client passes `Hello` and then fails to decode amounts.
+
+- Token amounts in atoms and the quote `nonce` are JSON decimal strings: `Price`, `Strike`,
+  `Quantity`, `Balance`, `Volume` and `Nonce` serialize as `"123"` and decode only from a string
+  of ASCII digits. WS fields that were numbers (prices, strikes, quantities, caps, balances,
+  settlement payoffs, size rules) are now strings, as HTTP amounts already were.
+- Timestamps, slots, counts, generations and durations are JSON numbers. HTTP fields that were
+  strings are now numbers: vault `active_expiry_ts`, `open_positions`, `capital_generation`,
+  `second_leg_generation`, `staged_generation`, `last_hwm_update_at`, `last_hwm_reset_at`,
+  `last_settlement_at`, `capital_fallback_delay_seconds`, staging `staged_at`/`generation`,
+  deposit window `set_at`, balances `observed_at`/`slot`, TVL `price_published_at`, stats
+  `created_at`/`computed_at`, `started.at`, return windows, `projection.version`/`slot`; positions
+  `created_at`/`acquired_at`/`closed_at`; exposure `as_of`, `expiry_ts`, spot `published_at`;
+  cycles `cycle_number`, `generation`, `expiry_ts`, `started_at`, `finished_at`; deposit and
+  withdraw requests `created_at`.
+- `UnixSecondsString` is removed; HTTP time fields use `UnixSeconds`.
+
 ## 0.10.0 - 2026-11-12
 
 Breaking: address and time fields are renamed after what they hold. The protocol string stays

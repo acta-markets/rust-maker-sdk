@@ -1211,7 +1211,7 @@ fn rfq_created_push_does_not_resolve_the_rfq_request() {
             "data": {
                 "rfq_id": Uuid::new_v4(),
                 "rfq_version": 1,
-                "terms": {"type": "covered_call", "strike": 1},
+                "terms": {"type": "covered_call", "strike": "1"},
                 "side": "sell",
                 "request_id": request_id,
                 "expires_at": 1,
