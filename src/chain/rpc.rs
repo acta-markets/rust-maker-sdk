@@ -95,6 +95,13 @@ pub struct FundPositionArgs {
     pub native_sol: NativeSolFunding,
 }
 
+#[derive(Debug, Clone)]
+pub struct WithdrawPositionFundsArgs {
+    pub holder: Pubkey,
+    pub position_pda: Pubkey,
+    pub create_atas: bool,
+}
+
 struct PreparedFundPosition {
     instructions: Vec<Instruction>,
     native_budget: Option<NativeSolBudget>,
@@ -190,6 +197,21 @@ impl ChainClient {
         self.confirm_submitted(signature, blockhash).await
     }
 
+    /// Return a Funded position's deposit before expiry; native SOL stays wrapped.
+    pub async fn withdraw_position_funds(
+        &self,
+        args: WithdrawPositionFundsArgs,
+        maker_owner: &(dyn Signer + Sync),
+        fee_payer: Option<&(dyn Signer + Sync)>,
+    ) -> Result<Signature, ChainError> {
+        let payer = fee_payer.map_or(maker_owner, |payer| payer);
+        let ixs = self
+            .build_withdraw_position_funds_ixs(&args, payer.pubkey())
+            .await?;
+        self.send_instructions_with_options(ixs, payer, &[maker_owner], SendOptions::default())
+            .await
+    }
+
     pub async fn build_maker_deposit_ixs(
         &self,
         args: &MakerDepositArgs,
@@ -245,22 +267,39 @@ impl ChainClient {
             .instructions)
     }
 
+    pub async fn build_withdraw_position_funds_ixs(
+        &self,
+        args: &WithdrawPositionFundsArgs,
+        fee_payer: Pubkey,
+    ) -> Result<Vec<Instruction>, ChainError> {
+        self.position_snapshot(&args.position_pda)
+            .await?
+            .withdraw_instructions(&self.program_id, args.holder, fee_payer, args.create_atas)
+    }
+
+    async fn position_snapshot(
+        &self,
+        position_pda: &Pubkey,
+    ) -> Result<super::batch::PositionSnapshot, ChainError> {
+        let position_data = self.fetch_account(position_pda).await?;
+        let position = PositionInfo::from_account(&position_data, &self.program_id)?;
+        let market_data = self.fetch_account(&position.market_pda).await?;
+        let market = MarketInfo::from_account(&market_data, &self.program_id)?;
+        Ok(super::batch::PositionSnapshot {
+            address: *position_pda,
+            market_address: position.market_pda,
+            position,
+            market,
+        })
+    }
+
     async fn prepare_fund_position(
         &self,
         args: &FundPositionArgs,
         fee_payer: Pubkey,
     ) -> Result<PreparedFundPosition, ChainError> {
-        let position_data = self.fetch_account(&args.position_pda).await?;
-        let pos = PositionInfo::from_account(&position_data, &self.program_id)?;
-        let market_data = self.fetch_account(&pos.market_pda).await?;
-        let market = MarketInfo::from_account(&market_data, &self.program_id)?;
-
-        let snapshot = super::batch::PositionSnapshot {
-            address: args.position_pda,
-            market_address: pos.market_pda,
-            position: pos.clone(),
-            market: market.clone(),
-        };
+        let snapshot = self.position_snapshot(&args.position_pda).await?;
+        let (pos, market) = (&snapshot.position, &snapshot.market);
         let mut fund_ixs = snapshot.fund_instructions(
             &self.program_id,
             args.holder,

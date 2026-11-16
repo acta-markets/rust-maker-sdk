@@ -24,12 +24,15 @@ pub use error::ChainError;
 pub use ix::{
     ChainIxError, FundPositionIxArgs, MakerDepositIxArgs, MakerWithdrawIxArgs,
     UpdateQuoteSigningIxArgs, build_fund_position_ixs, build_maker_deposit_ixs,
-    build_maker_withdraw_ixs, build_update_quote_signing_ixs, derive_associated_token_address,
-    maker_pda_with_program_id,
+    build_maker_withdraw_ixs, build_update_quote_signing_ixs, build_withdraw_position_funds_ixs,
+    derive_associated_token_address, maker_pda_with_program_id,
 };
 
 #[cfg(feature = "chain-rpc")]
-pub use rpc::{ChainClient, FundPositionArgs, MakerDepositArgs, MakerWithdrawArgs, SendOptions};
+pub use rpc::{
+    ChainClient, FundPositionArgs, MakerDepositArgs, MakerWithdrawArgs, SendOptions,
+    WithdrawPositionFundsArgs,
+};
 
 pub use wsol::{
     DEFAULT_SOL_RESERVE_LAMPORTS, NATIVE_MINT, NativeSolFunding,

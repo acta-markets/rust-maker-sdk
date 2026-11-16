@@ -3,7 +3,8 @@
 use acta_maker_sdk::chain::ix::{
     ChainIxError, FundPositionIxArgs, MakerDepositIxArgs, MakerWithdrawIxArgs,
     UpdateQuoteSigningIxArgs, build_fund_position_ixs, build_maker_deposit_ixs,
-    build_maker_withdraw_ixs, build_update_quote_signing_ixs, maker_pda_with_program_id,
+    build_maker_withdraw_ixs, build_update_quote_signing_ixs, build_withdraw_position_funds_ixs,
+    maker_pda_with_program_id,
 };
 use solana_sdk::pubkey::Pubkey;
 
@@ -139,6 +140,42 @@ fn fund_position_covered_call_uses_quote_mint() {
     let ix = &ixs[0];
     assert_eq!(ix.data[0], 9, "DepositFundsToPosition discriminant");
     assert_eq!(ix.accounts.len(), 7);
+}
+
+#[test]
+fn withdraw_position_funds_mirrors_the_deposit_accounts() {
+    let program_id = test_pubkey(1);
+    let mut args = FundPositionIxArgs {
+        holder: test_pubkey(2),
+        position_pda: test_pubkey(3),
+        market_pda: test_pubkey(4),
+        position_type: 0,
+        underlying_mint: test_pubkey(5),
+        quote_mint: test_pubkey(6),
+        underlying_token_program_id: token_program(),
+        quote_token_program_id: token_program(),
+        create_atas: false,
+    };
+    let deposit = build_fund_position_ixs(&program_id, &args, test_pubkey(10)).unwrap();
+    let withdraw = build_withdraw_position_funds_ixs(&program_id, &args, test_pubkey(10)).unwrap();
+    assert_eq!(withdraw.len(), 1);
+    assert_eq!(
+        withdraw[0].data,
+        vec![81],
+        "WithdrawFundsFromPosition discriminant"
+    );
+    assert_eq!(withdraw[0].accounts, deposit[0].accounts);
+    assert_eq!(
+        withdraw[0].accounts[1].pubkey,
+        maker_pda_with_program_id(&program_id, &args.holder).0
+    );
+
+    args.create_atas = true;
+    let deposit = build_fund_position_ixs(&program_id, &args, test_pubkey(10)).unwrap();
+    let withdraw = build_withdraw_position_funds_ixs(&program_id, &args, test_pubkey(10)).unwrap();
+    assert_eq!(withdraw.len(), 2, "only the holder ATA is created");
+    assert_eq!(withdraw[0], deposit[0]);
+    assert_eq!(withdraw[1].accounts, deposit[2].accounts);
 }
 
 fn digest(ixs: &[solana_sdk::instruction::Instruction]) -> String {

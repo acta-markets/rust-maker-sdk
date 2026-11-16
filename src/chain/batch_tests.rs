@@ -202,3 +202,59 @@ fn open_positions_can_be_funded_after_market_finalization() {
         }
     }
 }
+
+#[tokio::test]
+async fn withdrawal_builds_only_for_a_funded_maker_position() {
+    let program = Pubkey::new_unique();
+    let owner = Pubkey::new_unique();
+    let market = Pubkey::new_unique();
+    let (open, m) = fixtures(program, owner, market);
+    let mut funded = open.clone();
+    funded.data[4] = PositionStatus::Funded as u8;
+    let (open_key, funded_key) = (Pubkey::new_unique(), Pubkey::new_unique());
+    let client = ChainClient::with_accounts(
+        program,
+        [(open_key, open), (funded_key, funded), (market, m)],
+    );
+    let args = |position_pda| crate::chain::WithdrawPositionFundsArgs {
+        holder: owner,
+        position_pda,
+        create_atas: true,
+    };
+    let ixs = client
+        .build_withdraw_position_funds_ixs(&args(funded_key), owner)
+        .await
+        .unwrap();
+    assert_eq!(ixs.len(), 2);
+    let withdraw = &ixs[1];
+    assert_eq!(withdraw.data, vec![81]);
+    assert_eq!(withdraw.accounts[0].pubkey, owner);
+    assert_eq!(
+        withdraw.accounts[1].pubkey,
+        ix::maker_pda_with_program_id(&program, &owner).0
+    );
+    assert_eq!(withdraw.accounts[2].pubkey, funded_key);
+    assert_eq!(withdraw.accounts[3].pubkey, market);
+    assert!(matches!(
+        client
+            .build_withdraw_position_funds_ixs(&args(open_key), owner)
+            .await,
+        Err(ChainError::InvalidAccountData)
+    ));
+
+    let snapshot = client
+        .maker_snapshot(&owner, &[funded_key], &[])
+        .await
+        .unwrap();
+    let position = &snapshot.positions[0];
+    assert!(matches!(
+        position.withdraw_instructions(&program, Pubkey::new_unique(), owner, false),
+        Err(ChainError::Identity("maker owner"))
+    ));
+    let mut bought = position.clone();
+    bought.position.side = TakerSide::Buy;
+    assert!(matches!(
+        bought.withdraw_instructions(&program, owner, owner, false),
+        Err(ChainError::TakerBuyUnsupported)
+    ));
+}

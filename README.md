@@ -132,7 +132,8 @@ epoch and applies recovery before it quotes again. A socket write is not an
 accepted quote; never replay an old signed quote after a reconnect.
 
 `QuoteFilled` means the position opened on chain. Fund its settlement leg with
-`DepositFundsToPosition` if the product requires it. Acta's keeper settles an
+`DepositFundsToPosition` if the product requires it; `withdraw_position_funds`
+takes the deposit back before expiry. Acta's keeper settles an
 in-the-money funded position to the owner's ATA; no SDK call is needed.
 
 ## Examples

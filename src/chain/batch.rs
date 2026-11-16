@@ -69,6 +69,35 @@ impl PositionSnapshot {
         fee_payer: Pubkey,
         create_atas: bool,
     ) -> Result<Vec<Instruction>, ChainError> {
+        let args = self.holder_funds_args(maker_owner, create_atas)?;
+        if self.position.status != PositionStatus::Open {
+            return Err(ChainError::InvalidAccountData);
+        }
+        Ok(ix::build_fund_position_ixs(program_id, &args, fee_payer)?)
+    }
+
+    /// Pure builder; native SOL comes back wrapped.
+    pub fn withdraw_instructions(
+        &self,
+        program_id: &Pubkey,
+        maker_owner: Pubkey,
+        fee_payer: Pubkey,
+        create_atas: bool,
+    ) -> Result<Vec<Instruction>, ChainError> {
+        let args = self.holder_funds_args(maker_owner, create_atas)?;
+        if self.position.status != PositionStatus::Funded {
+            return Err(ChainError::InvalidAccountData);
+        }
+        Ok(ix::build_withdraw_position_funds_ixs(
+            program_id, &args, fee_payer,
+        )?)
+    }
+
+    fn holder_funds_args(
+        &self,
+        maker_owner: Pubkey,
+        create_atas: bool,
+    ) -> Result<ix::FundPositionIxArgs, ChainError> {
         if self.position.side.is_taker_buy() {
             return Err(ChainError::TakerBuyUnsupported);
         }
@@ -78,30 +107,25 @@ impl PositionSnapshot {
         if self.position.holder != maker_owner {
             return Err(ChainError::Identity("maker owner"));
         }
-        if self.position.status != PositionStatus::Open
-            || self.market.is_put
-                != matches!(
-                    self.position.terms.position_type(),
-                    crate::PositionType::CashSecuredPut
-                )
+        if self.market.is_put
+            != matches!(
+                self.position.terms.position_type(),
+                crate::PositionType::CashSecuredPut
+            )
         {
             return Err(ChainError::InvalidAccountData);
         }
-        Ok(ix::build_fund_position_ixs(
-            program_id,
-            &ix::FundPositionIxArgs {
-                holder: maker_owner,
-                position_pda: self.address,
-                market_pda: self.position.market_pda,
-                position_type: self.position.terms.to_chain().position_type().into(),
-                underlying_mint: self.market.underlying_mint,
-                quote_mint: self.market.quote_mint,
-                underlying_token_program_id: self.market.underlying_token_program_id,
-                quote_token_program_id: self.market.quote_token_program_id,
-                create_atas,
-            },
-            fee_payer,
-        )?)
+        Ok(ix::FundPositionIxArgs {
+            holder: maker_owner,
+            position_pda: self.address,
+            market_pda: self.position.market_pda,
+            position_type: self.position.terms.to_chain().position_type().into(),
+            underlying_mint: self.market.underlying_mint,
+            quote_mint: self.market.quote_mint,
+            underlying_token_program_id: self.market.underlying_token_program_id,
+            quote_token_program_id: self.market.quote_token_program_id,
+            create_atas,
+        })
     }
 }
 

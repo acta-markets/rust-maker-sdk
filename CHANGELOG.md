@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.1 - 2026-11-16
+
+- `ChainClient::withdraw_position_funds` / `build_withdraw_position_funds_ixs` with
+  `WithdrawPositionFundsArgs`, `PositionSnapshot::withdraw_instructions` and
+  `chain::build_withdraw_position_funds_ixs` take a Funded position's deposit back before expiry
+  (`WithdrawFundsFromPosition`, opcode 81, the `DepositFundsToPosition` accounts); the position is
+  Open again. A non-Funded position is refused with `ChainError::InvalidAccountData`, as the
+  deposit refuses a non-Open one; native SOL stays wrapped.
+
 ## 0.11.0 - 2026-11-15
 
 Breaking: one number encoding on WS and HTTP. The protocol string stays `1.0.0`, so an older

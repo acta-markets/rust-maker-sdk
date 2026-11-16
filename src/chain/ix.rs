@@ -154,52 +154,98 @@ pub fn build_fund_position_ixs(
     args: &FundPositionIxArgs,
     fee_payer: Pubkey,
 ) -> Result<Vec<Instruction>, ChainIxError> {
-    let (maker_pda, _) = maker_pda_with_program_id(program_id, &args.holder);
-    let (settlement_mint, settlement_program) = match args.position_type {
-        0 => (args.quote_mint, args.quote_token_program_id),
-        1 => (args.underlying_mint, args.underlying_token_program_id),
-        other => return Err(ChainIxError::InvalidPositionType(other)),
-    };
-
-    let holder_funding_ata =
-        derive_associated_token_address(&args.holder, &settlement_mint, &settlement_program);
-    let pos_settlement_ata =
-        derive_associated_token_address(&args.position_pda, &settlement_mint, &settlement_program);
-
+    let funds = PositionFundsAccounts::new(program_id, args)?;
     let mut ixs = Vec::new();
     if args.create_atas {
+        ixs.push(funds.create_holder_ata(&fee_payer));
         ixs.push(create_associated_token_account_idempotent_ix(
             &fee_payer,
-            &holder_funding_ata,
-            &args.holder,
-            &settlement_mint,
-            &settlement_program,
-        ));
-        ixs.push(create_associated_token_account_idempotent_ix(
-            &fee_payer,
-            &pos_settlement_ata,
+            &funds.pos_settlement_ata,
             &args.position_pda,
-            &settlement_mint,
-            &settlement_program,
+            &funds.settlement_mint,
+            &funds.settlement_program,
         ));
     }
-
-    let ix = Instruction {
-        program_id: *program_id,
-        accounts: vec![
-            AccountMeta::new(args.holder, true),
-            AccountMeta::new_readonly(maker_pda, false),
-            AccountMeta::new(args.position_pda, false),
-            AccountMeta::new_readonly(args.market_pda, false),
-            AccountMeta::new(holder_funding_ata, false),
-            AccountMeta::new(pos_settlement_ata, false),
-            AccountMeta::new_readonly(settlement_program, false),
-        ],
-        data: vec![InstructionKind::DepositFundsToPosition as u8],
-    };
-
-    ixs.push(ix);
+    ixs.push(funds.instruction(InstructionKind::DepositFundsToPosition));
     Ok(ixs)
+}
+
+/// Return a Funded position's deposit to its holder; native SOL stays wrapped.
+pub fn build_withdraw_position_funds_ixs(
+    program_id: &Pubkey,
+    args: &FundPositionIxArgs,
+    fee_payer: Pubkey,
+) -> Result<Vec<Instruction>, ChainIxError> {
+    let funds = PositionFundsAccounts::new(program_id, args)?;
+    let mut ixs = Vec::new();
+    if args.create_atas {
+        ixs.push(funds.create_holder_ata(&fee_payer));
+    }
+    ixs.push(funds.instruction(InstructionKind::WithdrawFundsFromPosition));
+    Ok(ixs)
+}
+
+struct PositionFundsAccounts<'a> {
+    program_id: &'a Pubkey,
+    args: &'a FundPositionIxArgs,
+    maker_pda: Pubkey,
+    settlement_mint: Pubkey,
+    settlement_program: Pubkey,
+    holder_funding_ata: Pubkey,
+    pos_settlement_ata: Pubkey,
+}
+
+impl<'a> PositionFundsAccounts<'a> {
+    fn new(program_id: &'a Pubkey, args: &'a FundPositionIxArgs) -> Result<Self, ChainIxError> {
+        let (settlement_mint, settlement_program) = match args.position_type {
+            0 => (args.quote_mint, args.quote_token_program_id),
+            1 => (args.underlying_mint, args.underlying_token_program_id),
+            other => return Err(ChainIxError::InvalidPositionType(other)),
+        };
+        Ok(Self {
+            program_id,
+            args,
+            maker_pda: maker_pda_with_program_id(program_id, &args.holder).0,
+            settlement_mint,
+            settlement_program,
+            holder_funding_ata: derive_associated_token_address(
+                &args.holder,
+                &settlement_mint,
+                &settlement_program,
+            ),
+            pos_settlement_ata: derive_associated_token_address(
+                &args.position_pda,
+                &settlement_mint,
+                &settlement_program,
+            ),
+        })
+    }
+
+    fn create_holder_ata(&self, fee_payer: &Pubkey) -> Instruction {
+        create_associated_token_account_idempotent_ix(
+            fee_payer,
+            &self.holder_funding_ata,
+            &self.args.holder,
+            &self.settlement_mint,
+            &self.settlement_program,
+        )
+    }
+
+    fn instruction(&self, kind: InstructionKind) -> Instruction {
+        Instruction {
+            program_id: *self.program_id,
+            accounts: vec![
+                AccountMeta::new(self.args.holder, true),
+                AccountMeta::new_readonly(self.maker_pda, false),
+                AccountMeta::new(self.args.position_pda, false),
+                AccountMeta::new_readonly(self.args.market_pda, false),
+                AccountMeta::new(self.holder_funding_ata, false),
+                AccountMeta::new(self.pos_settlement_ata, false),
+                AccountMeta::new_readonly(self.settlement_program, false),
+            ],
+            data: vec![kind as u8],
+        }
+    }
 }
 
 #[repr(u8)]
@@ -208,6 +254,7 @@ enum InstructionKind {
     MakerDeposit = 4,
     MakerWithdraw = 5,
     DepositFundsToPosition = 9,
+    WithdrawFundsFromPosition = 81,
 }
 
 fn build_amount_instruction(kind: InstructionKind, amount: u64) -> Vec<u8> {
