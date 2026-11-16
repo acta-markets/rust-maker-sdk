@@ -8,8 +8,10 @@ pub mod confirmation;
 #[cfg(feature = "chain-rpc")]
 pub mod rpc;
 
+mod settle;
 mod settlement;
 
+#[cfg(feature = "vault")]
 pub mod vault;
 
 pub mod wsol;
@@ -33,6 +35,8 @@ pub use rpc::{
     ChainClient, FundPositionArgs, MakerDepositArgs, MakerWithdrawArgs, SendOptions,
     WithdrawPositionFundsArgs,
 };
+
+pub use settle::{build_settle_position_ix, settle_position_sequence};
 
 pub use wsol::{
     DEFAULT_SOL_RESERVE_LAMPORTS, NATIVE_MINT, NativeSolFunding,

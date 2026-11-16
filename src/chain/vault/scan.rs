@@ -1,5 +1,5 @@
+use solana_pubkey::Pubkey;
 use solana_rpc_client::api::filter::{Memcmp, RpcFilterType};
-use solana_sdk::pubkey::Pubkey;
 
 use super::{VaultRequest, VaultRequestKind};
 use crate::chain::{ChainClient, ChainError, PositionInfo};
@@ -91,7 +91,7 @@ impl ChainClient {
 
 #[cfg(test)]
 mod tests {
-    use solana_sdk::account::Account;
+    use solana_account::Account;
 
     use super::*;
     use crate::chain::PositionStatus;

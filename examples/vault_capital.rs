@@ -11,14 +11,15 @@ use acta_maker_sdk::chain::vault::{
 };
 use acta_maker_sdk::chain::{ChainClient, SendOptions};
 use solana_commitment_config::CommitmentConfig;
+use solana_instruction::{AccountMeta, Instruction};
+use solana_keypair::{Keypair, read_keypair_file};
+use solana_pubkey::Pubkey;
 use solana_rpc_client::api::config::{
     RpcAccountInfoConfig, RpcProgramAccountsConfig, UiAccountEncoding,
 };
 use solana_rpc_client::api::filter::{Memcmp, RpcFilterType};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_sdk::instruction::{AccountMeta, Instruction};
-use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::{Keypair, Signer, read_keypair_file};
+use solana_signer::Signer;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 

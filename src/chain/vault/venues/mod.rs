@@ -3,7 +3,7 @@ pub mod exponent;
 pub mod jupiter;
 
 use super::{VaultChainError, VaultSwapHop};
-use solana_sdk::pubkey::Pubkey;
+use solana_pubkey::Pubkey;
 
 pub(super) fn invalid(message: &'static str) -> VaultChainError {
     VaultChainError::InvalidInput(message)

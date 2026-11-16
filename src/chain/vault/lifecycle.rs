@@ -1,9 +1,8 @@
 use super::{VaultChainError, VaultManager, manager::VaultIx};
 use crate::chain::ix::{TOKEN_PROGRAM_ID, derive_associated_token_address as ata};
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use crate::chain::settle::create_destination_ata;
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 
 impl VaultManager {
     pub fn bootstrap(
@@ -214,26 +213,5 @@ impl VaultManager {
         let mut accounts = self.process_equity(&[]).accounts;
         accounts.remove(3);
         accounts
-    }
-}
-
-pub(super) fn create_destination_ata(
-    payer: Pubkey,
-    owner: Pubkey,
-    mint: Pubkey,
-    program: Pubkey,
-) -> Instruction {
-    use crate::chain::ix::{ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID};
-    Instruction {
-        program_id: ASSOCIATED_TOKEN_PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new(ata(&owner, &mint, &program), false),
-            AccountMeta::new_readonly(owner, false),
-            AccountMeta::new_readonly(mint, false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-            AccountMeta::new_readonly(program, false),
-        ],
-        data: vec![1],
     }
 }

@@ -11,12 +11,10 @@ use super::{
 };
 use crate::chain::ix::ASSOCIATED_TOKEN_PROGRAM_ID;
 use crate::types::{VaultLeg, VaultStagingStep};
-use solana_sdk::{
-    hash::Hash,
-    instruction::{AccountMeta, Instruction},
-    message::{AddressLookupTableAccount, VersionedMessage, v0},
-    pubkey::Pubkey,
-};
+use solana_hash::Hash;
+use solana_instruction::{AccountMeta, Instruction};
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
+use solana_pubkey::Pubkey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intent {

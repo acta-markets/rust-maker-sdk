@@ -1,4 +1,4 @@
-use solana_sdk::pubkey::Pubkey;
+use solana_pubkey::Pubkey;
 
 pub(crate) fn global_config(program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"global_config"], program_id)
@@ -73,10 +73,6 @@ pub(crate) fn withdraw_escrow_authority(
 
 pub(crate) fn pending_vault_update(program_id: &Pubkey, vault: &Pubkey, kind: u8) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"pending_update", vault.as_ref(), &[kind]], program_id)
-}
-
-pub(crate) fn position(program_id: &Pubkey, order_id: &[u8; 32]) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"position", order_id], program_id)
 }
 
 pub(crate) fn premium_config(program_id: &Pubkey, premium_mint: &Pubkey) -> (Pubkey, u8) {

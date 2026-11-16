@@ -2,12 +2,10 @@ use std::str::FromStr;
 
 use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
-use solana_sdk::{
-    hash::Hash,
-    instruction::{AccountMeta, Instruction},
-    message::{AddressLookupTableAccount, Message, VersionedMessage, v0},
-    pubkey::Pubkey,
-};
+use solana_hash::Hash;
+use solana_instruction::{AccountMeta, Instruction};
+use solana_message::{AddressLookupTableAccount, Message, VersionedMessage, v0};
+use solana_pubkey::Pubkey;
 use uuid::Uuid;
 
 use crate::ws::types::SwapStaging;
@@ -123,7 +121,8 @@ fn swap_quote(case: &Value, tx_base64: String) -> SwapQuoteResultData {
         .to_string(),
         quoted_out_amount: num(&swap["quoted_out_amount"]).to_string(),
         minimum_out_amount: num(&swap["minimum_out_amount"]).to_string(),
-        valid_until: std::time::UNIX_EPOCH + std::time::Duration::from_secs(num(&swap["valid_until"])),
+        valid_until: std::time::UNIX_EPOCH
+            + std::time::Duration::from_secs(num(&swap["valid_until"])),
         staging: match serde_json::from_value::<String>(case["staging"]["mode"].clone()) {
             Ok(mode) if mode == "stage" => SwapStaging::Stage,
             Ok(_) => SwapStaging::Unstage,
@@ -552,7 +551,7 @@ fn extra_missing_or_reordered_instructions_are_rejected() {
         {
             let mut rent = ixs.clone();
             rent[position].accounts.push(AccountMeta::new_readonly(
-                solana_sdk::pubkey!("SysvarRent111111111111111111111111111111111"),
+                solana_pubkey::pubkey!("SysvarRent111111111111111111111111111111111"),
                 false,
             ));
             assert!(matches!(

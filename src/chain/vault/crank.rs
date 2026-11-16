@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use solana_sdk::pubkey::Pubkey;
+use solana_pubkey::Pubkey;
 
 use super::{VaultAccount, VaultPhase, VaultSafety, VaultStagingState};
 

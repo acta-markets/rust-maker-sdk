@@ -2,11 +2,13 @@
 use super::super::{VaultChainError, VaultSwapAmountOffset, VaultSwapHop};
 use super::{Reader, invalid};
 use crate::chain::ix::{TOKEN_PROGRAM_ID, derive_associated_token_address as ata};
-use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
+use solana_instruction::AccountMeta;
+use solana_pubkey::Pubkey;
 
-pub const CLMM: Pubkey = solana_sdk::pubkey!("XPC1MM4dYACDfykNuXYZ5una2DsMDWL24CrYubCvarC");
-pub const GENERIC_SY: Pubkey = solana_sdk::pubkey!("XP1BRLn8eCYSygrd8er5P4GKdzqKbC3DLoSsS5UYVZy");
-pub const CORE: Pubkey = solana_sdk::pubkey!("ExponentnaRg3CQbW6dqQNZKXp7gtZ9DGMp1cwC4HAS7");
+pub const CLMM: Pubkey = solana_pubkey::pubkey!("XPC1MM4dYACDfykNuXYZ5una2DsMDWL24CrYubCvarC");
+pub const GENERIC_SY: Pubkey =
+    solana_pubkey::pubkey!("XP1BRLn8eCYSygrd8er5P4GKdzqKbC3DLoSsS5UYVZy");
+pub const CORE: Pubkey = solana_pubkey::pubkey!("ExponentnaRg3CQbW6dqQNZKXp7gtZ9DGMp1cwC4HAS7");
 pub const INDEX_ONE: u64 = 1_000_000_000_000;
 
 #[derive(Debug, Clone)]
@@ -417,7 +419,7 @@ impl StakePool {
             epoch,
         })
     }
-    pub fn update(&self) -> solana_sdk::instruction::Instruction {
+    pub fn update(&self) -> solana_instruction::Instruction {
         super::super::served::update_stake_pool_balance(
             self.program,
             [

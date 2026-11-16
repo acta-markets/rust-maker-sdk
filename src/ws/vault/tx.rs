@@ -28,7 +28,11 @@ pub(super) fn ensure_system_time_ahead(
     ensure_ahead(field, deadline_secs, unix_now()?)
 }
 
-pub(super) fn ensure_ahead(field: &'static str, deadline: u64, now: u64) -> Result<u64, VaultTxError> {
+pub(super) fn ensure_ahead(
+    field: &'static str,
+    deadline: u64,
+    now: u64,
+) -> Result<u64, VaultTxError> {
     if now >= deadline {
         return Err(VaultTxError::Expired {
             field,

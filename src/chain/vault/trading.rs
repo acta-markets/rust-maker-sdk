@@ -1,13 +1,11 @@
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 
 use super::manager::{VaultIx, VaultManager};
 use super::{VaultChainError, pda};
 use crate::chain::ix::{
     SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
-    derive_associated_token_address as ata, maker_pda_with_program_id,
+    derive_associated_token_address as ata, maker_pda_with_program_id, position_pda,
 };
 use crate::orders::{OrderPreimageArgs, build_physical_order_preimage};
 use crate::quote::market_pda;
@@ -24,7 +22,7 @@ pub const MAX_VAULT_SWAP_HOPS: usize = 4;
 pub(crate) const NO_AMOUNT_OFFSET: u16 = u16::MAX;
 
 pub(crate) const INSTRUCTIONS_SYSVAR_ID: Pubkey =
-    solana_sdk::pubkey!("Sysvar1nstructions1111111111111111111111111");
+    solana_pubkey::pubkey!("Sysvar1nstructions1111111111111111111111111");
 
 /// Terms of a vault option trade, as agreed in the RFQ and quote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,7 +294,7 @@ impl VaultManager {
         order_id: &[u8; 32],
     ) -> VaultPositionAddresses {
         let program_id = &self.args.program_id;
-        let position = pda::position(program_id, order_id).0;
+        let position = position_pda(program_id, order_id);
         let config = pda::premium_config(program_id, &legs.quote.mint).0;
         let collateral = legs.collateral(terms.is_put);
         VaultPositionAddresses {
@@ -335,7 +333,7 @@ impl VaultManager {
         let legs = MarketLegs::bind(self, position.underlying_mint, position.quote_mint)?;
         let funding = legs.settlement(position.is_put);
         let program_id = &self.args.program_id;
-        let position_pda = pda::position(program_id, &position.order_id).0;
+        let position_pda = position_pda(program_id, &position.order_id);
         let market = market_pda(
             program_id,
             &position.underlying_mint,
@@ -875,7 +873,7 @@ impl VaultManager {
         order_id: &[u8; 32],
     ) -> VaultPositionAddresses {
         let program_id = &self.args.program_id;
-        let position = pda::position(program_id, order_id).0;
+        let position = position_pda(program_id, order_id);
         let config = pda::premium_config(program_id, &legs.quote.mint).0;
         VaultPositionAddresses {
             market: terms.market(program_id),

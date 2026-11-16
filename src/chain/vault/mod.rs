@@ -17,8 +17,6 @@ mod router_price;
 #[cfg(feature = "chain-rpc")]
 mod scan;
 mod served;
-mod settle;
-pub use settle::{build_settle_position_ix, settle_position_sequence};
 mod trading;
 pub mod venues;
 

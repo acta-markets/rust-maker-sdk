@@ -102,6 +102,7 @@ impl ChainClient {
         }
     }
 
+    #[cfg(feature = "vault")]
     pub(crate) fn lookup_table_account(addresses: &[Pubkey]) -> Account {
         let mut data = vec![0; LOOKUP_TABLE_META_LEN];
         data[..4].copy_from_slice(&1u32.to_le_bytes());
@@ -130,7 +131,7 @@ impl RpcSender for Submission {
         self.calls.lock().unwrap().push(request);
         match request {
             RpcRequest::GetLatestBlockhash => Ok(json!({"context":{"slot":1},"value":{
-                "blockhash": solana_sdk::hash::Hash::new_unique().to_string(), "lastValidBlockHeight":100
+                "blockhash": solana_hash::Hash::new_unique().to_string(), "lastValidBlockHeight":100
             }})),
             RpcRequest::SendTransaction => {
                 let bytes = STANDARD.decode(params[0].as_str().unwrap()).unwrap();

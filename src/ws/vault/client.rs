@@ -22,8 +22,8 @@ use crate::ws::types::{
     SwapStatusMessage, SwapSubmitData, SwapSubmitResultData, UnsubscribeData, VaultAuthSuccessData,
 };
 
-use solana_sdk::message::AddressLookupTableAccount;
-use solana_sdk::pubkey::Pubkey;
+use solana_message::AddressLookupTableAccount;
+use solana_pubkey::Pubkey;
 
 use crate::chain::vault::{
     ComputeBudgetBounds, VaultIntentError, VaultOpenIntent, VaultSwapIntent, verify_vault_open,

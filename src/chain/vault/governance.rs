@@ -1,7 +1,5 @@
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 
 use super::manager::VaultIx;
 use super::{VaultChainError, VaultManager, pda};

@@ -1,4 +1,4 @@
-use solana_sdk::pubkey::Pubkey;
+use solana_pubkey::Pubkey;
 
 use super::{VaultAccount, VaultManager, VaultOpenIntent, VaultSaleTerms};
 use crate::chain::{ChainClient, ChainError, MakerInfo, maker_pda_with_program_id};

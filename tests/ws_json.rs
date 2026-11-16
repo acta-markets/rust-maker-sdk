@@ -1805,4 +1805,3 @@ fn quote_races_are_told_apart_from_faults() {
         assert!(!fault.is_quote_race(), "{fault:?}");
     }
 }
-

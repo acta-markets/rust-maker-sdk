@@ -1,10 +1,11 @@
-use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
+use solana_instruction::AccountMeta;
+use solana_pubkey::Pubkey;
 
 use super::VaultChainError;
 use super::account::{header, pubkey};
 
 pub const PYTH_PUSH_ORACLE_ID: Pubkey =
-    solana_sdk::pubkey!("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
+    solana_pubkey::pubkey!("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
 pub const MAX_PRICE_BRICKS: usize = 6;
 pub const MAX_PRICE_ROUTE_BYTES: usize = 640;
 pub const MAX_RATIO_DISCRIMINATOR_LEN: usize = 8;
@@ -197,7 +198,7 @@ impl PriceRoute {
 
     /// [`Self::parse`] for an account that must be owned by `program_id`.
     pub fn from_account(
-        account: &solana_sdk::account::Account,
+        account: &solana_account::Account,
         program_id: &Pubkey,
     ) -> Result<Self, VaultChainError> {
         if account.owner != *program_id {

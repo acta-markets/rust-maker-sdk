@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use solana_sdk::pubkey::Pubkey;
+use solana_pubkey::Pubkey;
 use uuid::Uuid;
 
 use crate::chain::vault::{

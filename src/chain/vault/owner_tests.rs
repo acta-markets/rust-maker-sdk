@@ -1,14 +1,14 @@
 use super::*;
 use crate::chain::ix::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
-use crate::chain::{MarketInfo, PositionInfo, PositionStatus};
+use crate::chain::{
+    MarketInfo, PositionInfo, PositionStatus, build_settle_position_ix, settle_position_sequence,
+};
 use crate::{
     Decimals, OptionTerms, OrderId, Quantity, Strike, TakerSide, VaultDelegatePermissions,
 };
 use serde_json::{Value, json};
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 fn key(n: u8) -> Pubkey {
     Pubkey::new_from_array([n; 32])
 }
@@ -321,7 +321,7 @@ fn general_position_decoder_preserves_unknown_flags_but_settlement_rejects_them(
     let mut buy = data.clone();
     buy[5] = 4;
     let buy = PositionInfo::from_account(
-        &solana_sdk::account::Account {
+        &solana_account::Account {
             data: buy,
             owner: key(9),
             lamports: 1,
@@ -340,7 +340,7 @@ fn general_position_decoder_preserves_unknown_flags_but_settlement_rejects_them(
     for (index, value) in [(5, 8), (6, 1), (7, 1)] {
         let mut bytes = data.clone();
         bytes[index] = value;
-        let account = solana_sdk::account::Account {
+        let account = solana_account::Account {
             data: bytes,
             owner: key(9),
             lamports: 1,
@@ -364,7 +364,7 @@ fn general_position_decoder_preserves_unknown_flags_but_settlement_rejects_them(
 mod rpc {
     use super::*;
     use crate::chain::ChainClient;
-    use solana_sdk::account::Account;
+    use solana_account::Account;
     fn account(owner: Pubkey, data: Vec<u8>) -> Account {
         Account {
             owner,
@@ -725,7 +725,7 @@ mod rpc {
         ] {
             market_data[offset..offset + 32].copy_from_slice(key.as_ref());
         }
-        let address = pda::position(&key(9), p.order_id.as_bytes()).0;
+        let address = crate::chain::ix::position_pda(&key(9), p.order_id.as_bytes());
         let chain = ChainClient::with_accounts(
             key(9),
             [

@@ -3,11 +3,11 @@ use std::net::TcpListener;
 
 use serde_json::Value;
 
-use super::types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 use super::types::{
     Atoms, DepositWindow, ExposureDecimals, ExposureSpot, Moneyness, PositionClose, VaultBalances,
     VaultGeneration, VaultMetadataState, VaultStaging, VaultStatsState, VaultTvl, WindowReturn,
 };
+use super::types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 use super::{
     CountLimit, HttpClient, HttpError, MarketFilter, TokenProgramKind, VaultCapacity,
     VaultExposure, VaultLeg, VaultPositionProduct, VaultPositionRole, VaultPositionStatus,
@@ -127,7 +127,10 @@ fn vault_exposure_round_trips_the_backend_shape() {
         panic!("three positions");
     };
     assert_eq!(call.role, VaultPositionRole::Writer);
-    assert!(matches!(call.moneyness, Moneyness::Available { itm: true, .. }));
+    assert!(matches!(
+        call.moneyness,
+        Moneyness::Available { itm: true, .. }
+    ));
     assert_eq!(call.intrinsic, Atoms::Available { atoms: -20_000_000 });
     assert_eq!(put.position_type, VaultPositionType::CashSecuredPut);
     assert_eq!(put.status, VaultPositionStatus::Funded);
@@ -196,7 +199,10 @@ fn vault_positions_round_trip_the_backend_shape() {
     assert_eq!(put.position_type, VaultPositionType::CashSecuredPut);
     assert_eq!(put.status, VaultPositionStatus::Funded);
     assert_eq!(call.role, VaultPositionRole::Holder);
-    assert!(matches!(call.close, PositionClose::Closed { is_otm: true, .. }));
+    assert!(matches!(
+        call.close,
+        PositionClose::Closed { is_otm: true, .. }
+    ));
     assert!(response.next_cursor.is_some());
 
     assert_eq!(put.product, VaultPositionProduct::Physical {});

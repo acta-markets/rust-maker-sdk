@@ -36,7 +36,7 @@ fn client() -> (ChainClient, Arc<Mutex<Vec<usize>>>) {
         RpcClientConfig::with_commitment(CommitmentConfig::confirmed()),
     );
     (
-        ChainClient::from_rpc(rpc, solana_sdk::pubkey::Pubkey::new_unique()),
+        ChainClient::from_rpc(rpc, solana_pubkey::Pubkey::new_unique()),
         calls,
     )
 }

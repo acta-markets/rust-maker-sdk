@@ -11,16 +11,16 @@ use reqwest::header::{ETAG, IF_NONE_MATCH};
 use serde::de::DeserializeOwned;
 
 pub use types::{
+    Atoms, CycleGeneration, CycleReturn, CycleState, DepositWindow, ExposureDecimals, ExposureSpot,
+    GenerationStart, Metric, Moneyness, PositionClose, Transaction, VaultBalances, VaultGeneration,
+    VaultMetadataState, VaultStatsState, VaultTvl,
+};
+pub use types::{
     CountLimit, PremiumFlow, ProjectionCursor, TokenProgramKind, Vault, VaultCapacity, VaultCycle,
     VaultDepositRequest, VaultExposure, VaultExposurePosition, VaultExposureTotal, VaultFees,
     VaultLeg, VaultMetadata, VaultPerformance, VaultPolicy, VaultPosition, VaultPositionProduct,
     VaultPositionRole, VaultPositionStatus, VaultPositionType, VaultPremium, VaultReturns,
     VaultStaging, VaultWithdrawRequest, Venue, WindowReturn,
-};
-pub use types::{
-    Atoms, CycleGeneration, CycleReturn, CycleState, DepositWindow, ExposureDecimals, ExposureSpot,
-    GenerationStart, Metric, Moneyness, PositionClose, Transaction, VaultBalances, VaultGeneration,
-    VaultMetadataState, VaultStatsState, VaultTvl,
 };
 use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
 use types::{VaultCyclesResponse, VaultRequestsResponse};

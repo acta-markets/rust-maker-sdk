@@ -1,22 +1,21 @@
 #[cfg(feature = "chain-rpc")]
-use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_account::Account;
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 #[cfg(feature = "chain-rpc")]
-use solana_sdk::account::Account;
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 #[cfg(feature = "chain-rpc")]
 use super::ChainError;
 
 /// Default amount left in the maker wallet after wrapping, for fee headroom.
 pub const DEFAULT_SOL_RESERVE_LAMPORTS: u64 = 1_200_000;
-pub const NATIVE_MINT: Pubkey = solana_sdk::pubkey!("So11111111111111111111111111111111111111112");
+pub const NATIVE_MINT: Pubkey =
+    solana_pubkey::pubkey!("So11111111111111111111111111111111111111112");
 
 pub(crate) const TOKEN_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
+    solana_pubkey::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const SYSTEM_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("11111111111111111111111111111111");
 const SPL_TOKEN_SYNC_NATIVE: u8 = 17;
 const SPL_TOKEN_CLOSE_ACCOUNT: u8 = 9;
 const SYSTEM_INSTRUCTION_TRANSFER: u32 = 2;
@@ -35,7 +34,6 @@ const TOKEN_ACCOUNT_OWNER_OFFSET: usize = 32;
 const TOKEN_ACCOUNT_AMOUNT_OFFSET: usize = 64;
 #[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_BASE_LEN: usize = 72;
-#[cfg(feature = "chain-rpc")]
 const TOKEN_ACCOUNT_RENT_LEN: usize = 165;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -1,4 +1,4 @@
-use solana_sdk::signature::Signature;
+use solana_signature::Signature;
 
 use super::{ChainError, rpc::ChainClient};
 

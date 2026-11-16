@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.11.0", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.12.0", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -17,9 +17,9 @@ Rust 1.89 or later. The default feature set is empty.
 |---|---|
 | `ws-client` | `MakerQuoteClient`, `MakerDataClient`, `ManagedWsHandle` and the raw Tokio `WsClient` |
 | `http` | Read-only `HttpClient` (`reqwest` 0.13 with `rustls`) |
-| `chain` | Instruction builders, derived addresses, checked account decoders, `VaultManager`, served-transaction verification |
+| `chain` | Instruction builders, derived addresses, checked account decoders, position settlement |
 | `chain-rpc` | `ChainClient` over Solana RPC; includes `chain` |
-| `vault` | `VaultOperatorClient` and checked vault transaction signing; includes `ws-client` and `chain` |
+| `vault` | `chain::vault` (`VaultManager`, served-transaction verification, curator routing), `VaultOperatorClient` and checked vault transaction signing; includes `ws-client` and `chain` |
 | `decimal` | `rust_decimal` conversions for `Price`, `Strike` and `Quantity` |
 | `test-helpers` | `ManagedWsHandle::test_handle` and message injection |
 
@@ -149,8 +149,8 @@ in-the-money funded position to the owner's ATA; no SDK call is needed.
 | `indicative` | `ws-client` | Answer unsigned indicative-price requests |
 | `loopback_latency` | `ws-client` | Measure local managed-client latency |
 | `vault_operator` | `vault`, `http` | Vault session quoting both sides, with checked fill and swap signing |
-| `vault_capital` | `chain-rpc` | Capital-cycle crank |
-| `curator_pt` | `chain-rpc`, `http` | Plan a PT route and simulate it; never sends |
+| `vault_capital` | `chain-rpc`, `vault` | Capital-cycle crank |
+| `curator_pt` | `chain-rpc`, `vault`, `http` | Plan a PT route and simulate it; never sends |
 
 Maker examples read `ACTA_KEYPAIR_PATH`, `ACTA_MAKER_OWNER` and `ACTA_WS_URL`.
 `taker_buy_quote` also reads `ACTA_OWNER_KEYPAIR_PATH`, `ACTA_CUSTODY_MINT`,
@@ -225,6 +225,7 @@ See [`examples/taker_buy_quote.rs`](examples/taker_buy_quote.rs).
 | Premium and fee split | `physical_premium`, `SpreadTerms::premium` |
 | Recover positions from chain | `ChainClient::maker_open_positions`, `maker_snapshot` |
 | Fund and confirm | `PositionSnapshot::fund_instructions`, `confirm_signatures` |
+| Settle a position yourself | `chain::settle_position_sequence`, `ChainClient::settle_position_sequence` |
 | Vault owner actions | `chain::vault::VaultManager`, `ChainClient::vault_manager` |
 | Vault operator session | `VaultOperatorClient`, `verify_and_sign_sponsored_tx`, `verify_and_sign_swap` |
 | Buy from a vault (wallet side) | `VaultManager::open_position_for_wallet_holder`, `verify_vault_open` with `VaultOpenIntent::Buy` |

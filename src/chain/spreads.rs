@@ -1,11 +1,9 @@
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 
 use super::ix::{
     SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
-    derive_associated_token_address as ata, maker_pda_with_program_id,
+    derive_associated_token_address as ata, maker_pda_with_program_id, position_pda,
 };
 use super::{ChainError, MarketInfo, PositionInfo, PositionStatus};
 use crate::orders::{
@@ -58,7 +56,7 @@ pub fn build_open_spread_ixs(args: &OpenSpreadIxArgs<'_>) -> Result<Vec<Instruct
     let maker = Pubkey::new_from_array(order.maker);
     let taker = Pubkey::new_from_array(order.taker);
     let maker_pda = maker_pda_with_program_id(&program_id, &maker).0;
-    let position = Pubkey::find_program_address(&[b"position", &order_id], &program_id).0;
+    let position = position_pda(&program_id, &order_id);
     let config =
         Pubkey::find_program_address(&[b"config", market.quote_mint.as_ref()], &program_id).0;
     let global = Pubkey::find_program_address(&[b"global_config"], &program_id).0;
@@ -91,7 +89,7 @@ pub fn build_open_spread_ixs(args: &OpenSpreadIxArgs<'_>) -> Result<Vec<Instruct
             AccountMeta::new(quote_ata(&position), false),
             AccountMeta::new_readonly(config, false),
             AccountMeta::new(quote_ata(&config), false),
-            AccountMeta::new_readonly(solana_sdk::sysvar::instructions::ID, false),
+            AccountMeta::new_readonly(solana_sdk_ids::sysvar::instructions::ID, false),
             AccountMeta::new_readonly(market.underlying_token_program_id, false),
             AccountMeta::new_readonly(market.quote_token_program_id, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
@@ -107,7 +105,7 @@ pub fn build_open_spread_ixs(args: &OpenSpreadIxArgs<'_>) -> Result<Vec<Instruct
     signature.extend_from_slice(&order_id);
     Ok(vec![
         Instruction {
-            program_id: solana_sdk::pubkey!("Ed25519SigVerify111111111111111111111111111"),
+            program_id: solana_pubkey::pubkey!("Ed25519SigVerify111111111111111111111111111"),
             accounts: vec![],
             data: signature,
         },
@@ -174,8 +172,7 @@ pub fn build_cash_settle_ix_with_destinations(
     if market_pda != position.market_pda {
         return Err(ChainError::Identity("position market"));
     }
-    let position_pda =
-        Pubkey::find_program_address(&[b"position", position.order_id.as_bytes()], &program_id).0;
+    let position_pda = position_pda(&program_id, position.order_id.as_bytes());
     let quote_ata = |owner: &Pubkey| ata(owner, &market.quote_mint, &market.quote_token_program_id);
     // One owner on both sides may receive both amounts into one account.
     let shared = position.writer == position.holder && destinations.writer == destinations.holder;

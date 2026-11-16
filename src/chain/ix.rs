@@ -1,7 +1,5 @@
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -268,6 +266,10 @@ pub fn maker_pda_with_program_id(program_id: &Pubkey, maker_owner: &Pubkey) -> (
     Pubkey::find_program_address(&[b"maker", maker_owner.as_ref()], program_id)
 }
 
+pub(crate) fn position_pda(program_id: &Pubkey, order_id: &[u8; 32]) -> Pubkey {
+    Pubkey::find_program_address(&[b"position", order_id], program_id).0
+}
+
 pub fn derive_associated_token_address(
     owner: &Pubkey,
     mint: &Pubkey,
@@ -310,11 +312,12 @@ pub(crate) fn create_associated_token_account_idempotent_ix(
 }
 
 pub(crate) const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+    solana_pubkey::pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 pub(crate) const SYSTEM_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("11111111111111111111111111111111");
-const RENT_SYSVAR_ID: Pubkey = solana_sdk::pubkey!("SysvarRent111111111111111111111111111111111");
+    solana_pubkey::pubkey!("11111111111111111111111111111111");
+const RENT_SYSVAR_ID: Pubkey =
+    solana_pubkey::pubkey!("SysvarRent111111111111111111111111111111111");
 pub(crate) const TOKEN_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    solana_pubkey::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 pub(crate) const TOKEN_2022_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+    solana_pubkey::pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");

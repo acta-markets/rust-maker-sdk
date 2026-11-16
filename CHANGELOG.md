@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.0 - 2026-11-16
+
+Breaking: vault code moved behind the `vault` feature.
+
+- `chain::vault` (`VaultManager`, served-transaction verification, curator routing) and
+  `ChainError::Vault` need `vault`; `chain` and `chain-rpc` alone are the maker surface.
+- `build_settle_position_ix`, `settle_position_sequence` and the matching `ChainClient` methods
+  move from `chain::vault` to `chain`, so a maker settles without `vault`.
+- `solana-sdk` is replaced by its component crates (`solana-pubkey`, `solana-instruction`,
+  `solana-message`, `solana-transaction`, `solana-keypair`, `solana-signature`, `solana-signer`,
+  `solana-hash`, `solana-account`, `solana-sdk-ids`). The types are the same ones `solana-sdk`
+  re-exports. `chain` drops from 205 to 106 crates, `vault` from 233 to 137.
+- `base64` is a `vault` dependency only.
+- `chain` without `chain-rpc` compiles again.
+
 ## 0.11.1 - 2026-11-16
 
 - `ChainClient::withdraw_position_funds` / `build_withdraw_position_funds_ixs` with

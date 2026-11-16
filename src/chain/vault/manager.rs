@@ -2,10 +2,8 @@ use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
 
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 
 use super::{PriceRoute, VaultAccount, VaultChainError, VaultRequestKind, pda};
 use crate::chain::ix::{

@@ -21,8 +21,8 @@ use acta_maker_sdk::{
     AtomicNonceGenerator, Nonce, Price, QuoteBuildError, QuoteExpiry, RfqBinding, Ungated,
     VaultOperatorClient, VaultOperatorConfig, WS_PROTOCOL_VERSION,
 };
-use solana_sdk::message::AddressLookupTableAccount;
-use solana_sdk::pubkey::Pubkey;
+use solana_message::AddressLookupTableAccount;
+use solana_pubkey::Pubkey;
 use std::sync::Arc;
 use uuid::Uuid;
 

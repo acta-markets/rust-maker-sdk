@@ -1,7 +1,9 @@
 #[cfg(feature = "chain-rpc")]
 use std::collections::BTreeMap;
 
-use solana_sdk::{account::Account, instruction::Instruction, pubkey::Pubkey};
+use solana_account::Account;
+use solana_instruction::Instruction;
+use solana_pubkey::Pubkey;
 
 use super::{ChainError, MarketInfo, PositionInfo, PositionStatus, ix};
 

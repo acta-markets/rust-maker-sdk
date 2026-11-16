@@ -15,8 +15,8 @@ pub enum VaultChainError {
     MissingPriceSection,
     #[error("account owner mismatch: expected {expected}, got {actual}")]
     Owner {
-        expected: solana_sdk::pubkey::Pubkey,
-        actual: solana_sdk::pubkey::Pubkey,
+        expected: solana_pubkey::Pubkey,
+        actual: solana_pubkey::Pubkey,
     },
     #[error("account data is {actual} bytes, expected at least {expected}")]
     AccountTooShort { expected: usize, actual: usize },

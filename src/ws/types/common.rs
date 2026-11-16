@@ -178,7 +178,9 @@ pub enum TradingSchedule {
     Continuous {},
     /// Pyth `attributes.schedule`: `TZ;Mon,..,Sun;MMDD/spec,...`, each spec `O` (open all day),
     /// `C` (closed) or `HHMM-HHMM` windows joined by `&`; holiday entries replace that date's weekday entry.
-    Pyth { spec: String },
+    Pyth {
+        spec: String,
+    },
 }
 
 /// Only underlyings have option sizing and a strike grid.

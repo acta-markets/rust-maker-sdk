@@ -4,11 +4,12 @@ use super::{
     router::{Intent, Plan, TxParts},
     venues::jupiter::{BuildResponse, Quote, Request},
 };
+use solana_account::Account;
+use solana_pubkey::Pubkey;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_sdk::{
-    account::Account, pubkey::Pubkey, signature::Signature, signer::Signer,
-    transaction::VersionedTransaction,
-};
+use solana_signature::Signature;
+use solana_signer::Signer;
+use solana_transaction::versioned::VersionedTransaction;
 use std::{collections::BTreeMap, time::Duration};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -230,7 +231,7 @@ pub async fn send_confirmed(
     })
 }
 
-const CLOCK: Pubkey = solana_sdk::pubkey!("SysvarC1ock11111111111111111111111111111111");
+const CLOCK: Pubkey = solana_pubkey::pubkey!("SysvarC1ock11111111111111111111111111111111");
 /// Discover once; every subsequent plan refresh fetches this dependency set in one batch.
 pub struct Config {
     pub manager: super::VaultManager,
@@ -239,7 +240,7 @@ pub struct Config {
     pub core: Pubkey,
     pub shard: u16,
     keys: Vec<Pubkey>,
-    ata_setup: Vec<solana_sdk::instruction::Instruction>,
+    ata_setup: Vec<solana_instruction::Instruction>,
 }
 impl Config {
     #[allow(clippy::too_many_arguments)]
@@ -357,11 +358,11 @@ fn account_data(
 fn table(
     snapshot: &BTreeMap<Pubkey, Account>,
     key: Pubkey,
-) -> Result<solana_sdk::message::AddressLookupTableAccount, Error> {
+) -> Result<solana_message::AddressLookupTableAccount, Error> {
     let data = account_data(
         snapshot,
         key,
-        solana_sdk::pubkey!("AddressLookupTab1e1111111111111111111111111"),
+        solana_pubkey::pubkey!("AddressLookupTab1e1111111111111111111111111"),
     )?;
     if data.len() < 56
         || data[..4] != 1u32.to_le_bytes()
@@ -376,7 +377,7 @@ fn table(
         .iter()
         .map(|b| Ok(Pubkey::new_from_array(*b)))
         .collect::<Result<_, Error>>()?;
-    Ok(solana_sdk::message::AddressLookupTableAccount { key, addresses })
+    Ok(solana_message::AddressLookupTableAccount { key, addresses })
 }
 
 pub struct Curator<'a, S> {
@@ -657,9 +658,9 @@ pub(super) fn sell_quote_amount(
 }
 
 fn missing_ata_setup(
-    setup: &[solana_sdk::instruction::Instruction],
+    setup: &[solana_instruction::Instruction],
     snapshot: &BTreeMap<Pubkey, Account>,
-) -> Vec<solana_sdk::instruction::Instruction> {
+) -> Vec<solana_instruction::Instruction> {
     setup
         .iter()
         .filter(|ix| !snapshot.contains_key(&ix.accounts[1].pubkey))

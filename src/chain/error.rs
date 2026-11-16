@@ -1,4 +1,4 @@
-use solana_sdk::pubkey::Pubkey;
+use solana_pubkey::Pubkey;
 use thiserror::Error;
 
 use super::ix::ChainIxError;
@@ -51,11 +51,12 @@ pub enum ChainError {
     NativeSolBudgetOverflow,
     #[error(transparent)]
     Ix(#[from] ChainIxError),
+    #[cfg(feature = "vault")]
     #[error(transparent)]
     Vault(#[from] super::vault::VaultChainError),
     #[error("{0} does not match the account it was derived for")]
     Identity(&'static str),
     #[cfg(feature = "chain-rpc")]
     #[error("transaction signing failed: {0}")]
-    Signing(#[from] solana_sdk::signer::SignerError),
+    Signing(#[from] solana_signer::SignerError),
 }

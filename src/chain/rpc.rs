@@ -1,9 +1,12 @@
+use solana_account::Account;
 use solana_commitment_config::CommitmentConfig;
+use solana_instruction::Instruction;
+use solana_message::AddressLookupTableAccount;
+use solana_pubkey::Pubkey;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_sdk::{
-    account::Account, instruction::Instruction, message::AddressLookupTableAccount, pubkey::Pubkey,
-    signature::Signature, signer::Signer, transaction::Transaction,
-};
+use solana_signature::Signature;
+use solana_signer::Signer;
+use solana_transaction::Transaction;
 
 use crate::chain::ChainError;
 use crate::chain::accounts::{GlobalConfigInfo, MarketInfo, PositionInfo};
@@ -18,7 +21,7 @@ use crate::chain::wsol::{
 };
 
 const ADDRESS_LOOKUP_TABLE_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("AddressLookupTab1e1111111111111111111111111");
+    solana_pubkey::pubkey!("AddressLookupTab1e1111111111111111111111111");
 const LOOKUP_TABLE_META_LEN: usize = 56;
 
 fn parse_lookup_table(
@@ -123,8 +126,8 @@ impl ChainClient {
         }
     }
 
-    /// Use Solana signature subscriptions for confirming conveniences instead of
-    /// the legacy RPC confirmation fallback. Batch submission remains submit-only.
+    /// Confirm sends through Solana signature subscriptions instead of RPC status polling.
+    /// Batch submission stays submit-only.
     #[cfg(feature = "ws-client")]
     pub fn with_confirmation_ws_url(mut self, url: impl Into<String>) -> Self {
         self.confirmation_ws_url = Some(url.into());
@@ -521,6 +524,7 @@ impl ChainClient {
             .collect()
     }
 
+    #[cfg(feature = "vault")]
     pub(crate) async fn fetch_optional_account(
         &self,
         pubkey: &Pubkey,
@@ -553,7 +557,7 @@ impl ChainClient {
         fee_payer: &(dyn Signer + Sync),
         extra_signers: &[&(dyn Signer + Sync)],
         options: SendOptions,
-        blockhash: solana_sdk::hash::Hash,
+        blockhash: solana_hash::Hash,
     ) -> Result<Signature, ChainError> {
         self.submit_instructions(
             instructions,
@@ -574,8 +578,8 @@ impl ChainClient {
         extra_signers: &[&(dyn Signer + Sync)],
         options: SendOptions,
         native_budget: Option<NativeSolBudget>,
-        blockhash: Option<solana_sdk::hash::Hash>,
-    ) -> Result<(Signature, solana_sdk::hash::Hash), ChainError> {
+        blockhash: Option<solana_hash::Hash>,
+    ) -> Result<(Signature, solana_hash::Hash), ChainError> {
         if let Some(limit) = options.compute_unit_limit {
             instructions.insert(
                 0,
@@ -614,7 +618,7 @@ impl ChainClient {
     async fn confirm_submitted(
         &self,
         signature: Signature,
-        blockhash: solana_sdk::hash::Hash,
+        blockhash: solana_hash::Hash,
     ) -> Result<Signature, ChainError> {
         #[cfg(feature = "ws-client")]
         if let Some(url) = &self.confirmation_ws_url {
@@ -641,7 +645,7 @@ impl ChainClient {
 fn sign_transaction(
     transaction: &mut Transaction,
     signers: &[&(dyn Signer + Sync)],
-    recent_blockhash: solana_sdk::hash::Hash,
+    recent_blockhash: solana_hash::Hash,
 ) -> Result<(), ChainError> {
     transaction.try_sign(signers, recent_blockhash)?;
     Ok(())

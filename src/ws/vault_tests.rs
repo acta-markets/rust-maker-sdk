@@ -19,7 +19,7 @@ use crate::types::{
     OptionTerms, TakerSide, VaultDelegatePermissions, VaultOperatorKind, VaultSwapDirection,
     VaultSwapMode,
 };
-use crate::wire::{decode_base58_64, encode_base58};
+use crate::wire::decode_base58_64;
 use crate::ws::managed::{ManagedWsEvent, ManagedWsState, SendAwaitError};
 use crate::ws::types::{
     ActiveRfqsData, AuthRequestData, ClientMessage, HelloData, MakerPositionCapInfo, MmSummaryData,
@@ -1131,8 +1131,8 @@ async fn failed_initial_reads_clear_the_authenticated_grant() {
 async fn checked_signing_verifies_served_intent_before_signing() {
     use std::str::FromStr;
 
-    use solana_sdk::message::AddressLookupTableAccount;
-    use solana_sdk::pubkey::Pubkey;
+    use solana_message::AddressLookupTableAccount;
+    use solana_pubkey::Pubkey;
 
     use crate::chain::vault::{
         ComputeBudgetBounds, PairPriceRoutes, PriceRoute, VaultIntentError, VaultManager,

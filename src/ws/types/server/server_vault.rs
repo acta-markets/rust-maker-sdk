@@ -1,11 +1,11 @@
 use crate::Address32;
 use crate::types::ids::OrderId;
+use crate::types::unix_time::UnixSeconds;
 use crate::types::{VaultDelegatePermissions, VaultOperatorKind, VaultStagingStep, VaultSwapMode};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use crate::types::unix_time::UnixSeconds;
 use serde_with::serde_as;
 use std::time::SystemTime;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultAuthSuccessData {

@@ -1,10 +1,10 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use sha2::{Digest, Sha256};
-use solana_sdk::hash::Hash;
-use solana_sdk::instruction::Instruction;
-use solana_sdk::message::{VersionedMessage, v0};
-use solana_sdk::pubkey::Pubkey;
+use solana_hash::Hash;
+use solana_instruction::Instruction;
+use solana_message::{VersionedMessage, v0};
+use solana_pubkey::Pubkey;
 use std::collections::HashSet;
 
 use super::served::create_ata_idempotent;
@@ -35,7 +35,7 @@ fn lookup_table_for_open(
     participant: Pubkey,
     open: &VaultOpenPosition,
     instructions: &[Instruction],
-) -> solana_sdk::message::AddressLookupTableAccount {
+) -> solana_message::AddressLookupTableAccount {
     let mut static_keys = HashSet::from([
         keeper,
         participant,
@@ -53,7 +53,7 @@ fn lookup_table_for_open(
         );
     }
     let mut seen = HashSet::new();
-    solana_sdk::message::AddressLookupTableAccount {
+    solana_message::AddressLookupTableAccount {
         key: key(90),
         addresses: instructions
             .iter()
@@ -228,7 +228,7 @@ pub(crate) fn served_sale(
     quote_signer: &impl SignerLike,
 ) -> Vec<Instruction> {
     let budget = |data: Vec<u8>| Instruction {
-        program_id: solana_sdk::pubkey!("ComputeBudget111111111111111111111111111111"),
+        program_id: solana_pubkey::pubkey!("ComputeBudget111111111111111111111111111111"),
         accounts: Vec::new(),
         data,
     };
@@ -249,7 +249,7 @@ pub(crate) fn served_sale(
             open.addresses.collateral_token_program,
         ),
         Instruction {
-            program_id: solana_sdk::pubkey!("Ed25519SigVerify111111111111111111111111111"),
+            program_id: solana_pubkey::pubkey!("Ed25519SigVerify111111111111111111111111111"),
             accounts: Vec::new(),
             data: ed25519,
         },
@@ -278,7 +278,7 @@ pub(crate) fn served_fill(
 pub(crate) fn compile_with_tables(
     keeper: Pubkey,
     ixs: &[Instruction],
-    tables: &[solana_sdk::message::AddressLookupTableAccount],
+    tables: &[solana_message::AddressLookupTableAccount],
 ) -> String {
     let message = VersionedMessage::V0(
         v0::Message::try_compile(&keeper, ixs, tables, Hash::new_from_array([9; 32])).unwrap(),
@@ -361,7 +361,7 @@ fn verify_served_with_tables(
     keeper: Pubkey,
     order_id: [u8; 32],
     ixs: &[Instruction],
-    tables: &[solana_sdk::message::AddressLookupTableAccount],
+    tables: &[solana_message::AddressLookupTableAccount],
 ) -> Result<(), VaultIntentError> {
     let to_sign = SponsoredTxToSignData {
         order_id: OrderId::new(order_id),
@@ -586,7 +586,7 @@ fn served_vault_open_requires_the_keeper_participant_and_dynamic_accounts_to_be_
     oversized.insert(
         0,
         Instruction {
-            program_id: solana_sdk::pubkey!("ComputeBudget111111111111111111111111111111"),
+            program_id: solana_pubkey::pubkey!("ComputeBudget111111111111111111111111111111"),
             accounts: Vec::new(),
             data: vec![0; 1_200],
         },

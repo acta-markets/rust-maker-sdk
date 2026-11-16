@@ -3,7 +3,9 @@ use super::venues::{SwapVenues, exponent::*, jupiter};
 use super::*;
 use crate::chain::ix::TOKEN_PROGRAM_ID;
 use crate::types::{VaultLeg, VaultStagingStep};
-use solana_sdk::{instruction::AccountMeta, message::AddressLookupTableAccount, pubkey::Pubkey};
+use solana_instruction::AccountMeta;
+use solana_message::AddressLookupTableAccount;
+use solana_pubkey::Pubkey;
 fn key(n: u8) -> Pubkey {
     Pubkey::new_from_array([n; 32])
 }

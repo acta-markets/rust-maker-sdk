@@ -1,4 +1,5 @@
-use solana_sdk::{account::Account, pubkey::Pubkey};
+use solana_account::Account;
+use solana_pubkey::Pubkey;
 
 use super::ChainError;
 use crate::types::{Decimals, OptionTerms, OrderId, Quantity, Strike, TakerSide};

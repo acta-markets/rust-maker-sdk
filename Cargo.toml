@@ -1,6 +1,6 @@
 [package]
 name = "acta-maker-sdk"
-version = "0.11.1"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -39,7 +39,7 @@ serde_json = "1"
 serde_with = { version = "3.16.1", features = ["macros"] }
 sha2 = "0.10"
 solana-pubkey = { version = "3.0.0", features = ["curve25519"] }
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 thiserror = "2.0"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"], optional = true }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"], optional = true }
@@ -52,7 +52,15 @@ solana-rpc-client-api = { version = "3.1.14", optional = true }
 async-trait = { version = "0.1", optional = true }
 # Compression for the RPC client's own reqwest 0.12.
 reqwest-rpc = { package = "reqwest", version = "0.12", optional = true, default-features = false, features = ["gzip", "deflate", "brotli"] }
-solana-sdk = { version = "3.0.0", optional = true }
+solana-account = { version = "3", optional = true }
+solana-hash = { version = "3", optional = true }
+solana-instruction = { version = "3", optional = true }
+solana-keypair = { version = "3", optional = true }
+solana-message = { version = "3", optional = true }
+solana-sdk-ids = { version = "3", optional = true }
+solana-signature = { version = "3", optional = true }
+solana-signer = { version = "3", optional = true }
+solana-transaction = { version = "3", optional = true, features = ["bincode"] }
 solana-commitment-config = { version = "3.0.0", optional = true }
 solana-compute-budget-interface = { version = "3.0.0", optional = true }
 
@@ -60,8 +68,18 @@ solana-compute-budget-interface = { version = "3.0.0", optional = true }
 default = []
 ws-client = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite"]
 test-helpers = ["ws-client"]
-vault = ["ws-client", "chain"]
-chain = ["dep:solana-sdk", "dep:base64"]
+vault = ["ws-client", "chain", "dep:base64"]
+chain = [
+  "dep:solana-account",
+  "dep:solana-hash",
+  "dep:solana-instruction",
+  "dep:solana-keypair",
+  "dep:solana-message",
+  "dep:solana-sdk-ids",
+  "dep:solana-signature",
+  "dep:solana-signer",
+  "dep:solana-transaction",
+]
 chain-rpc = [
   "chain",
   "dep:solana-rpc-client",
@@ -116,13 +134,15 @@ required-features = ["vault", "http"]
 
 [[example]]
 name = "vault_capital"
-required-features = ["chain-rpc"]
+required-features = ["chain-rpc", "vault"]
 
 [[example]]
 name = "curator_pt"
-required-features = ["chain-rpc", "http"]
+required-features = ["chain-rpc", "vault", "http"]
 
 [dev-dependencies]
+base64 = "0.22"
+solana-transaction = { version = "3", features = ["verify"] }
 async-trait = "0.1"
 proptest = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -263,11 +263,12 @@ fn chain_layout_events_open_and_settle() {
         chain::{spreads::*, *},
         types::*,
     };
-    use solana_sdk::{account::Account, pubkey::Pubkey};
+    use solana_account::Account;
+    use solana_pubkey::Pubkey;
     let program = Pubkey::new_from_array([4; 32]);
     let maker = Pubkey::new_from_array([2; 32]);
     let taker = Pubkey::new_from_array([3; 32]);
-    let token = solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    let token = solana_pubkey::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
     let mut market = MarketInfo {
         expiry_ts: 200,
         is_put: true,

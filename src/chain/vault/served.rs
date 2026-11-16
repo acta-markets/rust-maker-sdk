@@ -2,11 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    message::AddressLookupTableAccount,
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_message::AddressLookupTableAccount;
+use solana_pubkey::Pubkey;
 
 use super::manager::VaultManager;
 use super::price_route::PriceRoute;
@@ -24,9 +22,9 @@ use crate::types::{VaultLeg, VaultStagingStep, VaultSwapDirection, VaultSwapMode
 use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
 
 const COMPUTE_BUDGET_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("ComputeBudget111111111111111111111111111111");
+    solana_pubkey::pubkey!("ComputeBudget111111111111111111111111111111");
 const ED25519_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("Ed25519SigVerify111111111111111111111111111");
+    solana_pubkey::pubkey!("Ed25519SigVerify111111111111111111111111111");
 const ED25519_HEADER: [u8; 16] = [
     1, 0, 48, 0, 255, 255, 16, 0, 255, 255, 112, 0, 32, 0, 255, 255,
 ];
@@ -40,8 +38,8 @@ const BPS: u128 = 10_000;
 const STAGING_GENERATION_OFFSET: usize = 27;
 /// SPL and Sanctum multi-validator stake-pool programs.
 pub(super) const STAKE_POOL_PROGRAM_IDS: [Pubkey; 2] = [
-    solana_sdk::pubkey!("SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy"),
-    solana_sdk::pubkey!("SPMBzsVUuoHA4Jm6KunbsotaahvVikZs1JyTW6iJvbn"),
+    solana_pubkey::pubkey!("SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy"),
+    solana_pubkey::pubkey!("SPMBzsVUuoHA4Jm6KunbsotaahvVikZs1JyTW6iJvbn"),
 ];
 const UPDATE_STAKE_POOL_BALANCE: u8 = 7;
 

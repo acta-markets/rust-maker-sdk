@@ -1,10 +1,8 @@
 //! Golden bytes recorded from the contract's `acta-contract-sdk`.
 
 use sha2::{Digest, Sha256};
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 
 use super::{
     DepositPayout, MAX_VAULT_SWAP_PATH_ACCOUNTS, VaultAccount, VaultChainError,
@@ -1012,7 +1010,7 @@ fn request_decodes_golden_fields() {
 fn capital_tx_users_fit_the_legacy_packet() {
     use super::VAULT_CAPITAL_BATCH_USERS;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
-    use solana_sdk::transaction::Transaction;
+    use solana_transaction::Transaction;
 
     const PACKET_DATA_SIZE: usize = 1232;
     let m = manager(TOKEN_2022_PROGRAM_ID);

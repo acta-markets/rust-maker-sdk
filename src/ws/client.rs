@@ -53,11 +53,9 @@ macro_rules! ws_method_request_id {
 
 /// Low-level WebSocket transport.
 ///
-/// [`Self::send_hello`] deliberately retains no handshake state. Callers using
-/// this raw client must wait for `Welcome` and validate it with
-/// Check the Welcome protocol version before sending authentication or
-/// exposing the frame to application code. [`crate::ws::managed`] and the
-/// vault fleet enforce that sequence themselves.
+/// [`Self::send_hello`] retains no handshake state: wait for `Welcome` and check its
+/// protocol version before authenticating or passing frames to application code.
+/// [`crate::ws::managed`] and the vault fleet enforce that sequence themselves.
 pub struct WsClient {
     stream: Socket,
     server_close: Arc<OnceLock<ServerClose>>,

@@ -1,18 +1,15 @@
-use super::pda;
 use crate::chain::ix::{
     ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
-    derive_associated_token_address as ata,
+    derive_associated_token_address as ata, position_pda,
 };
 use crate::{
     PositionType,
     chain::{ChainError, MarketInfo, PositionInfo, PositionStatus},
 };
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 
-/// Settles a position the maker side of: on a sell the maker holds (a vault may write); on a
+/// Settles a position from its maker side: on a sell the maker holds (a vault may write); on a
 /// buy the maker or a vault writes and a wallet holds. `maker_owner` signs and pays rent.
 pub fn build_settle_position_ix(
     program_id: Pubkey,
@@ -68,7 +65,7 @@ pub fn build_settle_position_ix(
         writer,
         holder,
     } = destinations(position, market);
-    let position_pda = pda::position(&program_id, position.order_id.as_bytes()).0;
+    let position_pda = position_pda(&program_id, position.order_id.as_bytes());
     let mut accounts = vec![
         AccountMeta::new(maker_owner, true),
         AccountMeta::new(position_pda, false),
@@ -123,7 +120,7 @@ pub fn settle_position_sequence(
     // Each wallet that receives tokens needs its ATA; a vault side pays into its own legs.
     let funded = position.status == PositionStatus::Funded;
     if position.flags & 1 == 0 && (funded || position.side.is_taker_buy()) {
-        instructions.push(super::lifecycle::create_destination_ata(
+        instructions.push(create_destination_ata(
             maker_owner,
             position.writer,
             writer.0,
@@ -131,7 +128,7 @@ pub fn settle_position_sequence(
         ));
     }
     if funded {
-        instructions.push(super::lifecycle::create_destination_ata(
+        instructions.push(create_destination_ata(
             maker_owner,
             position.holder,
             holder.0,
@@ -219,13 +216,33 @@ impl crate::chain::ChainClient {
 
     async fn settlement_snapshots(
         &self,
-        position_pda: Pubkey,
+        address: Pubkey,
     ) -> Result<(PositionInfo, MarketInfo), ChainError> {
-        let position = self.fetch_position_info(&position_pda).await?;
-        if pda::position(&self.program_id(), position.order_id.as_bytes()).0 != position_pda {
+        let position = self.fetch_position_info(&address).await?;
+        if position_pda(&self.program_id(), position.order_id.as_bytes()) != address {
             return Err(ChainError::Identity("position PDA"));
         }
         let market = self.fetch_market_info(&position.market_pda).await?;
         Ok((position, market))
+    }
+}
+
+pub(crate) fn create_destination_ata(
+    payer: Pubkey,
+    owner: Pubkey,
+    mint: Pubkey,
+    program: Pubkey,
+) -> Instruction {
+    Instruction {
+        program_id: ASSOCIATED_TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(payer, true),
+            AccountMeta::new(ata(&owner, &mint, &program), false),
+            AccountMeta::new_readonly(owner, false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(program, false),
+        ],
+        data: vec![1],
     }
 }

@@ -471,10 +471,6 @@ impl ChainTerms {
 }
 
 /// Taker direction committed in the signed order preimage.
-///
-/// The venue currently admits only [`Self::Sell`]. `Buy` remains representable
-/// so the wire and preimage layout do not need another migration when economics
-/// for taker buys are added.
 #[derive(
     Debug,
     Clone,

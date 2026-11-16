@@ -3,8 +3,10 @@ use acta_maker_sdk::chain::vault::{
     curator::{Config, Curator, Error, JupiterClient},
     router::Intent,
 };
+use solana_keypair::read_keypair_file;
+use solana_pubkey::Pubkey;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_sdk::{pubkey::Pubkey, signature::read_keypair_file, signer::Signer};
+use solana_signer::Signer;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -19,9 +21,9 @@ async fn main() -> Result<(), Error> {
         program,
         vault,
         signer.pubkey(),
-        solana_sdk::pubkey!("8JCVSxVrM1f5stBwNWko2D5Yt9p4wJQsvPVWFZBkzhmo"),
-        solana_sdk::pubkey!("9QReDA3ndt8FBQVJHGzM8h6NKojqyh2Ej8cqFn9dY6Hn"),
-        solana_sdk::pubkey!("Ciz4yqREYbMH4dtQvB3Rc2mSVEGMs8jFfE97qj6nXAPu"),
+        solana_pubkey::pubkey!("8JCVSxVrM1f5stBwNWko2D5Yt9p4wJQsvPVWFZBkzhmo"),
+        solana_pubkey::pubkey!("9QReDA3ndt8FBQVJHGzM8h6NKojqyh2Ej8cqFn9dY6Hn"),
+        solana_pubkey::pubkey!("Ciz4yqREYbMH4dtQvB3Rc2mSVEGMs8jFfE97qj6nXAPu"),
         0,
     )
     .await?;

@@ -6,7 +6,7 @@ use acta_maker_sdk::chain::ix::{
     build_maker_withdraw_ixs, build_update_quote_signing_ixs, build_withdraw_position_funds_ixs,
     maker_pda_with_program_id,
 };
-use solana_sdk::pubkey::Pubkey;
+use solana_pubkey::Pubkey;
 
 fn test_pubkey(seed: u8) -> Pubkey {
     Pubkey::new_from_array([seed; 32])
@@ -178,7 +178,7 @@ fn withdraw_position_funds_mirrors_the_deposit_accounts() {
     assert_eq!(withdraw[1].accounts, deposit[2].accounts);
 }
 
-fn digest(ixs: &[solana_sdk::instruction::Instruction]) -> String {
+fn digest(ixs: &[solana_instruction::Instruction]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     for ix in ixs {

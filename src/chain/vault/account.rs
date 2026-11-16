@@ -1,4 +1,4 @@
-use solana_sdk::pubkey::Pubkey;
+use solana_pubkey::Pubkey;
 use strum::EnumString;
 
 use super::VaultChainError;
@@ -117,7 +117,7 @@ impl VaultAccount {
 
     /// [`Self::parse`] for an account that must be owned by `program_id`.
     pub fn from_account(
-        account: &solana_sdk::account::Account,
+        account: &solana_account::Account,
         program_id: &Pubkey,
     ) -> Result<Self, VaultChainError> {
         if account.owner != *program_id {
@@ -221,7 +221,7 @@ impl VaultRequest {
 
     /// [`Self::parse`] for an account that must be owned by `program_id` and sized exactly.
     pub fn from_account(
-        account: &solana_sdk::account::Account,
+        account: &solana_account::Account,
         program_id: &Pubkey,
         kind: VaultRequestKind,
     ) -> Result<Self, VaultChainError> {

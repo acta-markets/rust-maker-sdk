@@ -1,9 +1,7 @@
 use super::{PriceRoute, VaultAccount, VaultChainError, VaultGovernanceUpdateKind, VaultManager};
 use crate::chain::{ChainClient, ChainError};
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
 
 impl ChainClient {
     pub async fn vault_manager(

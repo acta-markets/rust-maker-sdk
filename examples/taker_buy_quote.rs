@@ -17,8 +17,9 @@ use acta_maker_sdk::{
     WS_PROTOCOL_VERSION,
 };
 use solana_commitment_config::CommitmentConfig;
-use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::{Keypair, Signer, read_keypair_file};
+use solana_keypair::{Keypair, read_keypair_file};
+use solana_pubkey::Pubkey;
+use solana_signer::Signer;
 use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;

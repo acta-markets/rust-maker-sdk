@@ -4,10 +4,12 @@ use super::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
-use solana_sdk::{instruction::AccountMeta, message::AddressLookupTableAccount, pubkey::Pubkey};
+use solana_instruction::AccountMeta;
+use solana_message::AddressLookupTableAccount;
+use solana_pubkey::Pubkey;
 use std::collections::BTreeMap;
 
-pub const PROGRAM: Pubkey = solana_sdk::pubkey!("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
+pub const PROGRAM: Pubkey = solana_pubkey::pubkey!("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
 pub const EXACT_IN_SELECTORS: [[u8; 8]; 4] = [
     [0xe5, 0x17, 0xcb, 0x97, 0x7a, 0xe3, 0xad, 0x2a],
     [0xc1, 0x20, 0x9b, 0x33, 0x41, 0xd6, 0x9c, 0x81],

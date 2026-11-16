@@ -11,8 +11,8 @@ use super::{
 };
 use crate::ws::client::PreparedClientMessage;
 use crate::ws::error::WsClientError;
-use crate::ws::managed::SendAwaitError;
 use crate::ws::managed::MakerWsEndpoint;
+use crate::ws::managed::SendAwaitError;
 use crate::ws::types::{CancelAllQuotesMessage, ClientMessage, QueryFilter, ServerMessage};
 
 pub(super) async fn handle_ws_read(
@@ -52,7 +52,10 @@ pub(super) async fn handle_ws_read(
             inbound.publish_unreadable();
             send_event(events_tx, ManagedWsEvent::UnreadableFrame(*frame));
             // The unread frame may be a fill or a cancel this session never saw.
-            if matches!(config.endpoint, MakerWsEndpoint::Quote | MakerWsEndpoint::Vault) {
+            if matches!(
+                config.endpoint,
+                MakerWsEndpoint::Quote | MakerWsEndpoint::Vault
+            ) {
                 withdraw_quotes(lanes, config.write_timeout).await;
             }
             return Some((AuthenticatedSessionEnd::Disconnected, false));

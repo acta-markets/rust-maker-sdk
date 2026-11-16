@@ -1,7 +1,9 @@
+use crate::wire::encode_base58;
 use std::str::FromStr;
 
-use solana_sdk::account::Account;
-use solana_sdk::{message::AddressLookupTableAccount, pubkey::Pubkey};
+use solana_account::Account;
+use solana_message::AddressLookupTableAccount;
+use solana_pubkey::Pubkey;
 
 use super::*;
 use crate::chain::vault::spread_tests::{compile_with_tables, served_sale};

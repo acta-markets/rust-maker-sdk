@@ -73,7 +73,7 @@ async fn quote_fit_does_not_retry_semantic_errors() {
 #[tokio::test]
 async fn main_slot_rolls_back_only_after_maturity() {
     let slot = VaultStagedSlot {
-        mint: solana_sdk::pubkey::Pubkey::new_from_array([15; 32]),
+        mint: solana_pubkey::Pubkey::new_from_array([15; 32]),
         from_leg: VaultLeg::Main,
         amount: 1000,
         staged_at: 100,
@@ -149,7 +149,7 @@ fn plans() -> VecDeque<Plan> {
         })
         .unwrap();
     let slot = VaultStagedSlot {
-        mint: solana_sdk::pubkey::Pubkey::new_from_array([15; 32]),
+        mint: solana_pubkey::Pubkey::new_from_array([15; 32]),
         from_leg: VaultLeg::Main,
         amount: 1000,
         staged_at: 100,
@@ -204,7 +204,7 @@ async fn uncertain_stage_stops_and_restart_only_unstages() {
 #[tokio::test]
 async fn sell_slot_recovery_ignores_new_buy_intent() {
     let slot = VaultStagedSlot {
-        mint: solana_sdk::pubkey::Pubkey::new_from_array([15; 32]),
+        mint: solana_pubkey::Pubkey::new_from_array([15; 32]),
         from_leg: VaultLeg::Second,
         amount: 1000,
         staged_at: 100,
@@ -251,7 +251,7 @@ async fn failed_refresh_retains_confirmed_stage_signature() {
 #[test]
 fn sell_quote_uses_conservative_base_input() {
     let price = crate::chain::vault::router::OraclePrice {
-        mint: solana_sdk::pubkey::Pubkey::new_unique(),
+        mint: solana_pubkey::Pubkey::new_unique(),
         usd: 1.0,
         decimals: 9,
     };
@@ -263,7 +263,7 @@ fn creates_only_missing_atas() {
     let setup = crate::chain::vault::served::create_ata_idempotent(
         m.args.actor,
         m.addresses.vault,
-        solana_sdk::pubkey::Pubkey::new_unique(),
+        solana_pubkey::Pubkey::new_unique(),
         crate::chain::ix::TOKEN_PROGRAM_ID,
     );
     let mut snapshot = BTreeMap::new();
@@ -277,9 +277,9 @@ fn creates_only_missing_atas() {
 
 #[test]
 fn quote_tables_must_match_rpc_contents() {
-    use solana_sdk::message::AddressLookupTableAccount;
-    let key = solana_sdk::pubkey::Pubkey::new_unique();
-    let address = solana_sdk::pubkey::Pubkey::new_unique();
+    use solana_message::AddressLookupTableAccount;
+    let key = solana_pubkey::Pubkey::new_unique();
+    let address = solana_pubkey::Pubkey::new_unique();
     let mut data = vec![0; 56];
     data[..4].copy_from_slice(&1u32.to_le_bytes());
     data[4..12].copy_from_slice(&u64::MAX.to_le_bytes());
@@ -288,7 +288,7 @@ fn quote_tables_must_match_rpc_contents() {
         key,
         Account {
             data,
-            owner: solana_sdk::pubkey!("AddressLookupTab1e1111111111111111111111111"),
+            owner: solana_pubkey::pubkey!("AddressLookupTab1e1111111111111111111111111"),
             ..Account::default()
         },
     )]);
@@ -299,7 +299,7 @@ fn quote_tables_must_match_rpc_contents() {
     }];
     verify_quote_tables(&mut q, &snapshot).unwrap();
     assert_eq!(q.tables[0].addresses, [address]);
-    q.tables[0].addresses[0] = solana_sdk::pubkey::Pubkey::new_unique();
+    q.tables[0].addresses[0] = solana_pubkey::Pubkey::new_unique();
     assert_eq!(
         verify_quote_tables(&mut q, &snapshot)
             .unwrap_err()

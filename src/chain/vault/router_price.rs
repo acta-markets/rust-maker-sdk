@@ -1,6 +1,7 @@
 use super::venues::invalid;
 use super::{PriceBrick, PriceRoute, VaultChainError, pyth_price_feed_account};
-use solana_sdk::{account::Account, pubkey::Pubkey};
+use solana_account::Account;
+use solana_pubkey::Pubkey;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
