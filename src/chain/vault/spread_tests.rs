@@ -345,14 +345,7 @@ fn verify_served(
     order_id: [u8; 32],
     ixs: &[Instruction],
 ) -> Result<(), VaultIntentError> {
-    let participant = match intent {
-        VaultOpenIntent::Sale { writer, .. } | VaultOpenIntent::BetweenVaults { writer, .. } => {
-            writer.args.actor
-        }
-        VaultOpenIntent::Fill { taker, .. } => *taker,
-        VaultOpenIntent::Buy { holder, .. } => *holder,
-    };
-    let table = lookup_table_for_open(keeper, participant, open, ixs);
+    let table = lookup_table_for_open(keeper, intent.participant(), open, ixs);
     verify_served_with_tables(intent, keeper, order_id, ixs, std::slice::from_ref(&table))
 }
 
@@ -406,7 +399,7 @@ fn served_vault_spread_sales_verify_under_the_shared_order_layout() {
             writer: &writer,
             maker_owner,
             maker_quote_signer: Pubkey::new_from_array(maker_signer.pubkey_bytes()),
-            terms: VaultSaleTerms::Spread(terms),
+            terms: VaultOpenTerms::Spread(terms),
         };
         let served = served_sale(keeper, &open, &maker_signer);
         verify_served(&sale, keeper, &open, open.order_id, &served).unwrap();
@@ -428,7 +421,7 @@ fn served_vault_spread_sales_verify_under_the_shared_order_layout() {
             keeper,
             writer: &writer,
             holder: &holder,
-            terms: VaultSaleTerms::Spread(terms),
+            terms: VaultOpenTerms::Spread(terms),
         };
         let served = served_sale(keeper, &between, &BytesSigner::from_secret([22; 32]));
         verify_served(&intent, keeper, &between, between.order_id, &served).unwrap();
@@ -466,7 +459,7 @@ fn served_vault_spread_fills_verify_opcode_79_with_v0_alt_and_reject_tampering()
         keeper,
         holder: &holder,
         taker,
-        terms: VaultSaleTerms::Spread(terms),
+        terms: VaultOpenTerms::Spread(terms),
     };
     let served = served_fill(
         keeper,
@@ -520,7 +513,7 @@ fn served_vault_open_requires_the_keeper_participant_and_dynamic_accounts_to_be_
         writer: &writer,
         maker_owner,
         maker_quote_signer: Pubkey::new_from_array(maker_signer.pubkey_bytes()),
-        terms: VaultSaleTerms::Spread(terms),
+        terms: VaultOpenTerms::Spread(terms),
     };
     let served = served_sale(keeper, &open, &maker_signer);
 
@@ -617,7 +610,7 @@ fn served_vault_spread_sales_reject_tampered_strikes_collateral_and_accounts() {
             writer: &writer,
             maker_owner,
             maker_quote_signer: Pubkey::new_from_array(maker_signer.pubkey_bytes()),
-            terms: VaultSaleTerms::Spread(terms),
+            terms: VaultOpenTerms::Spread(terms),
         };
         let honest = sale(terms);
         let tampered = |tamper: &dyn Fn(&mut Vec<Instruction>)| {
@@ -703,8 +696,68 @@ fn served_vault_spread_sales_reject_tampered_strikes_collateral_and_accounts() {
                 &served
             ),
             Err(VaultIntentError::Intent(VaultChainError::InvalidInput(
-                "taker_buy_unsupported"
+                "vault_buys_through_open_from"
             )))
         );
     }
+}
+
+#[test]
+fn served_vault_spread_buys_use_opcodes_83_and_85_and_verify() {
+    let maker_signer = BytesSigner::from_secret([21; 32]);
+    let writer_delegate = BytesSigner::from_secret([22; 32]);
+    let writer = signing_manager(7, &writer_delegate);
+    let buyer = manager(8);
+    let maker_owner = key(9);
+    let keeper = keeper();
+    let (sell, _) = vector_terms("spread_call");
+    let terms = VaultSpreadTerms {
+        side: TakerSide::Buy,
+        ..sell
+    };
+    assert!(
+        buyer
+            .open_spread_from_maker(keeper, maker_owner, &sell)
+            .is_err()
+    );
+
+    let from_maker = buyer
+        .open_spread_from_maker(keeper, maker_owner, &terms)
+        .unwrap();
+    assert_eq!(from_maker.instruction.data[0], 83);
+    assert_eq!(from_maker.instruction.accounts[1].pubkey, buyer.args.actor);
+    let purchase = VaultOpenIntent::Purchase {
+        keeper,
+        holder: &buyer,
+        maker_owner,
+        maker_quote_signer: Pubkey::new_from_array(maker_signer.pubkey_bytes()),
+        terms: VaultOpenTerms::Spread(terms),
+    };
+    let served = served_sale(keeper, &from_maker, &maker_signer);
+    verify_served(&purchase, keeper, &from_maker, from_maker.order_id, &served).unwrap();
+
+    let from_vault = buyer
+        .open_spread_from_vault(keeper, &writer, &terms)
+        .unwrap();
+    assert_eq!(from_vault.instruction.data[0], 85);
+    assert_eq!(from_vault.instruction.accounts[1].pubkey, buyer.args.actor);
+    assert_eq!(
+        from_vault.instruction.accounts[2].pubkey,
+        writer.addresses.vault
+    );
+    let intent = VaultOpenIntent::PurchaseFromVault {
+        keeper,
+        writer: &writer,
+        holder: &buyer,
+        terms: VaultOpenTerms::Spread(terms),
+    };
+    let served = served_sale(keeper, &from_vault, &writer_delegate);
+    verify_served(&intent, keeper, &from_vault, from_vault.order_id, &served).unwrap();
+    let swapped = VaultOpenIntent::PurchaseFromVault {
+        keeper,
+        writer: &buyer,
+        holder: &writer,
+        terms: VaultOpenTerms::Spread(terms),
+    };
+    assert!(verify_served(&swapped, keeper, &from_vault, from_vault.order_id, &served).is_err());
 }

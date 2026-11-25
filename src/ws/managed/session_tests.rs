@@ -183,8 +183,7 @@ async fn canonical_vault_auth_signs_original_operator_challenge() {
 use crate::ws::types::{
     ActiveRfqsData, AuthRequestData, AuthSuccessData, ClientMessage, HelloData,
     MakerPositionCapInfo, MakerQuoteScope, MmSummaryData, MyQuotesMessage, ServerMessage,
-    SubscribeAckData, SubscribeData, SubscriptionsMessage, UnsubscribeAckData, WelcomeData,
-    WsChannel, WsErrorCode,
+    SubscribeData, SubscriptionsMessage, WelcomeData, WsChannel, WsErrorCode,
 };
 
 fn maker_auth() -> AuthOutcome {
@@ -257,9 +256,11 @@ async fn readiness_recovers_initial_target_before_authoritative_reads() {
         assert_eq!(subscribe.quote_mints, Vec::new());
         send_server(
             &mut socket,
-            ServerMessage::SubscribeAck(SubscribeAckData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: subscribe.request_id,
-                subscribed: subscribe.channels,
+                result: crate::ws::types::ReplyResult::Subscribed {
+                    channels: subscribe.channels,
+                },
             }),
         )
         .await;
@@ -353,9 +354,11 @@ async fn readiness_rejects_an_empty_live_quote_page_with_more_rows() {
         assert_eq!(unsubscribe.channels, vec![WsChannel::Trades]);
         send_server(
             &mut socket,
-            ServerMessage::UnsubscribeAck(UnsubscribeAckData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: unsubscribe.request_id,
-                unsubscribed: unsubscribe.channels,
+                result: crate::ws::types::ReplyResult::Unsubscribed {
+                    channels: unsubscribe.channels,
+                },
             }),
         )
         .await;
@@ -367,9 +370,11 @@ async fn readiness_rejects_an_empty_live_quote_page_with_more_rows() {
         assert_eq!(subscribe.quote_mints, Vec::new());
         send_server(
             &mut socket,
-            ServerMessage::SubscribeAck(SubscribeAckData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: subscribe.request_id,
-                subscribed: Vec::new(),
+                result: crate::ws::types::ReplyResult::Subscribed {
+                    channels: Vec::new(),
+                },
             }),
         )
         .await;
@@ -773,9 +778,11 @@ async fn complete_quote_readiness(
     };
     send_server(
         socket,
-        ServerMessage::SubscribeAck(SubscribeAckData {
+        ServerMessage::Reply(crate::ws::types::ReplyMessage {
             request_id: subscribe.request_id,
-            subscribed: subscribe.channels,
+            result: crate::ws::types::ReplyResult::Subscribed {
+                channels: subscribe.channels,
+            },
         }),
     )
     .await;
@@ -809,7 +816,7 @@ async fn complete_quote_readiness(
 #[tokio::test]
 async fn pending_subscription_does_not_block_cancellation() {
     use crate::ws::managed::{ManagedWsError, SendAwaitError, spawn_managed_ws};
-    use crate::ws::types::{AddMintsData, CancelAllQuotesAckMessage, CancelAllQuotesMessage};
+    use crate::ws::types::{AddMintsData, CancelAllQuotesMessage};
     use std::time::Duration;
 
     async fn receive_command(
@@ -849,11 +856,7 @@ async fn pending_subscription_does_not_block_cancellation() {
         };
         send_server(
             &mut socket,
-            ServerMessage::CancelAllQuotesAck(CancelAllQuotesAckMessage {
-                request_id: cancel.request_id,
-                cancelled_count: 0,
-                cancelled_order_ids: Vec::new(),
-            }),
+            ServerMessage::Reply(crate::ws::types::ReplyMessage::accepted(cancel.request_id)),
         )
         .await;
         while socket.next().await.is_some() {}
@@ -861,22 +864,37 @@ async fn pending_subscription_does_not_block_cancellation() {
     let handle = spawn_managed_ws(config(format!("ws://{address}"))).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         handle.wait_until_ready().await.unwrap();
-        let change = || ClientMessage::AddMints(AddMintsData {
-            request_id: uuid::Uuid::new_v4(),
-            underlying_mints: vec![crate::Address32::new([220; 32])],
-            quote_mints: vec![],
-        });
+        let change = || {
+            ClientMessage::AddMints(AddMintsData {
+                request_id: uuid::Uuid::new_v4(),
+                underlying_mints: vec![crate::Address32::new([220; 32])],
+                quote_mints: vec![],
+            })
+        };
         handle.send(change()).await.unwrap();
-        assert!(matches!(handle.send(change()).await, Err(ManagedWsError::SubscriptionPending)));
-        assert!(matches!(handle.send_await(change(), Duration::from_secs(1)).await,
-            Err(SendAwaitError::SubscriptionPending)));
+        assert!(matches!(
+            handle.send(change()).await,
+            Err(ManagedWsError::SubscriptionPending)
+        ));
+        assert!(matches!(
+            handle.send_await(change(), Duration::from_secs(1)).await,
+            Err(SendAwaitError::SubscriptionPending)
+        ));
         let request_id = uuid::Uuid::new_v4();
-        let reply = handle.send_await(ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
-            request_id,
-            market_pda: crate::ws::types::QueryFilter::All {},
-        }), Duration::from_secs(1)).await.unwrap();
-        assert!(matches!(&*reply, ServerMessage::CancelAllQuotesAck(ack) if ack.request_id == request_id));
-    }).await.expect("subscription must not stall trading commands");
+        let reply = handle
+            .send_await(
+                ClientMessage::CancelAllQuotes(CancelAllQuotesMessage {
+                    request_id,
+                    market_pda: crate::ws::types::QueryFilter::All {},
+                }),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(&*reply, ServerMessage::Reply(ack) if ack.request_id == request_id));
+    })
+    .await
+    .expect("subscription must not stall trading commands");
     handle.close().await.unwrap();
     server_task.await.unwrap();
 }

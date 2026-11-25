@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.13.1 - 2026-11-25
+
+Breaking: one stream per quote, RFQ and taker order, one reply per command; every order ends once.
+
+- `QuoteUpdate { rfq_id, order_id, state }` replaces the eight `Quote*` events and `QuoteCancelled`.
+  Every state but `live` and `selected` is terminal; `refresh_requested` means quote again with a
+  fresh order. Book states carry `rfq_version`: drop only a lower one, several frames can share
+  a version (same for `order_version`).
+- A replaced quote ends with `cancelled` (`replaced`) before the new one's `live`; `live` has no
+  `replaced` and `ReplacedQuote` is gone. `QuoteCancelReason::RfqAccepted` is gone.
+- `filled` has no `expiry_ts`; read it from the market.
+- `rejected` refuses one submission: `QuoteOutcomeTracker` ignores it for an order already
+  `live` or `selected`. Reusing a known order id is `rejected` with `duplicate_order_id`.
+- `CancelRfq` gets one `Reply`: `send_await` correlates it and `VaultOperatorClient::cancel_rfq`
+  returns it as `VaultRequestError`. `QuoteRejectedMessage` is gone.
+- `RfqUpdate { rfq_id, rfq_version, state }` replaces `RfqLocked`, `RfqAvailableAgain` and
+  `RfqClosed`; `YourQuote` is gone.
+- `OrderUpdate { order_id, order_version, state }` replaces `OrderAccepted`, `OrderSubmitted`,
+  `OrderConfirmed` and `OrderFailed`.
+- `Reply { request_id, result }` answers every command: it replaces `CommandAccepted`, the cancel
+  acks, `RequestError`, the subscribe acks and the swap results. `BatchQuotesAck` is gone, each
+  batched quote gets its own `QuoteUpdate`.
+- `VaultOperatorClient::swap_quote` returns `SwapQuote`, `swap_submit_in_epoch` the `execution_id`.
+- New reject reasons `rfq_locked`, `quote_locked`, `replaced_order_not_found`,
+  `invalid_valid_until`, `overloaded`; `ServerError::RateLimited { retry_after_ms }`;
+  `taker_buy_unsupported` is gone.
+- Vaults buy from makers: `VaultDelegatePermissions::BUY_FROM_MAKERS` and `VaultManager` builders
+  for opcodes 82-85. `sell_rfq` is `trade_rfq` with a `side`, the `Sale*` types are `Trade*`,
+  `VaultSaleTerms` is `VaultOpenTerms`.
+- `trade_rfq` ends as soon as the accepted order fails or the RFQ reopens or closes:
+  `TradeError::OrderFailed`, `Released` and `Closed` carry the server's reason.
+- HTTP: `Vault.next_capital_step`, `HttpClient::vault_position`, `vault_obligations` and
+  `vault_swaps`.
+- `QuoteOutcome::Released` and `QuoteOutcome::RefreshRequested` (with `min_valid_until`);
+  `QuoteLossReason::RfqAccepted` is gone.
+- A vault grant change closes the session with `CloseCode::VaultSessionInvalidated` (4007).
+- `OrderExecutionState::Expired`: past `valid_until` with no position, so never traded.
+
 ## 0.12.0 - 2026-11-16
 
 Breaking: vault code moved behind the `vault` feature.

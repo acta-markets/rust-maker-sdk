@@ -1,11 +1,12 @@
 use solana_pubkey::Pubkey;
 
-use super::{VaultAccount, VaultManager, VaultOpenIntent, VaultSaleTerms};
+use super::{VaultAccount, VaultManager, VaultOpenIntent, VaultOpenTerms};
 use crate::chain::{ChainClient, ChainError, MakerInfo, maker_pda_with_program_id};
+use crate::types::TakerSide;
 
 const VAULT_DISCRIMINATOR: u8 = 9;
 
-/// The other side of a vault sale: an external maker or another vault.
+/// The other side of a vault trade: an external maker or another vault.
 #[derive(Debug, Clone)]
 pub enum Counterparty {
     Maker { owner: Pubkey, quote_signer: Pubkey },
@@ -38,13 +39,28 @@ impl Counterparty {
         })
     }
 
+    /// The open `vault` signs when it trades `side` as taker with this counterparty.
+    #[must_use]
+    pub fn open<'a>(
+        &'a self,
+        vault: &'a VaultManager,
+        keeper: Pubkey,
+        side: TakerSide,
+        terms: VaultOpenTerms,
+    ) -> VaultOpenIntent<'a> {
+        match side {
+            TakerSide::Sell => self.sale(vault, keeper, terms),
+            TakerSide::Buy => self.purchase(vault, keeper, terms),
+        }
+    }
+
     /// The open the writer signs when selling to this counterparty.
     #[must_use]
     pub fn sale<'a>(
         &'a self,
         writer: &'a VaultManager,
         keeper: Pubkey,
-        terms: VaultSaleTerms,
+        terms: VaultOpenTerms,
     ) -> VaultOpenIntent<'a> {
         match self {
             Self::Maker {
@@ -58,6 +74,34 @@ impl Counterparty {
                 terms,
             },
             Self::Vault(holder) => VaultOpenIntent::BetweenVaults {
+                keeper,
+                writer,
+                holder,
+                terms,
+            },
+        }
+    }
+
+    /// The open the holder signs when buying what this counterparty writes.
+    #[must_use]
+    pub fn purchase<'a>(
+        &'a self,
+        holder: &'a VaultManager,
+        keeper: Pubkey,
+        terms: VaultOpenTerms,
+    ) -> VaultOpenIntent<'a> {
+        match self {
+            Self::Maker {
+                owner,
+                quote_signer,
+            } => VaultOpenIntent::Purchase {
+                keeper,
+                holder,
+                maker_owner: *owner,
+                maker_quote_signer: *quote_signer,
+                terms,
+            },
+            Self::Vault(writer) => VaultOpenIntent::PurchaseFromVault {
                 keeper,
                 writer,
                 holder,

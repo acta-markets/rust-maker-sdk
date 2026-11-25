@@ -8,7 +8,7 @@ transactions before signing, and run capital operations.
 
 ```toml
 [dependencies]
-acta-maker-sdk = { version = "0.12.0", features = ["ws-client"] }
+acta-maker-sdk = { version = "0.13.1", features = ["ws-client"] }
 ```
 
 Rust 1.89 or later. The default feature set is empty.
@@ -113,13 +113,16 @@ while let Ok(msg) = messages.recv().await {
             };
             client.quote_in_epoch(quote, epoch).await?;
         }
-        ServerMessage::QuoteAcknowledged(ack) => println!("accepted {:?}", ack.order_id),
-        ServerMessage::QuoteOutbid(outbid) => println!("outbid on {}", outbid.rfq_id),
-        ServerMessage::QuoteRejected(rejected) => println!("rejected {:?}", rejected.reason),
-        ServerMessage::QuoteFilled(fill) => {
-            println!("filled on {}, position {}", fill.market_pda, fill.position_pda)
-        }
-        ServerMessage::RfqClosed(closed) => println!("closed {:?}", closed.reason),
+        ServerMessage::QuoteUpdate(update) => match &update.state {
+            QuoteState::Live { is_best, .. } => println!("{:?} best: {is_best}", update.order_id),
+            QuoteState::Rejected { reason, .. } => println!("rejected {reason:?}"),
+            QuoteState::Filled(fill) => {
+                println!("filled on {}, position {}", fill.market_pda, fill.position_pda)
+            }
+            QuoteState::Cancelled { reason, .. } => println!("cancelled {reason:?}"),
+            _ => {}
+        },
+        ServerMessage::RfqUpdate(update) => println!("rfq {:?}", update.state),
         _ => {}
     }
 }
@@ -131,7 +134,25 @@ This sketch quotes only in its first epoch. `managed_quote` waits for each new
 epoch and applies recovery before it quotes again. A socket write is not an
 accepted quote; never replay an old signed quote after a reconnect.
 
-`QuoteFilled` means the position opened on chain. Fund its settlement leg with
+Each quote has one stream of `QuoteUpdate` frames keyed by `order_id`. `live`
+arrives when the quote is accepted and again every time its rank changes, so a
+repeat is a new rank, not a new quote. Every order ends exactly once, with a
+`QuoteUpdate` that is not `live` or `selected`: `filled`, `rejected`, `expired`, `refresh_requested` (quote again with a fresh
+order), `released` (selected, but the trade did not happen), `lost` (the RFQ
+closed without it) or `cancelled` (`requested` by your own `CancelQuote` or
+`CancelAllQuotes`, `replaced` by your newer quote, otherwise by the server on
+disconnect or a risk check). The `Reply` to a cancel only accepts it. `rejected`
+refuses one submission: ignore it for an order you already hold `live` or
+`selected`. Reusing an order id the server knows is `rejected` with
+`duplicate_order_id`.
+
+Book states carry `rfq_version`. One change can send several frames at the same
+version, and a `GetMyQuotes` snapshot and a push can arrive in either order; for
+each RFQ keep the highest version seen and drop only a lower one. Taker
+`OrderUpdate`s follow the same rule with `order_version`; `confirmed` and `failed`
+end the order.
+
+A filled quote's `QuoteUpdate` means the position opened on chain. Fund its settlement leg with
 `DepositFundsToPosition` if the product requires it; `withdraw_position_funds`
 takes the deposit back before expiry. Acta's keeper settles an
 in-the-money funded position to the owner's ATA; no SDK call is needed.
@@ -194,7 +215,9 @@ See [`examples/taker_buy_quote.rs`](examples/taker_buy_quote.rs).
   later receivers start at subscription time.
 - **Unknown is not failure.** A timeout, gap, reconnect or `Unknown` order status
   does not prove an order has no exposure. Reconcile with `GetMyQuotes` or
-  `GetOrderStatus` and never reuse its order ID.
+  `GetOrderStatus` and never reuse its order ID. `Expired` status is final: it never traded.
+- **Vault grant change.** The server sends `vault_session_invalidated` and closes with 4007;
+  the managed client reconnects with a fresh vault auth, and a revoked operator ends `Closed`.
 - **Program ID.** `RfqBinding::from_broadcast` checks the market against
   `ACTA_PROGRAM_ID`. For another deployment use `from_broadcast_for_program` with a
   locally configured ID; never take it from the RFQ.
@@ -211,8 +234,10 @@ See [`examples/taker_buy_quote.rs`](examples/taker_buy_quote.rs).
   or spread, and quote them from custody. A vault sees both sides on its `vaults`
   channel: it bids on a sell and holds, and with `SIGN_WRITER_QUOTES` it asks on a
   buy and writes from its collateral leg. The buyer's wallet signs that open
-  (`VaultOpenIntent::Buy`); the vault signs only the quote. A vault never requests a
-  buy as taker (`taker_buy_unsupported`).
+  (`VaultOpenIntent::Buy`); the vault signs only the quote. With `BUY_FROM_MAKERS` a
+  vault also requests a buy as taker and pays the premium from its quote leg
+  (`open_position_from_maker` / `open_position_from_vault` and the spread pair,
+  checked as `VaultOpenIntent::Purchase` / `PurchaseFromVault`).
 
 ## Where to start in the API
 

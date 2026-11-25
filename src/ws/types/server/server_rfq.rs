@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use crate::types::ids::{
     MarketId, OptionTerms, OrderId, Price, Quantity, QuoteCount, RfqVersion, TakerSide,
 };
-use crate::types::{QuoteFinalStatus, RfqAvailableAgainReason, RfqCloseReason};
+use crate::types::{RfqAvailableAgainReason, RfqCloseReason};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use uuid::Uuid;
@@ -28,18 +28,6 @@ pub struct RfqCreatedMessage {
     pub order_options: Vec<RfqOrderOption>,
 }
 
-/// The receiving maker's own quote on the closed RFQ.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum YourQuote {
-    None,
-    Quoted {
-        order_id: OrderId,
-        status: QuoteFinalStatus,
-        price: Price,
-    },
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RfqWinner {
@@ -60,18 +48,6 @@ pub enum WinnerTransaction {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RfqClosedMessage {
-    pub rfq_id: Uuid,
-    pub rfq_version: RfqVersion,
-    pub reason: RfqCloseReason,
-    pub your_quote: YourQuote,
-    pub winner: RfqWinner,
-    #[serde_as(as = "UnixSeconds")]
-    pub closed_at: SystemTime,
-}
-
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqBroadcastMessage {
     pub rfq_id: Uuid,
     pub market_descriptor: MarketDescriptor,
@@ -85,26 +61,6 @@ pub struct RfqBroadcastMessage {
     /// Server emission time; compare with [`ManagedInbound::received_at`](crate::ws::managed::ManagedInbound::received_at) to measure delivery delay.
     #[serde_as(as = "UnixMillis")]
     pub sent_at_ms: SystemTime,
-}
-
-/// Another maker's quote was accepted; the RFQ takes no quotes until it closes or becomes available again.
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RfqLockedMessage {
-    pub rfq_id: Uuid,
-    pub rfq_version: RfqVersion,
-    #[serde_as(as = "UnixSeconds")]
-    pub locked_at: SystemTime,
-}
-
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RfqAvailableAgainMessage {
-    pub rfq_id: Uuid,
-    pub rfq_version: RfqVersion,
-    pub reason: RfqAvailableAgainReason,
-    #[serde_as(as = "UnixSeconds")]
-    pub available_again_at: SystemTime,
 }
 
 /// Notification sent when an RFQ is pre-filtered due to caps.
@@ -179,4 +135,33 @@ pub struct MyActiveRfqsData {
     pub rfqs: Vec<MyActiveRfqInfo>,
     #[serde(deserialize_with = "crate::ws::types::common::deserialize_required_nullable")]
     pub next_cursor: Option<String>,
+}
+
+/// Every change to an RFQ the session takes part in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RfqUpdateMessage {
+    pub rfq_id: Uuid,
+    pub rfq_version: RfqVersion,
+    pub state: RfqState,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RfqState {
+    Locked {
+        #[serde_as(as = "UnixSeconds")]
+        at: SystemTime,
+    },
+    Available {
+        reason: RfqAvailableAgainReason,
+        #[serde_as(as = "UnixSeconds")]
+        at: SystemTime,
+    },
+    Closed {
+        reason: RfqCloseReason,
+        winner: RfqWinner,
+        #[serde_as(as = "UnixSeconds")]
+        at: SystemTime,
+    },
 }

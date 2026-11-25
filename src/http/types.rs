@@ -8,6 +8,29 @@ use crate::types::unix_time::UnixSeconds;
 pub use crate::types::VaultLeg;
 use crate::ws::types::{MarketInfo, TokenInfo};
 
+/// The capital instruction the vault's state requires next; deposit-window timing is the operator's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NextCapitalStep {
+    None,
+    /// A staged swap must unstage before equity or cycle finalization.
+    AwaitUnstage,
+    ComputeEquity,
+    ProcessDeposits {
+        count: u32,
+    },
+    ProcessWithdrawals {
+        count: u32,
+    },
+    FinalizeCycle,
+    /// Closing to WithdrawOnly: governance at any time, anyone from `opens_at` (Unix seconds).
+    FinalizeShutdown {
+        opens_at: u64,
+    },
+    UnlockManagerStake,
+    CloseVault,
+}
+
 /// Public `/api/v1/vaults` row. Amounts and times arrive as decimal strings and decode to numbers.
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -61,6 +84,7 @@ pub struct Vault {
     pub last_settlement_at: SystemTime,
     pub capacity: VaultCapacity,
     pub capital_fallback_delay_seconds: u64,
+    pub next_capital_step: NextCapitalStep,
     pub deposit_window: DepositWindow,
     pub balances: VaultBalances,
 
@@ -605,6 +629,128 @@ pub struct VaultWithdrawRequest {
     #[serde_as(as = "UnixSeconds")]
     pub created_at: SystemTime,
     pub transaction: Transaction,
+}
+
+/// `/api/v1/vaults/{pda}/obligations` at one `projection_version`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultObligations {
+    pub vault_pda: Address32,
+    pub projection_version: u64,
+    pub deposit_requests: RequestQueue<VaultDepositRequest>,
+    pub withdraw_requests: RequestQueue<VaultWithdrawRequest>,
+    pub unfunded_holdings: Vec<UnfundedHolding>,
+    pub pending_updates: Vec<PendingVaultUpdate>,
+}
+
+/// The first page of a request queue; `total` is the on-chain queue length.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestQueue<T> {
+    pub total: u32,
+    pub requests: Vec<T>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub next_cursor: Option<String>,
+}
+
+/// A physical option the vault bought and must fund before settlement.
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnfundedHolding {
+    pub position_pda: Address32,
+    pub order_id: String,
+    pub market_pda: Address32,
+    pub position_type: HoldingType,
+    #[serde_as(as = "DisplayFromStr")]
+    pub strike: u64,
+    #[serde_as(as = "DisplayFromStr")]
+    pub quantity: u64,
+    pub expiry_ts: u64,
+    /// What `fund_holder_position` transfers from the vault.
+    pub funding: HoldingFunding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldingType {
+    CoveredCall,
+    CashSecuredPut,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldingFunding {
+    pub mint: Address32,
+    #[serde_as(as = "DisplayFromStr")]
+    pub amount: u64,
+}
+
+/// A governance update queued on chain, applicable from `activates_at`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingVaultUpdate {
+    pub kind: VaultUpdateKind,
+    pub activates_at: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultUpdateKind {
+    CapLimit,
+    Fees,
+    HwmReset,
+    Capabilities,
+    Policy,
+    GovernanceAuthority,
+    SecondLeg,
+}
+
+/// Public `/api/v1/vaults/{pda}/swaps` row: a swap the vault executed, served or self-built.
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultSwapRecord {
+    pub id: String,
+    pub kind: VaultSwapRecordKind,
+    /// The vault's second mint when the swap executed.
+    pub second_mint: Address32,
+    pub actor: Address32,
+    #[serde_as(as = "DisplayFromStr")]
+    pub amount_in: u64,
+    #[serde_as(as = "DisplayFromStr")]
+    pub amount_out: u64,
+    #[serde_as(as = "UnixSeconds")]
+    pub created_at: SystemTime,
+    pub transaction: Transaction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VaultSwapRecordKind {
+    Rebalance {
+        direction: crate::types::VaultSwapDirection,
+    },
+    Recovery {
+        direction: crate::types::VaultSwapDirection,
+    },
+    EmergencyConvert {
+        direction: crate::types::VaultSwapDirection,
+    },
+    ClosingConvert {
+        direction: crate::types::VaultSwapDirection,
+    },
+    Stage(VaultSwapStaging),
+    Unstage(VaultSwapStaging),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultSwapStaging {
+    pub leg: crate::types::VaultLeg,
+    pub mint: Address32,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct VaultSwapsResponse {
+    pub(super) swaps: Vec<VaultSwapRecord>,
+    #[serde(deserialize_with = "crate::wire::deserialize_required_option")]
+    pub(super) next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

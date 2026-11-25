@@ -9,7 +9,7 @@ use solana_pubkey::Pubkey;
 use super::manager::VaultManager;
 use super::price_route::PriceRoute;
 use super::trading::{
-    NO_AMOUNT_OFFSET, VaultSaleTerms, VaultStagingAsset, VaultSwapAmountOffset, VaultSwapHop,
+    NO_AMOUNT_OFFSET, VaultOpenTerms, VaultStagingAsset, VaultSwapAmountOffset, VaultSwapHop,
     VaultSwapKind, VaultSwapPlan,
 };
 use super::{VaultAccount, VaultChainError, pda};
@@ -19,7 +19,7 @@ use crate::chain::ix::{
 };
 use crate::orders::{SignerLike, verify_order_id_signature_bytes};
 use crate::types::{VaultLeg, VaultStagingStep, VaultSwapDirection, VaultSwapMode};
-use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
+use crate::ws::types::{SponsoredTxToSignData, SwapQuote, SwapQuoteData};
 
 const COMPUTE_BUDGET_PROGRAM_ID: Pubkey =
     solana_pubkey::pubkey!("ComputeBudget111111111111111111111111111111");
@@ -149,7 +149,7 @@ pub enum VaultOpenIntent<'a> {
         writer: &'a VaultManager,
         maker_owner: Pubkey,
         maker_quote_signer: Pubkey,
-        terms: VaultSaleTerms,
+        terms: VaultOpenTerms,
     },
     /// The vault writes against another vault's quote
     /// (`OpenPositionBetweenVaults` or `OpenSpreadBetweenVaults`).
@@ -158,7 +158,7 @@ pub enum VaultOpenIntent<'a> {
         keeper: Pubkey,
         writer: &'a VaultManager,
         holder: &'a VaultManager,
-        terms: VaultSaleTerms,
+        terms: VaultOpenTerms,
     },
     /// An external taker writes against the vault's quote
     /// (`OpenPositionForVaultHolder` or `OpenSpreadForVaultHolder`).
@@ -167,7 +167,7 @@ pub enum VaultOpenIntent<'a> {
         keeper: Pubkey,
         holder: &'a VaultManager,
         taker: Pubkey,
-        terms: VaultSaleTerms,
+        terms: VaultOpenTerms,
     },
     /// A wallet buys what the vault writes; the wallet signs and pays, the vault delegate
     /// signed the quote (`OpenPositionForVaultWriter` or `OpenSpreadForVaultWriter`, holder
@@ -177,8 +177,41 @@ pub enum VaultOpenIntent<'a> {
         keeper: Pubkey,
         writer: &'a VaultManager,
         holder: Pubkey,
-        terms: VaultSaleTerms,
+        terms: VaultOpenTerms,
     },
+    /// The vault buys what a Maker writes from custody
+    /// (`OpenPositionForVaultTakerBuy` or `OpenSpreadForVaultTakerBuy`).
+    Purchase {
+        /// The deployment's checked `GlobalConfig.hot_authority`; it pays and signs.
+        keeper: Pubkey,
+        holder: &'a VaultManager,
+        maker_owner: Pubkey,
+        maker_quote_signer: Pubkey,
+        terms: VaultOpenTerms,
+    },
+    /// The vault buys what another vault writes; the writer's delegate signed the quote
+    /// (`OpenPositionBetweenVaultsTakerBuy` or `OpenSpreadBetweenVaultsTakerBuy`).
+    PurchaseFromVault {
+        /// The deployment's checked `GlobalConfig.hot_authority`; it pays and signs.
+        keeper: Pubkey,
+        writer: &'a VaultManager,
+        holder: &'a VaultManager,
+        terms: VaultOpenTerms,
+    },
+}
+
+impl VaultOpenIntent<'_> {
+    /// The wallet that signs slot 1 of the served transaction.
+    pub fn participant(&self) -> Pubkey {
+        match self {
+            Self::Sale { writer, .. } | Self::BetweenVaults { writer, .. } => writer.args.actor,
+            Self::Purchase { holder, .. } | Self::PurchaseFromVault { holder, .. } => {
+                holder.args.actor
+            }
+            Self::Fill { taker, .. } => *taker,
+            Self::Buy { holder, .. } => *holder,
+        }
+    }
 }
 
 /// The vault pair's price routes and the push-oracle shards the deployment posts Pyth feeds to.
@@ -196,7 +229,7 @@ pub struct PairPriceRoutes<'a> {
 pub struct VaultSwapIntent<'a> {
     pub vault: &'a VaultManager,
     pub request: &'a SwapQuoteData,
-    pub quote: &'a SwapQuoteResultData,
+    pub quote: &'a SwapQuote,
     pub price_routes: PairPriceRoutes<'a>,
     pub min_output_floor: u64,
     /// The vault before the request; checked against its second leg and staging slot.
@@ -224,10 +257,10 @@ pub fn verify_vault_open(
             writer.args.actor,
             maker_quote_signer,
             match terms {
-                VaultSaleTerms::Physical(terms) => {
+                VaultOpenTerms::Physical(terms) => {
                     writer.open_position_as_writer(keeper, maker_owner, &terms)?
                 }
-                VaultSaleTerms::Spread(terms) => {
+                VaultOpenTerms::Spread(terms) => {
                     writer.open_spread_as_writer(keeper, maker_owner, &terms)?
                 }
             },
@@ -242,10 +275,10 @@ pub fn verify_vault_open(
             writer.args.actor,
             holder.args.delegate_authority,
             match terms {
-                VaultSaleTerms::Physical(terms) => {
+                VaultOpenTerms::Physical(terms) => {
                     writer.open_position_with_vault_holder(keeper, holder, &terms)?
                 }
-                VaultSaleTerms::Spread(terms) => {
+                VaultOpenTerms::Spread(terms) => {
                     writer.open_spread_with_vault_holder(keeper, holder, &terms)?
                 }
             },
@@ -260,10 +293,10 @@ pub fn verify_vault_open(
             taker,
             holder.args.delegate_authority,
             match terms {
-                VaultSaleTerms::Physical(terms) => {
+                VaultOpenTerms::Physical(terms) => {
                     holder.open_position_as_holder(keeper, taker, &terms)?
                 }
-                VaultSaleTerms::Spread(terms) => {
+                VaultOpenTerms::Spread(terms) => {
                     holder.open_spread_as_holder(keeper, taker, &terms)?
                 }
             },
@@ -278,11 +311,48 @@ pub fn verify_vault_open(
             holder,
             writer.args.delegate_authority,
             match terms {
-                VaultSaleTerms::Physical(terms) => {
+                VaultOpenTerms::Physical(terms) => {
                     writer.open_position_for_wallet_holder(keeper, holder, &terms)?
                 }
-                VaultSaleTerms::Spread(terms) => {
+                VaultOpenTerms::Spread(terms) => {
                     writer.open_spread_for_wallet_holder(keeper, holder, &terms)?
+                }
+            },
+        ),
+        VaultOpenIntent::Purchase {
+            keeper,
+            holder,
+            maker_owner,
+            maker_quote_signer,
+            terms,
+        } => (
+            keeper,
+            holder.args.actor,
+            maker_quote_signer,
+            match terms {
+                VaultOpenTerms::Physical(terms) => {
+                    holder.open_position_from_maker(keeper, maker_owner, &terms)?
+                }
+                VaultOpenTerms::Spread(terms) => {
+                    holder.open_spread_from_maker(keeper, maker_owner, &terms)?
+                }
+            },
+        ),
+        VaultOpenIntent::PurchaseFromVault {
+            keeper,
+            writer,
+            holder,
+            terms,
+        } => (
+            keeper,
+            holder.args.actor,
+            writer.args.delegate_authority,
+            match terms {
+                VaultOpenTerms::Physical(terms) => {
+                    holder.open_position_from_vault(keeper, writer, &terms)?
+                }
+                VaultOpenTerms::Spread(terms) => {
+                    holder.open_spread_from_vault(keeper, writer, &terms)?
                 }
             },
         ),
@@ -311,8 +381,8 @@ pub fn verify_vault_open(
     } = intent
     {
         let quote_mint = match terms {
-            VaultSaleTerms::Physical(terms) => terms.quote_mint,
-            VaultSaleTerms::Spread(terms) => terms.quote_mint,
+            VaultOpenTerms::Physical(terms) => terms.quote_mint,
+            VaultOpenTerms::Spread(terms) => terms.quote_mint,
         };
         let (quote_mint, quote_program) = if holder.args.main_mint == quote_mint {
             (holder.args.main_mint, holder.args.main_token_program)

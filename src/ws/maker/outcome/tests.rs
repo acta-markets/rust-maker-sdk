@@ -11,26 +11,79 @@ fn tracker() -> QuoteOutcomeTracker {
     )
 }
 
+/// Builds the wire frame an event of the old name now travels in.
 fn message(kind: &str, extra: Value) -> ServerMessage {
-    let mut data = json!({"rfq_id": Uuid::nil(), "order_id": OrderId::new([1; 32])});
-    let defaults: &[(&str, Value)] = match kind {
-        "QuoteAcknowledged" => &[("replaced", json!({"type": "none"}))],
-        "QuoteFilled" => &[("expiry_ts", json!(1))],
-        "RfqClosed" => &[
-            ("your_quote", json!({"type": "none"})),
-            ("winner", json!({"type": "none"})),
-        ],
-        _ => &[],
+    let mut extra = extra.as_object().unwrap().clone();
+    let mut ids = json!({"rfq_id": Uuid::nil(), "order_id": OrderId::new([1; 32])});
+    for key in ["rfq_id", "order_id"] {
+        if let Some(value) = extra.remove(key) {
+            let _ = ids.as_object_mut().unwrap().insert(key.into(), value);
+        }
+    }
+    let extra = Value::Object(extra);
+    let state = |tag: &str, defaults: Value| {
+        let mut state = defaults;
+        let fields = state.as_object_mut().unwrap();
+        let _ = fields.insert("type".into(), json!(tag));
+        if tag != "rejected" {
+            let _ = fields.insert("rfq_version".into(), json!(1));
+        }
+        fields.extend(extra.as_object().unwrap().clone());
+        let mut data = ids.clone();
+        let _ = data.as_object_mut().unwrap().insert("state".into(), state);
+        json!({"type": "QuoteUpdate", "data": data})
     };
-    let fields = data.as_object_mut().unwrap();
-    for (key, value) in defaults {
-        let _ = fields.insert((*key).to_string(), value.clone());
-    }
-    if kind == "QuoteRejected" {
-        let _ = fields.insert("message".to_string(), json!("rejected"));
-    }
-    fields.extend(extra.as_object().unwrap().clone());
-    serde_json::from_value(json!({"type": kind, "data": data})).unwrap()
+    let frame = match kind {
+        "QuoteAcknowledged" => state(
+            "live",
+            json!({"is_best": true, "best_price": {"type": "none"}}),
+        ),
+        "QuoteSelected" => state("selected", json!({})),
+        "QuoteFilled" => state("filled", json!({})),
+        "QuoteExpired" => state("expired", json!({})),
+        "QuoteRejected" => state("rejected", json!({"message": "rejected"})),
+        "QuoteLost" => state("lost", json!({})),
+        "QuoteReleased" => state("released", json!({})),
+        "QuoteRefresh" => state(
+            "refresh_requested",
+            json!({"terms": {"type": "covered_call", "strike": "1"}, "side": "sell", "min_valid_until": 1, "reason": "expiring_soon"}),
+        ),
+        "QuoteCancelled" => state("cancelled", json!({})),
+        "ReplyAccepted" => json!({"type": "Reply", "data": {
+            "request_id": Uuid::nil(),
+            "result": {"type": "accepted"},
+        }}),
+        "RfqClosed" | "RfqAvailableAgain" => {
+            let mut fields = extra.as_object().unwrap().clone();
+            let version = fields.remove("rfq_version").unwrap_or(json!(1));
+            let tag = if kind == "RfqClosed" {
+                "closed"
+            } else {
+                "available"
+            };
+            let mut state = json!({"type": tag});
+            if kind == "RfqClosed" {
+                let object = state.as_object_mut().unwrap();
+                let _ = object.insert("winner".into(), json!({"type": "none"}));
+            }
+            if let Some(at) = fields
+                .remove("closed_at")
+                .or_else(|| fields.remove("available_again_at"))
+            {
+                let _ = fields.insert("at".into(), at);
+            }
+            state.as_object_mut().unwrap().extend(fields);
+            json!({"type": "RfqUpdate", "data": {"rfq_id": ids["rfq_id"], "rfq_version": version, "state": state}})
+        }
+        _ => {
+            let mut data = ids.clone();
+            data.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            json!({"type": kind, "data": data})
+        }
+    };
+    serde_json::from_value(frame).unwrap()
 }
 
 fn feed(t: &mut QuoteOutcomeTracker, kind: &str, extra: Value) {
@@ -58,7 +111,7 @@ fn closed(reason: &str) -> Value {
 }
 
 #[test]
-fn acknowledged_selected_closed_then_filled() {
+fn acknowledged_selected_then_filled() {
     let mut t = tracker();
     assert!(matches!(t.outcome(), QuoteOutcome::Pending));
     feed(&mut t, "QuoteAcknowledged", json!({}));
@@ -68,7 +121,10 @@ fn acknowledged_selected_closed_then_filled() {
     feed(&mut t, "QuoteAcknowledged", json!({}));
     assert!(matches!(t.outcome(), QuoteOutcome::Selected));
     feed(&mut t, "RfqClosed", closed("filled"));
-    assert!(!t.outcome().is_terminal());
+    assert!(
+        !t.outcome().is_terminal(),
+        "an RFQ close says nothing about this order"
+    );
     feed(&mut t, "QuoteFilled", filled());
     assert!(matches!(t.outcome(), QuoteOutcome::Filled(m) if m.transaction_signature == "tx"));
     t.check(8, t.deadline);
@@ -77,14 +133,15 @@ fn acknowledged_selected_closed_then_filled() {
 }
 
 #[test]
-fn terminal_events_from_each_live_state() {
+fn every_terminal_update_ends_the_order_once() {
     for start in ["pending", "acked", "selected"] {
-        for end in [
-            "QuoteRejected",
-            "QuoteExpired",
-            "QuoteCancelled",
-            "QuoteFilled",
-            "RfqClosed",
+        for (end, extra) in [
+            ("QuoteExpired", json!({"reason":"expired"})),
+            ("QuoteRefresh", json!({})),
+            ("QuoteLost", json!({"reason":"taker_cancelled"})),
+            ("QuoteReleased", json!({"reason":"signature_timeout"})),
+            ("QuoteCancelled", json!({"reason":"risk_check"})),
+            ("QuoteFilled", filled()),
         ] {
             let mut t = tracker();
             if start != "pending" {
@@ -93,66 +150,61 @@ fn terminal_events_from_each_live_state() {
             if start == "selected" {
                 feed(&mut t, "QuoteSelected", selected());
             }
-            let extra = match end {
-                "QuoteRejected" => json!({"reason":"rate_limited"}),
-                "QuoteExpired" => json!({"reason":"expired"}),
-                "QuoteCancelled" => {
-                    json!({"order_ids":[OrderId::new([1;32])], "reason":"requested", "cancelled_at":1})
-                }
-                "QuoteFilled" => filled(),
-                _ => closed("taker_cancelled"),
-            };
             feed(&mut t, end, extra);
-            assert!(matches!(
-                (end, t.outcome()),
-                (
-                    "QuoteRejected",
-                    QuoteOutcome::Rejected(QuoteRejectReason::RateLimited)
-                ) | ("QuoteExpired", QuoteOutcome::Expired)
-                    | ("QuoteCancelled", QuoteOutcome::Cancelled)
-                    | ("QuoteFilled", QuoteOutcome::Filled(_))
-                    | (
-                        "RfqClosed",
-                        QuoteOutcome::Lost(QuoteLossReason::RfqClosed(
-                            RfqCloseReason::TakerCancelled
-                        ))
-                    )
-            ));
+            assert!(
+                matches!(
+                    (end, t.outcome()),
+                    ("QuoteExpired", QuoteOutcome::Expired)
+                        | ("QuoteRefresh", QuoteOutcome::RefreshRequested { .. })
+                        | (
+                            "QuoteLost",
+                            QuoteOutcome::Lost(QuoteLossReason::RfqClosed(
+                                RfqCloseReason::TakerCancelled
+                            ))
+                        )
+                        | (
+                            "QuoteReleased",
+                            QuoteOutcome::Released(RfqAvailableAgainReason::SignatureTimeout)
+                        )
+                        | ("QuoteCancelled", QuoteOutcome::Cancelled)
+                        | ("QuoteFilled", QuoteOutcome::Filled(_))
+                ),
+                "{start} -> {end}: {:?}",
+                t.outcome()
+            );
+            feed(&mut t, "QuoteAcknowledged", json!({}));
+            assert!(t.outcome().is_terminal(), "{start} -> {end} stays ended");
         }
     }
 }
 
 #[test]
-fn closure_status_is_order_specific_and_filled_waits_for_details() {
-    for (status, terminal) in [
-        ("filled", false),
-        ("outbid", true),
-        ("expired", true),
-        ("cancelled", true),
-    ] {
-        let mut t = tracker();
-        let mut close = closed("filled");
-        close["your_quote"] =
-            json!({"type":"quoted","order_id":t.order_id,"status":status,"price":"1"});
-        feed(&mut t, "RfqClosed", close.clone());
-        assert_eq!(t.outcome().is_terminal(), terminal);
-        match status {
-            "outbid" => assert!(matches!(
-                t.outcome(),
-                QuoteOutcome::Lost(QuoteLossReason::RfqClosed(RfqCloseReason::Filled))
-            )),
-            "expired" => assert!(matches!(t.outcome(), QuoteOutcome::Expired)),
-            "cancelled" => assert!(matches!(t.outcome(), QuoteOutcome::Cancelled)),
-            _ => {
-                feed(&mut t, "QuoteFilled", filled());
-                assert!(matches!(t.outcome(), QuoteOutcome::Filled(_)));
-            }
-        }
-        let mut t = tracker();
-        close["your_quote"]["order_id"] = json!(OrderId::new([2; 32]));
-        feed(&mut t, "RfqClosed", close);
-        assert!(matches!(t.outcome(), QuoteOutcome::Pending));
-    }
+fn refresh_requested_carries_what_a_requote_needs() {
+    let mut t = tracker();
+    feed(&mut t, "QuoteAcknowledged", json!({}));
+    feed(
+        &mut t,
+        "QuoteRefresh",
+        json!({"min_valid_until": 1_700_000_060}),
+    );
+    assert!(matches!(
+        t.outcome(),
+        QuoteOutcome::RefreshRequested {
+            terms: OptionTerms::CoveredCall { .. },
+            side: TakerSide::Sell,
+            min_valid_until,
+            reason: QuoteExpiryReason::ExpiringSoon,
+        } if *min_valid_until == QuoteExpiry::from_unix_seconds(1_700_000_060)
+    ));
+    assert!(t.outcome().is_terminal());
+}
+
+#[test]
+fn a_reply_does_not_end_the_order() {
+    let mut t = tracker();
+    feed(&mut t, "QuoteAcknowledged", json!({}));
+    feed(&mut t, "ReplyAccepted", json!({}));
+    assert!(matches!(t.outcome(), QuoteOutcome::Acked));
 }
 
 #[test]
@@ -174,7 +226,7 @@ fn unrelated_messages_and_old_epochs_are_ignored() {
     feed(
         &mut t,
         "QuoteCancelled",
-        json!({"order_ids":[OrderId::new([2;32])],"reason":"requested","cancelled_at":1}),
+        json!({"order_id":OrderId::new([2;32]),"reason":"requested"}),
     );
     t.observe_message(6, Instant::now(), &message("QuoteAcknowledged", json!({})));
     assert!(matches!(t.outcome(), QuoteOutcome::Pending));
@@ -252,54 +304,34 @@ async fn consumes_the_clients_message_stream() {
 }
 
 #[test]
-fn accepting_another_quote_is_a_loss() {
+fn rejected_ends_only_a_pending_order() {
+    let mut t = tracker();
+    feed(
+        &mut t,
+        "QuoteRejected",
+        json!({"reason":"duplicate_order_id"}),
+    );
+    assert!(matches!(
+        t.outcome(),
+        QuoteOutcome::Rejected(QuoteRejectReason::DuplicateOrderId)
+    ));
+    feed(&mut t, "QuoteAcknowledged", json!({}));
+    assert!(t.outcome().is_terminal());
+}
+
+#[test]
+fn rejected_resubmission_keeps_a_live_or_selected_order() {
     let mut t = tracker();
     feed(&mut t, "QuoteAcknowledged", json!({}));
     feed(
         &mut t,
-        "QuoteCancelled",
-        json!({"order_ids":[OrderId::new([1;32])], "reason":"rfq_accepted", "cancelled_at":1}),
-    );
-    assert!(matches!(
-        t.outcome(),
-        QuoteOutcome::Lost(QuoteLossReason::RfqAccepted)
-    ));
-}
-
-#[test]
-fn failed_selection_returns_to_acked_and_can_be_selected_again() {
-    let mut t = tracker();
-    feed(&mut t, "QuoteSelected", selected());
-    feed(
-        &mut t,
-        "RfqAvailableAgain",
-        json!({"rfq_id":Uuid::new_v4(), "rfq_version":2, "reason":"tx_failed", "available_again_at":1}),
-    );
-    assert!(matches!(t.outcome(), QuoteOutcome::Selected));
-    feed(
-        &mut t,
-        "RfqAvailableAgain",
-        json!({"rfq_version":2, "reason":"tx_failed", "available_again_at":1}),
+        "QuoteRejected",
+        json!({"reason":"duplicate_order_id"}),
     );
     assert!(matches!(t.outcome(), QuoteOutcome::Acked));
     feed(&mut t, "QuoteSelected", selected());
+    feed(&mut t, "QuoteRejected", json!({"reason":"rate_limited"}));
+    assert!(matches!(t.outcome(), QuoteOutcome::Selected));
     feed(&mut t, "QuoteFilled", filled());
     assert!(matches!(t.outcome(), QuoteOutcome::Filled(_)));
-}
-
-#[test]
-fn acknowledged_but_unselected_order_loses_when_rfq_fills() {
-    for personalized in [false, true] {
-        let mut t = tracker();
-        feed(&mut t, "QuoteAcknowledged", json!({}));
-        let mut close = closed("filled");
-        if personalized {
-            close["your_quote"] = json!({"type":"quoted","order_id":OrderId::new([2;32]),"status":"filled","price":"1"});
-        }
-        feed(&mut t, "RfqClosed", close);
-        assert!(matches!(
-            t.outcome(),
-            QuoteOutcome::Lost(QuoteLossReason::RfqClosed(RfqCloseReason::Filled))
-        ));
-    }
 }

@@ -5,7 +5,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::types::ids::OrderId;
-use crate::ws::types::{BatchQuoteResult, ClientMessage, ServerMessage};
+use crate::ws::types::{ClientMessage, QuoteState, ServerMessage};
 
 use super::SendAwaitError;
 
@@ -21,7 +21,6 @@ pub(crate) struct AwaitRegistration {
 enum CorrelationKey {
     Request(Uuid),
     Quote(OrderId),
-    Batch(Vec<OrderId>),
 }
 
 impl CorrelationKey {
@@ -29,10 +28,7 @@ impl CorrelationKey {
         match message {
             ClientMessage::Quote(message) => Some(vec![Self::Quote(message.order_id)]),
             ClientMessage::ReplaceQuote(message) => Some(vec![Self::Quote(message.order_id)]),
-            ClientMessage::BatchQuotes(message) => Some(vec![Self::Batch(sorted_order_ids(
-                message.quotes.iter().map(|quote| quote.order_id),
-            ))]),
-            ClientMessage::CancelRfq(_) => None,
+            ClientMessage::BatchQuotes(_) => None,
             _ => message
                 .request_id()
                 .map(|request_id| vec![Self::Request(request_id)]),
@@ -41,20 +37,17 @@ impl CorrelationKey {
 
     fn for_server(message: &ServerMessage) -> Option<Self> {
         match message {
-            ServerMessage::QuoteAcknowledged(message) => Some(Self::Quote(message.order_id)),
-            ServerMessage::QuoteRejected(message) => Some(Self::Quote(message.order_id)),
-            ServerMessage::BatchQuotesAck(message) => Some(Self::Batch(sorted_order_ids(
-                message.results.iter().map(BatchQuoteResult::order_id),
-            ))),
+            ServerMessage::QuoteUpdate(message)
+                if matches!(
+                    message.state,
+                    QuoteState::Live { .. } | QuoteState::Rejected { .. }
+                ) =>
+            {
+                Some(Self::Quote(message.order_id))
+            }
             _ => message.request_id().map(Self::Request),
         }
     }
-}
-
-fn sorted_order_ids(ids: impl Iterator<Item = OrderId>) -> Vec<OrderId> {
-    let mut ids = ids.collect::<Vec<_>>();
-    ids.sort_unstable();
-    ids
 }
 
 struct PendingAwait {

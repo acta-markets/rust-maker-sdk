@@ -12,18 +12,20 @@ use serde::de::DeserializeOwned;
 
 pub use types::{
     Atoms, CycleGeneration, CycleReturn, CycleState, DepositWindow, ExposureDecimals, ExposureSpot,
-    GenerationStart, Metric, Moneyness, PositionClose, Transaction, VaultBalances, VaultGeneration,
-    VaultMetadataState, VaultStatsState, VaultTvl,
+    GenerationStart, Metric, Moneyness, NextCapitalStep, PositionClose, Transaction, VaultBalances,
+    VaultGeneration, VaultMetadataState, VaultStatsState, VaultTvl,
 };
 pub use types::{
-    CountLimit, PremiumFlow, ProjectionCursor, TokenProgramKind, Vault, VaultCapacity, VaultCycle,
+    CountLimit, HoldingFunding, HoldingType, PendingVaultUpdate, PremiumFlow, ProjectionCursor,
+    RequestQueue, TokenProgramKind, UnfundedHolding, Vault, VaultCapacity, VaultCycle,
     VaultDepositRequest, VaultExposure, VaultExposurePosition, VaultExposureTotal, VaultFees,
-    VaultLeg, VaultMetadata, VaultPerformance, VaultPolicy, VaultPosition, VaultPositionProduct,
-    VaultPositionRole, VaultPositionStatus, VaultPositionType, VaultPremium, VaultReturns,
-    VaultStaging, VaultWithdrawRequest, Venue, WindowReturn,
+    VaultLeg, VaultMetadata, VaultObligations, VaultPerformance, VaultPolicy, VaultPosition,
+    VaultPositionProduct, VaultPositionRole, VaultPositionStatus, VaultPositionType, VaultPremium,
+    VaultReturns, VaultStaging, VaultSwapRecord, VaultSwapRecordKind, VaultSwapStaging,
+    VaultUpdateKind, VaultWithdrawRequest, Venue, WindowReturn,
 };
 use types::{MarketsResponse, TokensResponse, VaultPositionsResponse, VaultsResponse};
-use types::{VaultCyclesResponse, VaultRequestsResponse};
+use types::{VaultCyclesResponse, VaultRequestsResponse, VaultSwapsResponse};
 
 use crate::ws::types::{MarketInfo, TokenInfo};
 
@@ -161,6 +163,16 @@ impl HttpClient {
         self.get(&format!("/api/v1/vaults/{pda}")).await
     }
 
+    /// The vault's side of one position; `404` when the vault is not a party to it.
+    pub async fn vault_position(
+        &self,
+        pda: crate::Address32,
+        position: crate::Address32,
+    ) -> Result<VaultPosition, HttpError> {
+        self.get(&format!("/api/v1/vaults/{pda}/positions/{position}"))
+            .await
+    }
+
     /// Every unsettled position of the vault, following the server cursor.
     pub async fn vault_positions(
         &self,
@@ -223,6 +235,47 @@ impl HttpClient {
         )
         .await?;
         Ok(response.requests)
+    }
+
+    /// Queued capital requests, unfunded physical holdings and pending governance updates.
+    pub async fn vault_obligations(
+        &self,
+        pda: crate::Address32,
+    ) -> Result<VaultObligations, HttpError> {
+        self.get(&format!("/api/v1/vaults/{pda}/obligations")).await
+    }
+
+    /// As [`Self::vault_obligations`]; a projection older than `min_version` answers HTTP 409.
+    pub async fn vault_obligations_at(
+        &self,
+        pda: crate::Address32,
+        min_version: u64,
+    ) -> Result<VaultObligations, HttpError> {
+        self.get(&format!(
+            "/api/v1/vaults/{pda}/obligations?min_version={min_version}"
+        ))
+        .await
+    }
+
+    /// Every swap the vault executed, newest first, served or self-built.
+    pub async fn vault_swaps(
+        &self,
+        pda: crate::Address32,
+    ) -> Result<Vec<VaultSwapRecord>, HttpError> {
+        let path = format!("/api/v1/vaults/{pda}/swaps");
+        let response: VaultSwapsResponse = crate::paging::fetch_all(
+            |cursor| {
+                let path = path.clone();
+                async move { self.get(&Self::page_path(&path, 200, &cursor)?).await }
+            },
+            |all: &VaultSwapsResponse| all.next_cursor.as_deref(),
+            |all, page| {
+                all.swaps.extend(page.swaps);
+                all.next_cursor = page.next_cursor;
+            },
+        )
+        .await?;
+        Ok(response.swaps)
     }
 
     /// Open and funded positions with indicative spot, moneyness and intrinsic value.

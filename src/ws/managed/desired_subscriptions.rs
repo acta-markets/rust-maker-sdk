@@ -83,17 +83,24 @@ impl DesiredSubscriptions {
             return;
         };
         let request_id = match message {
-            ServerMessage::SubscribeAck(data) => data.request_id,
-            ServerMessage::UnsubscribeAck(data) => data.request_id,
             ServerMessage::SubscriptionUpdated(data) => data.request_id,
-            ServerMessage::RequestError(data) => data.request_id,
+            ServerMessage::Reply(data)
+                if data.error().is_some()
+                    || matches!(
+                        data.result,
+                        crate::ws::types::ReplyResult::Subscribed { .. }
+                            | crate::ws::types::ReplyResult::Unsubscribed { .. }
+                    ) =>
+            {
+                data.request_id
+            }
             _ => return,
         };
         if pending.request_id != request_id {
             return;
         }
 
-        if matches!(message, ServerMessage::RequestError(_)) {
+        if matches!(message, ServerMessage::Reply(reply) if reply.error().is_some()) {
             self.reject_pending();
         } else {
             self.pending = None;
@@ -181,7 +188,7 @@ fn normalized(mints: &[crate::Address32]) -> HashSet<crate::Address32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ws::types::{RequestErrorEnvelope, ServerError, WsErrorCode};
+    use crate::ws::types::{ServerError, WsErrorCode};
 
     fn initial() -> SubscribeData {
         SubscribeData {
@@ -203,14 +210,16 @@ mod tests {
         }));
         assert!(desired.has_pending());
 
-        desired.resolve(&ServerMessage::RequestError(RequestErrorEnvelope {
-            request_id,
-            error: ServerError::Generic {
-                code: WsErrorCode::SubscriptionScopeTooLarge,
-                message: "test".to_string(),
-            },
-            delivery: crate::ws::types::server::Delivery::NotApplicable,
-        }));
+        desired.resolve(&ServerMessage::Reply(
+            crate::ws::types::ReplyMessage::failed(
+                request_id,
+                ServerError::Generic {
+                    code: WsErrorCode::SubscriptionScopeTooLarge,
+                    message: "test".to_string(),
+                },
+                crate::ws::types::server::Delivery::NotApplicable,
+            ),
+        ));
 
         let recovery = desired.recovery(&SubscriptionsMessage {
             next_cursor: None,

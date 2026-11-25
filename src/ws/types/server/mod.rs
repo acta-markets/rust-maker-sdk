@@ -38,23 +38,13 @@ pub enum ServerMessage {
     AuthError(AuthErrorData),
     LogoutSuccess(LogoutSuccessData),
     RfqCreated(RfqCreatedMessage),
-    RfqClosed(RfqClosedMessage),
     RfqBroadcast(RfqBroadcastMessage),
-    QuoteSelected(QuoteSelectedMessage),
-    QuoteCancelled(QuoteCancelledMessage),
+    QuoteUpdate(QuoteUpdateMessage),
+    RfqUpdate(RfqUpdateMessage),
     QuoteReceived(QuoteReceivedMessage),
     QuotesUpdate(QuotesUpdateMessage),
     IndicativePrices(IndicativePricesMessage),
-    QuoteRefreshRequested(QuoteRefreshRequestedMessage),
     IndicativePricesRequest(super::client::IndicativePricesRequestMessage),
-    QuoteAcknowledged(QuoteAcknowledgedMessage),
-    QuoteBestStatus(QuoteBestStatusMessage),
-    QuoteOutbid(QuoteOutbidMessage),
-    QuoteFilled(QuoteFilledMessage),
-    RfqAvailableAgain(RfqAvailableAgainMessage),
-    RfqLocked(RfqLockedMessage),
-    QuoteExpired(QuoteExpiredMessage),
-    QuoteRejected(QuoteRejectedMessage),
     ActiveRfqs(ActiveRfqsData),
     MakerPositions(MakerPositionsMessage),
     MyQuotes(MyQuotesMessage),
@@ -67,17 +57,11 @@ pub enum ServerMessage {
     MmSummary(MmSummaryData),
     TokenMarketsInfo(TokenMarketsInfoData),
     RfqSkipped(RfqSkippedMessage),
-    CancelQuoteAck(CancelQuoteAckMessage),
-    CancelAllQuotesAck(CancelAllQuotesAckMessage),
-    BatchQuotesAck(BatchQuotesAckMessage),
     Subscriptions(SubscriptionsMessage),
     MyActiveRfqs(MyActiveRfqsData),
     OrderStatus(OrderStatusMessage),
-    OrderAccepted(OrderAcceptedData),
+    OrderUpdate(OrderUpdateMessage),
     SponsoredTxToSign(SponsoredTxToSignData),
-    OrderSubmitted(OrderSubmittedData),
-    OrderConfirmed(OrderConfirmedData),
-    OrderFailed(OrderFailedData),
     MarketCreated(MarketInfo),
     MarketFinalized(MarketFinalizedData),
     ChainEvent(ChainEventMessage),
@@ -93,11 +77,8 @@ pub enum ServerMessage {
     MakerCapsUpdated(MakerCapsUpdatedMessage),
     StatsUpdate(StatsUpdateMessage),
     Pong(PongData),
+    Reply(ReplyMessage),
     Error(ServerError),
-    /// Request-level error: `request_id` echoes back the client's request.
-    RequestError(RequestErrorEnvelope),
-    SubscribeAck(SubscribeAckData),
-    UnsubscribeAck(UnsubscribeAckData),
     SubscriptionUpdated(SubscriptionUpdatedData),
     RequireInvite,
     InviteRedeemed(InviteRedeemedData),
@@ -106,19 +87,8 @@ pub enum ServerMessage {
     VaultProjectionAdvanced(VaultProjectionAdvancedData),
     VaultCatalogChanged(VaultCatalogChangedData),
     ReferenceChanged(ReferenceChangedData),
-    SwapQuoteResult(SwapQuoteResultData),
-    SwapSubmitResult(SwapSubmitResultData),
     SwapStatus(SwapStatusMessage),
     SwapSettled(SwapSettledMessage),
-    CommandAccepted(CommandAcceptedData),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RequestErrorEnvelope {
-    pub request_id: Uuid,
-    pub error: ServerError,
-    /// `not_applicable` except on `SubmitSignedSponsoredTx` and `SwapSubmit` failures.
-    pub delivery: Delivery,
 }
 
 /// Whether a rejected submission can have reached the keeper pipeline.
@@ -130,24 +100,6 @@ pub enum Delivery {
     NotForwarded,
     /// The signed transaction may be in flight.
     Unknown,
-}
-
-/// The server accepted a correlated command. It never reports chain success.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandAcceptedData {
-    pub request_id: Uuid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubscribeAckData {
-    pub request_id: Uuid,
-    pub subscribed: Vec<WsChannel>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnsubscribeAckData {
-    pub request_id: Uuid,
-    pub unsubscribed: Vec<WsChannel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -275,6 +227,9 @@ pub enum ServerError {
     #[error("{0}")]
     RateLimit(RateLimitReason),
 
+    #[error("rate limit exceeded; retry after {retry_after_ms} ms")]
+    RateLimited { retry_after_ms: u64 },
+
     #[error("{0}")]
     Cap(CapError),
 
@@ -391,10 +346,6 @@ impl ServerMessage {
     #[must_use]
     pub const fn request_id(&self) -> Option<Uuid> {
         match self {
-            Self::CancelQuoteAck(m) => Some(m.request_id),
-            Self::CancelAllQuotesAck(m) => Some(m.request_id),
-            Self::SubscribeAck(m) => Some(m.request_id),
-            Self::UnsubscribeAck(m) => Some(m.request_id),
             Self::SubscriptionUpdated(m) => Some(m.request_id),
             Self::Subscriptions(m) => Some(m.request_id),
             Self::Positions(m) => Some(m.request_id),
@@ -417,14 +368,11 @@ impl ServerMessage {
             Self::EarnSummary(m) => Some(m.request_id),
             Self::MmSummary(m) => Some(m.request_id),
             Self::TokenMarketsInfo(m) => Some(m.request_id),
-            Self::RequestError(env) => Some(env.request_id),
+            Self::Reply(m) => Some(m.request_id),
             Self::InviteRedeemed(m) => Some(m.request_id),
             Self::ReferralCodeClaimed(m) => Some(m.request_id),
             Self::MyReferralInfo(m) => Some(m.request_id),
-            Self::SwapQuoteResult(m) => Some(m.request_id),
-            Self::SwapSubmitResult(m) => Some(m.request_id),
             Self::SwapStatus(m) => Some(m.request_id),
-            Self::CommandAccepted(m) => Some(m.request_id),
 
             Self::Welcome(_)
             | Self::VersionMismatch(_)
@@ -438,29 +386,15 @@ impl ServerMessage {
             | Self::AuthError(_)
             | Self::LogoutSuccess(_)
             | Self::RfqCreated(_)
-            | Self::RfqClosed(_)
             | Self::RfqBroadcast(_)
-            | Self::QuoteSelected(_)
-            | Self::QuoteCancelled(_)
+            | Self::QuoteUpdate(_)
+            | Self::RfqUpdate(_)
             | Self::QuoteReceived(_)
             | Self::QuotesUpdate(_)
-            | Self::QuoteRefreshRequested(_)
             | Self::IndicativePricesRequest(_)
-            | Self::QuoteAcknowledged(_)
-            | Self::QuoteBestStatus(_)
-            | Self::QuoteOutbid(_)
-            | Self::QuoteFilled(_)
-            | Self::RfqAvailableAgain(_)
-            | Self::RfqLocked(_)
-            | Self::QuoteExpired(_)
-            | Self::QuoteRejected(_)
             | Self::RfqSkipped(_)
-            | Self::BatchQuotesAck(_)
-            | Self::OrderAccepted(_)
+            | Self::OrderUpdate(_)
             | Self::SponsoredTxToSign(_)
-            | Self::OrderSubmitted(_)
-            | Self::OrderConfirmed(_)
-            | Self::OrderFailed(_)
             | Self::MarketCreated(_)
             | Self::MarketFinalized(_)
             | Self::ChainEvent(_)
@@ -479,4 +413,75 @@ impl ServerMessage {
 /// Parse a server frame. The wire is closed: an unknown type or code is an error.
 pub fn parse_server_message(text: &str) -> Result<ServerMessage, serde_json::Error> {
     serde_json::from_str(text)
+}
+
+/// The one answer to a command that carried a `request_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplyMessage {
+    pub request_id: Uuid,
+    pub result: ReplyResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReplyResult {
+    Accepted,
+    /// Channels this request added; ones already subscribed are left out.
+    Subscribed {
+        channels: Vec<WsChannel>,
+    },
+    Unsubscribed {
+        channels: Vec<WsChannel>,
+    },
+    SwapQuote(SwapQuote),
+    /// Durable enqueue acknowledgement, not chain confirmation.
+    SwapSubmitted {
+        execution_id: crate::types::ids::OrderId,
+    },
+    Error {
+        error: ServerError,
+        delivery: Delivery,
+    },
+}
+
+impl ReplyMessage {
+    #[must_use]
+    pub const fn error(&self) -> Option<&ServerError> {
+        match &self.result {
+            ReplyResult::Error { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn delivery(&self) -> Option<Delivery> {
+        match &self.result {
+            ReplyResult::Error { delivery, .. } => Some(*delivery),
+            _ => None,
+        }
+    }
+}
+
+impl ReplyMessage {
+    /// Rejected before any transaction handoff could happen.
+    #[must_use]
+    pub const fn rejected(request_id: Uuid, error: ServerError) -> Self {
+        Self::failed(request_id, error, Delivery::NotApplicable)
+    }
+
+    #[must_use]
+    pub const fn failed(request_id: Uuid, error: ServerError, delivery: Delivery) -> Self {
+        Self {
+            request_id,
+            result: ReplyResult::Error { error, delivery },
+        }
+    }
+
+    #[must_use]
+    pub const fn accepted(request_id: Uuid) -> Self {
+        Self {
+            request_id,
+            result: ReplyResult::Accepted,
+        }
+    }
 }

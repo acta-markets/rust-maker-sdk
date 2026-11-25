@@ -233,7 +233,7 @@ impl MakerDataRequestError {
     pub fn server_error(&self) -> Option<&ServerError> {
         match self {
             Self::Rejected { response, .. } => match &**response {
-                ServerMessage::RequestError(error) => Some(&error.error),
+                ServerMessage::Reply(reply) => reply.error(),
                 _ => None,
             },
             _ => None,
@@ -286,9 +286,11 @@ impl MakerDataClient {
             .inner
             .send_await_ready(request.into_message(), timeout)
             .await?;
-        if let ServerMessage::RequestError(error) = &*message {
+        if let ServerMessage::Reply(reply) = &*message
+            && reply.error().is_some()
+        {
             return Err(MakerDataRequestError::Rejected {
-                request_id: error.request_id,
+                request_id: reply.request_id,
                 response: message,
             });
         }

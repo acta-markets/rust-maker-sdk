@@ -206,7 +206,8 @@ pub struct BatchQuotesMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RfqRequestMessage {
-    /// Also the idempotency key: a repeat while the RFQ is open fails with `duplicate_rfq_id`, which proves the first one created it.
+    /// Idempotency key: an identical repeat replays the original `RfqCreated` (and its closed
+    /// `RfqUpdate` if the RFQ ended); the same key with different parameters is `duplicate_rfq_id`.
     pub request_id: Uuid,
     pub market_pda: MarketId,
     pub terms: OptionTerms,

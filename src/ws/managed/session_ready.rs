@@ -1,3 +1,4 @@
+use crate::ws::types::{ReplyMessage, ReplyResult};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -216,8 +217,11 @@ async fn wait_for_subscriptions(
             ServerMessage::Subscriptions(data) if data.request_id == request_id => {
                 return Ok(data.clone());
             }
-            ServerMessage::RequestError(error) if error.request_id == request_id => {
-                return Err(request_failed(error.request_id, &error.error));
+            ServerMessage::Reply(ReplyMessage {
+                request_id: replied,
+                result: ReplyResult::Error { error, .. },
+            }) if *replied == request_id => {
+                return Err(request_failed(*replied, error));
             }
             _ => {}
         }
@@ -232,9 +236,15 @@ async fn wait_for_subscribe_ack(
     loop {
         let message = next_message(client, inbound).await?;
         match &*message {
-            ServerMessage::SubscribeAck(data) if data.request_id == request_id => return Ok(()),
-            ServerMessage::RequestError(error) if error.request_id == request_id => {
-                return Err(request_failed(error.request_id, &error.error));
+            ServerMessage::Reply(ReplyMessage {
+                request_id: replied,
+                result: ReplyResult::Subscribed { .. },
+            }) if *replied == request_id => return Ok(()),
+            ServerMessage::Reply(ReplyMessage {
+                request_id: replied,
+                result: ReplyResult::Error { error, .. },
+            }) if *replied == request_id => {
+                return Err(request_failed(*replied, error));
             }
             _ => {}
         }
@@ -249,9 +259,15 @@ async fn wait_for_unsubscribe_ack(
     loop {
         let message = next_message(client, inbound).await?;
         match &*message {
-            ServerMessage::UnsubscribeAck(data) if data.request_id == request_id => return Ok(()),
-            ServerMessage::RequestError(error) if error.request_id == request_id => {
-                return Err(request_failed(error.request_id, &error.error));
+            ServerMessage::Reply(ReplyMessage {
+                request_id: replied,
+                result: ReplyResult::Unsubscribed { .. },
+            }) if *replied == request_id => return Ok(()),
+            ServerMessage::Reply(ReplyMessage {
+                request_id: replied,
+                result: ReplyResult::Error { error, .. },
+            }) if *replied == request_id => {
+                return Err(request_failed(*replied, error));
             }
             _ => {}
         }
@@ -267,12 +283,15 @@ async fn wait_for_reconciliation(
     let mut continuations = std::collections::HashMap::<&str, crate::paging::Continuation>::new();
     while !pending.is_empty() {
         let message = next_message(client, inbound).await?;
-        if let ServerMessage::RequestError(error) = &*message
+        if let ServerMessage::Reply(ReplyMessage {
+            request_id: replied,
+            result: ReplyResult::Error { error, .. },
+        }) = &*message
             && pending
                 .iter()
-                .any(|request| request.request_id() == Some(error.request_id))
+                .any(|request| request.request_id() == Some(*replied))
         {
-            return Err(request_failed(error.request_id, &error.error));
+            return Err(request_failed(*replied, error));
         }
         let index = pending
             .iter()

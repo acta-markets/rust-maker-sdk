@@ -23,8 +23,8 @@ use crate::wire::decode_base58_64;
 use crate::ws::managed::{ManagedWsEvent, ManagedWsState, SendAwaitError};
 use crate::ws::types::{
     ActiveRfqsData, AuthRequestData, ClientMessage, HelloData, MakerPositionCapInfo, MmSummaryData,
-    MyActiveRfqsData, MyQuotesMessage, PongData, PositionsData, ServerMessage, SwapQuoteData,
-    SwapQuoteResultData, VaultAuthSuccessData, VaultProjectionAdvancedData, WelcomeData,
+    MyActiveRfqsData, MyQuotesMessage, PongData, PositionsData, ServerMessage, SwapQuote,
+    SwapQuoteData, VaultAuthSuccessData, VaultProjectionAdvancedData, WelcomeData,
 };
 
 type Socket = WebSocketStream<TcpStream>;
@@ -203,9 +203,11 @@ async fn answer_reconcile(socket: &mut Socket, expected: &[&str]) {
             assert!(subscribe.products == crate::ProductSet::ALL);
             send_server(
                 socket,
-                ServerMessage::SubscribeAck(crate::ws::types::SubscribeAckData {
+                ServerMessage::Reply(crate::ws::types::ReplyMessage {
                     request_id: subscribe.request_id,
-                    subscribed: subscribe.channels,
+                    result: crate::ws::types::ReplyResult::Subscribed {
+                        channels: subscribe.channels,
+                    },
                 }),
             )
             .await;
@@ -534,17 +536,20 @@ async fn swap_quote_is_correlated_and_times_out_without_a_reply() {
         };
         send_server(
             &mut socket,
-            ServerMessage::SwapQuoteResult(SwapQuoteResultData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: request.request_id,
-                execution_id: OrderId::new([4u8; 32]),
-                mode: request.mode,
-                tx_base64: String::new(),
-                last_valid_block_height: 1,
-                in_amount: request.amount.clone(),
-                quoted_out_amount: "990".to_string(),
-                minimum_out_amount: "985".to_string(),
-                valid_until: std::time::UNIX_EPOCH,
-                staging: crate::ws::types::server::SwapStaging::None,
+                result: crate::ws::types::ReplyResult::SwapQuote(crate::ws::types::SwapQuote {
+                    request_id: request.request_id,
+                    execution_id: OrderId::new([4u8; 32]),
+                    mode: request.mode,
+                    tx_base64: String::new(),
+                    last_valid_block_height: 1,
+                    in_amount: request.amount.clone(),
+                    quoted_out_amount: "990".to_string(),
+                    minimum_out_amount: "985".to_string(),
+                    valid_until: std::time::UNIX_EPOCH,
+                    staging: crate::ws::types::server::SwapStaging::None,
+                }),
             }),
         )
         .await;
@@ -581,7 +586,7 @@ async fn swap_quote_is_correlated_and_times_out_without_a_reply() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn paused_swap_requests_receive_their_own_rejections_out_of_order() {
-    use crate::ws::types::{RequestErrorEnvelope, ServerError, WsErrorCode};
+    use crate::ws::types::{ServerError, WsErrorCode};
 
     let (listener, url) = bind().await;
     let peer = tokio::spawn(async move {
@@ -598,14 +603,14 @@ async fn paused_swap_requests_receive_their_own_rejections_out_of_order() {
         for request_id in ids.into_iter().rev() {
             send_server(
                 &mut socket,
-                ServerMessage::RequestError(RequestErrorEnvelope {
+                ServerMessage::Reply(crate::ws::types::ReplyMessage::failed(
                     request_id,
-                    error: ServerError::Generic {
+                    ServerError::Generic {
                         code: WsErrorCode::TradingPaused,
                         message: "Trading is paused".into(),
                     },
-                    delivery: crate::ws::types::server::Delivery::NotApplicable,
-                }),
+                    crate::ws::types::server::Delivery::NotApplicable,
+                )),
             )
             .await;
         }
@@ -628,10 +633,8 @@ async fn paused_swap_requests_receive_their_own_rejections_out_of_order() {
             panic!("pause must reject the request, not time out");
         };
         assert_eq!(request_id, expected_id);
-        assert!(
-            matches!(response.as_ref(), ServerMessage::RequestError(error)
-            if matches!(&error.error, ServerError::Generic { code: WsErrorCode::TradingPaused, .. }))
-        );
+        assert!(matches!(response.as_ref(), ServerMessage::Reply(error)
+            if matches!(error.error(), Some(ServerError::Generic { code: WsErrorCode::TradingPaused, .. }))));
     }
     client.close().await.unwrap();
     peer.await.unwrap();
@@ -641,8 +644,8 @@ async fn paused_swap_requests_receive_their_own_rejections_out_of_order() {
 async fn trading_commands_resolve_on_their_receipt_or_rejection() {
     use crate::types::ids::{MarketId, Quantity, Strike, TimeoutSeconds};
     use crate::ws::types::{
-        AcceptQuoteMessage, CommandAcceptedData, Delivery, RequestErrorEnvelope, RfqRequestMessage,
-        ServerError, SubmitSignedSponsoredTxData, SwapExecutionState, SwapStatusMessage,
+        AcceptQuoteMessage, Delivery, RfqRequestMessage, ServerError, SubmitSignedSponsoredTxData,
+        SwapExecutionState, SwapStatusMessage,
     };
 
     let (listener, url) = bind().await;
@@ -674,9 +677,7 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
                 .expect("send RfqCreated");
             send_server(
                 &mut socket,
-                ServerMessage::CommandAccepted(CommandAcceptedData {
-                    request_id: rfq.request_id,
-                }),
+                ServerMessage::Reply(crate::ws::types::ReplyMessage::accepted(rfq.request_id)),
             )
             .await;
         }
@@ -685,11 +686,11 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
         };
         send_server(
             &mut socket,
-            ServerMessage::RequestError(RequestErrorEnvelope {
-                request_id: accept.request_id,
-                error: ServerError::QuoteNotFound,
-                delivery: crate::ws::types::server::Delivery::NotApplicable,
-            }),
+            ServerMessage::Reply(crate::ws::types::ReplyMessage::failed(
+                accept.request_id,
+                ServerError::QuoteNotFound,
+                crate::ws::types::server::Delivery::NotApplicable,
+            )),
         )
         .await;
         for delivery in [Delivery::NotForwarded, Delivery::Unknown] {
@@ -699,11 +700,11 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
             };
             send_server(
                 &mut socket,
-                ServerMessage::RequestError(RequestErrorEnvelope {
-                    request_id: submit.request_id,
-                    error: ServerError::InternalError,
+                ServerMessage::Reply(crate::ws::types::ReplyMessage::failed(
+                    submit.request_id,
+                    ServerError::InternalError,
                     delivery,
-                }),
+                )),
             )
             .await;
         }
@@ -713,9 +714,7 @@ async fn trading_commands_resolve_on_their_receipt_or_rejection() {
         };
         send_server(
             &mut socket,
-            ServerMessage::CommandAccepted(CommandAcceptedData {
-                request_id: submit.request_id,
-            }),
+            ServerMessage::Reply(crate::ws::types::ReplyMessage::accepted(submit.request_id)),
         )
         .await;
         let ClientMessage::GetSwapStatus(status) = receive_client(&mut socket).await else {
@@ -891,7 +890,7 @@ async fn raw_vault_actions_require_ready() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vault_unsubscribe_survives_fresh_authentication() {
-    use crate::ws::types::{UnsubscribeAckData, UnsubscribeData, WsChannel};
+    use crate::ws::types::{UnsubscribeData, WsChannel};
     let (listener, url) = bind().await;
     let (acked, may_disconnect) = oneshot::channel();
     let peer = tokio::spawn(async move {
@@ -904,9 +903,11 @@ async fn vault_unsubscribe_survives_fresh_authentication() {
         assert_eq!(request.channels, vec![WsChannel::Vaults]);
         send_server(
             &mut socket,
-            ServerMessage::UnsubscribeAck(UnsubscribeAckData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: request.request_id,
-                unsubscribed: request.channels,
+                result: crate::ws::types::ReplyResult::Unsubscribed {
+                    channels: request.channels,
+                },
             }),
         )
         .await;
@@ -920,9 +921,11 @@ async fn vault_unsubscribe_survives_fresh_authentication() {
         assert_eq!(request.channels, vec![WsChannel::Vaults]);
         send_server(
             &mut socket,
-            ServerMessage::UnsubscribeAck(UnsubscribeAckData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: request.request_id,
-                unsubscribed: request.channels,
+                result: crate::ws::types::ReplyResult::Unsubscribed {
+                    channels: request.channels,
+                },
             }),
         )
         .await;
@@ -983,6 +986,12 @@ async fn reconnect_clears_old_grant_then_uses_reduced_permissions() {
                     }),
                 )
                 .await;
+                let _ = socket
+                    .close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                        code: 4007.into(),
+                        reason: "vault_session_invalidated".into(),
+                    }))
+                    .await;
                 Some(socket)
             } else {
                 drop(socket);
@@ -999,7 +1008,21 @@ async fn reconnect_clears_old_grant_then_uses_reduced_permissions() {
         assert!(client.can_maker() && client.can_taker());
         let mut grants = client.subscribe_vault_auth();
         let mut state = client.raw().subscribe_state();
+        let mut events = client.raw().subscribe_events();
         disconnect.send(()).unwrap();
+        let close = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let ManagedWsEvent::Disconnected { close } = events.recv().await.unwrap() {
+                    break close.and_then(|close| close.close_code());
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            close,
+            invalidate.then_some(crate::ws::types::CloseCode::VaultSessionInvalidated)
+        );
         tokio::time::timeout(Duration::from_secs(2), grants.wait_for(Option::is_none))
             .await
             .unwrap()
@@ -1086,9 +1109,11 @@ async fn failed_initial_reads_clear_the_authenticated_grant() {
         };
         send_server(
             &mut socket,
-            ServerMessage::SubscribeAck(crate::ws::types::SubscribeAckData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: subscribe.request_id,
-                subscribed: subscribe.channels,
+                result: crate::ws::types::ReplyResult::Subscribed {
+                    channels: subscribe.channels,
+                },
             }),
         )
         .await;
@@ -1097,14 +1122,14 @@ async fn failed_initial_reads_clear_the_authenticated_grant() {
         };
         send_server(
             &mut socket,
-            ServerMessage::RequestError(crate::ws::types::RequestErrorEnvelope {
-                request_id: request.request_id,
-                error: crate::ws::types::ServerError::Generic {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage::failed(
+                request.request_id,
+                crate::ws::types::ServerError::Generic {
                     code: crate::ws::types::WsErrorCode::TemporarilyUnavailable,
                     message: "projection unavailable".into(),
                 },
-                delivery: crate::ws::types::server::Delivery::NotApplicable,
-            }),
+                crate::ws::types::server::Delivery::NotApplicable,
+            )),
         )
         .await;
         drain_until_closed(socket).await;
@@ -1136,7 +1161,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
 
     use crate::chain::vault::{
         ComputeBudgetBounds, PairPriceRoutes, PriceRoute, VaultIntentError, VaultManager,
-        VaultManagerArgs, VaultOpenIntent, VaultSaleTerms, VaultStagingState, VaultSwapIntent,
+        VaultManagerArgs, VaultOpenIntent, VaultOpenTerms, VaultStagingState, VaultSwapIntent,
         VaultTradeTerms,
     };
 
@@ -1194,7 +1219,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         writer: &writer,
         maker_owner: key(&case["maker_owner"]),
         maker_quote_signer: key(&p["quote_signer"]),
-        terms: VaultSaleTerms::Physical(VaultTradeTerms {
+        terms: VaultOpenTerms::Physical(VaultTradeTerms {
             underlying_mint: key(&p["underlying_mint"]),
             quote_mint: key(&p["quote_mint"]),
             expiry_ts: p["expiry_ts"].as_u64().unwrap(),
@@ -1267,7 +1292,7 @@ async fn checked_signing_verifies_served_intent_before_signing() {
         amount: "1000000".into(),
         slippage_bps: 50,
     };
-    let quote = SwapQuoteResultData {
+    let quote = SwapQuote {
         request_id: request.request_id,
         execution_id: OrderId::new([4; 32]),
         mode: VaultSwapMode::Rebalance,
@@ -1310,5 +1335,5 @@ async fn checked_signing_verifies_served_intent_before_signing() {
 }
 
 #[cfg(feature = "chain-rpc")]
-#[path = "vault_sale_tests.rs"]
+#[path = "vault_trade_tests.rs"]
 mod sale;

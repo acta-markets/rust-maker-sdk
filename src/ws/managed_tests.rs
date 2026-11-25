@@ -11,11 +11,10 @@ use crate::types::ids::{MarketId, Nonce, OrderId, Price, Quantity, Strike, Timeo
 use crate::types::{OptionTerms, RfqCloseReason, TakerSide};
 use crate::ws::types::common::WsChannel;
 use crate::ws::types::{
-    AcceptQuoteMessage, AuthRequestData, AuthSuccessData, BatchQuoteResult, BatchQuotesAckMessage,
-    BatchQuotesMessage, CancelQuoteData, CancelRfqData, ClientMessage, CommandAcceptedData,
-    Delivery, GetMmSummaryMessage, QuoteAcknowledgedMessage, QuoteMessage, QuoteRejectReason,
-    QuoteRejectedMessage, RequestErrorEnvelope, RfqClosedMessage, RfqRequestMessage, ServerError,
-    ServerMessage, SubmitSignedSponsoredTxData, SubscribeData, WelcomeData, WsErrorCode,
+    AcceptQuoteMessage, AuthRequestData, AuthSuccessData, BatchQuotesMessage, CancelQuoteData,
+    CancelRfqData, ClientMessage, Delivery, GetMmSummaryMessage, QuoteMessage, QuoteRejectReason,
+    RfqRequestMessage, ServerError, ServerMessage, SubmitSignedSponsoredTxData, SubscribeData,
+    WelcomeData, WsErrorCode,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::time::{Duration, UNIX_EPOCH};
@@ -1112,11 +1111,11 @@ fn request_error_is_routed_by_request_id() {
     });
     let _rx = register(&mut tracker, 1, &message);
 
-    let error = ServerMessage::RequestError(RequestErrorEnvelope {
+    let error = ServerMessage::Reply(crate::ws::types::ReplyMessage::failed(
         request_id,
-        error: ServerError::InternalError,
-        delivery: crate::ws::types::server::Delivery::NotApplicable,
-    });
+        ServerError::InternalError,
+        crate::ws::types::server::Delivery::NotApplicable,
+    ));
     assert!(tracker.take_for_message(&error).is_some());
 }
 
@@ -1166,7 +1165,7 @@ fn command_receipts_resolve_by_request_id() {
     for (request_id, message) in correlated_commands() {
         let mut tracker = AwaitTracker::new(2);
         let _rx = register(&mut tracker, 1, &message);
-        let accepted = ServerMessage::CommandAccepted(CommandAcceptedData { request_id });
+        let accepted = ServerMessage::Reply(crate::ws::types::ReplyMessage::accepted(request_id));
         assert!(tracker.take_for_message(&accepted).is_some(), "{message:?}");
         assert_eq!(tracker.len(), 0);
     }
@@ -1182,20 +1181,20 @@ fn command_rejections_resolve_by_request_id_with_delivery() {
         for (request_id, message) in correlated_commands() {
             let mut tracker = AwaitTracker::new(2);
             let mut rx = register(&mut tracker, 1, &message);
-            let rejected = ServerMessage::RequestError(RequestErrorEnvelope {
+            let rejected = ServerMessage::Reply(crate::ws::types::ReplyMessage::failed(
                 request_id,
-                error: ServerError::InternalError,
+                ServerError::InternalError,
                 delivery,
-            });
+            ));
             let tx = tracker.take_for_message(&rejected).expect("correlated");
             tx.send(Ok(Arc::new(rejected))).expect("send");
             let Ok(Ok(response)) = rx.try_recv() else {
                 panic!("rejection not delivered for {message:?}");
             };
-            let ServerMessage::RequestError(envelope) = &*response else {
-                panic!("expected RequestError");
+            let ServerMessage::Reply(envelope) = &*response else {
+                panic!("expected an error reply");
             };
-            assert_eq!(envelope.delivery, delivery);
+            assert_eq!(envelope.delivery(), Some(delivery));
         }
     }
 }
@@ -1236,51 +1235,42 @@ fn cancel_quote_request_error_resolves_without_timeout() {
     });
     let _rx = register(&mut tracker, 1, &message);
 
-    let error = ServerMessage::RequestError(RequestErrorEnvelope {
+    let error = ServerMessage::Reply(crate::ws::types::ReplyMessage::failed(
         request_id,
-        error: ServerError::InternalError,
-        delivery: crate::ws::types::server::Delivery::NotApplicable,
-    });
+        ServerError::InternalError,
+        crate::ws::types::server::Delivery::NotApplicable,
+    ));
     assert!(tracker.take_for_message(&error).is_some());
     assert_eq!(tracker.len(), 0);
 }
 
 #[test]
-fn cancel_rfq_without_a_success_receipt_is_not_awaitable() {
+fn cancel_rfq_is_correlated_by_its_reply() {
     let rfq_id = Uuid::new_v4();
-    let message = ClientMessage::CancelRfq(CancelRfqData {
-        rfq_id,
-        request_id: Uuid::new_v4(),
-    });
-    assert!(matches!(
-        AwaitTracker::prepare(&message),
-        Err(SendAwaitError::NoCorrelationKey)
-    ));
+    let request_id = Uuid::new_v4();
     let mut tracker = AwaitTracker::new(2);
-    let _rx = register(
+    let mut rx = register(
         &mut tracker,
         1,
-        &ClientMessage::CancelQuote(CancelQuoteData {
-            rfq_id,
-            request_id: Uuid::new_v4(),
-        }),
+        &ClientMessage::CancelRfq(CancelRfqData { rfq_id, request_id }),
     );
-    for reason in [
-        RfqCloseReason::TakerCancelled,
-        RfqCloseReason::Expired,
-        RfqCloseReason::Filled,
-    ] {
-        let closed = ServerMessage::RfqClosed(RfqClosedMessage {
-            rfq_id,
-            rfq_version: Default::default(),
-            reason,
-            your_quote: crate::ws::types::YourQuote::None,
+    let closed = ServerMessage::RfqUpdate(crate::ws::types::RfqUpdateMessage {
+        rfq_id,
+        rfq_version: Default::default(),
+        state: crate::ws::types::RfqState::Closed {
+            reason: RfqCloseReason::TakerCancelled,
             winner: crate::ws::types::RfqWinner::None,
-            closed_at: UNIX_EPOCH,
-        });
-        assert!(tracker.take_for_message(&closed).is_none());
-    }
-    assert_eq!(tracker.len(), 1);
+            at: UNIX_EPOCH,
+        },
+    });
+    assert!(tracker.take_for_message(&closed).is_none());
+    let accepted = ServerMessage::Reply(crate::ws::types::ReplyMessage::accepted(request_id));
+    let tx = tracker
+        .take_for_message(&accepted)
+        .expect("correlated by request id");
+    tx.send(Ok(Arc::new(accepted))).expect("send");
+    assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    assert_eq!(tracker.len(), 0);
 }
 
 #[test]
@@ -1291,10 +1281,14 @@ fn concurrent_quote_acks_are_correlated_out_of_order() {
     let mut first_rx = register(&mut tracker, 1, &ClientMessage::Quote(first.clone()));
     let mut second_rx = register(&mut tracker, 2, &ClientMessage::Quote(second.clone()));
 
-    let second_ack = ServerMessage::QuoteAcknowledged(QuoteAcknowledgedMessage {
+    let second_ack = ServerMessage::QuoteUpdate(crate::ws::types::QuoteUpdateMessage {
         rfq_id: second.rfq_id,
         order_id: second.order_id,
-        replaced: crate::ws::types::ReplacedQuote::None,
+        state: crate::ws::types::QuoteState::Live {
+            rfq_version: crate::RfqVersion::new(1),
+            is_best: true,
+            best_price: crate::ws::types::QuotedPrice::None,
+        },
     });
     tracker
         .take_for_message(&second_ack)
@@ -1314,68 +1308,27 @@ fn quote_rejection_resolves_the_matching_quote() {
     let mut tracker = AwaitTracker::new(2);
     let quote = quote(3);
     let _rx = register(&mut tracker, 1, &ClientMessage::Quote(quote.clone()));
-    let rejection = ServerMessage::QuoteRejected(QuoteRejectedMessage {
+    let rejection = ServerMessage::QuoteUpdate(crate::ws::types::QuoteUpdateMessage {
         rfq_id: quote.rfq_id,
         order_id: quote.order_id,
-        reason: QuoteRejectReason::DuplicateOrderId,
-        message: "rejected".to_string(),
+        state: crate::ws::types::QuoteState::Rejected {
+            reason: QuoteRejectReason::InvalidSignature,
+            message: "rejected".to_string(),
+        },
     });
 
     assert!(tracker.take_for_message(&rejection).is_some());
 }
 
 #[test]
-fn batch_ack_is_correlated_independently_of_result_order() {
-    let mut tracker = AwaitTracker::new(2);
-    let first = quote(4);
-    let second = quote(5);
+fn a_batch_has_no_single_answer_to_await() {
     let batch = ClientMessage::BatchQuotes(BatchQuotesMessage {
-        quotes: vec![first.clone(), second.clone()],
+        quotes: vec![quote(4), quote(5)],
     });
-    let _rx = register(&mut tracker, 1, &batch);
-    let ack = ServerMessage::BatchQuotesAck(BatchQuotesAckMessage {
-        results: vec![
-            BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
-                rfq_id: second.rfq_id,
-                order_id: second.order_id,
-                replaced: crate::ws::types::ReplacedQuote::None,
-            }),
-            BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
-                rfq_id: first.rfq_id,
-                order_id: first.order_id,
-                replaced: crate::ws::types::ReplacedQuote::None,
-            }),
-        ],
-    });
-
-    assert!(tracker.take_for_message(&ack).is_some());
-}
-
-#[test]
-fn batch_ack_with_future_status_still_correlates_by_order_id() {
-    let mut tracker = AwaitTracker::new(2);
-    let first = quote(14);
-    let second = quote(15);
-    let batch = ClientMessage::BatchQuotes(BatchQuotesMessage {
-        quotes: vec![first.clone(), second.clone()],
-    });
-    let _rx = register(&mut tracker, 1, &batch);
-    let ack = ServerMessage::BatchQuotesAck(BatchQuotesAckMessage {
-        results: vec![
-            BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
-                rfq_id: first.rfq_id,
-                order_id: first.order_id,
-                replaced: crate::ws::types::ReplacedQuote::None,
-            }),
-            BatchQuoteResult::Acknowledged(QuoteAcknowledgedMessage {
-                rfq_id: second.rfq_id,
-                order_id: second.order_id,
-                replaced: crate::ws::types::ReplacedQuote::None,
-            }),
-        ],
-    });
-
-    assert!(tracker.take_for_message(&ack).is_some());
+    assert!(matches!(
+        AwaitTracker::prepare(&batch),
+        Err(SendAwaitError::NoCorrelationKey)
+    ));
 }
 
 #[test]
@@ -1470,7 +1423,7 @@ async fn managed_handle_sends_a_physical_buy_quote() {
 }
 
 #[tokio::test]
-async fn managed_handle_rejects_rfq_buys_and_passes_spread_buy_quotes() {
+async fn managed_handle_passes_buy_rfqs_and_spread_buy_quotes() {
     let (handle, mut commands) = super::ManagedWsHandle::test_handle(1, 1);
     handle.inject_state(ManagedWsState::Ready {
         connection_epoch: 1,
@@ -1491,13 +1444,10 @@ async fn managed_handle_rejects_rfq_buys_and_passes_spread_buy_quotes() {
         quantity: Quantity::new(1),
         timeout_seconds: TimeoutSeconds::new(30),
     });
-    assert!(matches!(
-        handle.send(rfq).await,
-        Err(super::ManagedWsError::InvalidMessage(
-            OutboundMessageError::TakerBuyUnsupported
-        ))
-    ));
-    assert!(commands.try_recv().is_err());
+    let buyer = handle.clone();
+    let sent = tokio::spawn(async move { buyer.send(rfq).await });
+    assert!(commands.recv().await.is_some(), "a buy RFQ is sent");
+    sent.abort();
 
     let mut quote = quote(1);
     quote.side = TakerSide::Buy;
@@ -1552,7 +1502,7 @@ fn drain_all_resolves_every_waiter_as_disconnected() {
 
 #[test]
 fn cancel_ack_correlates_requests_and_ignores_lifecycle_events() {
-    use crate::ws::types::{CancelQuoteAckMessage, QuoteCancelReason, QuoteCancelledMessage};
+    use crate::ws::types::{QuoteCancelReason, QuoteState, QuoteUpdateMessage};
     let mut tracker = AwaitTracker::new(2);
     let rfq_id = Uuid::new_v4();
     let first = Uuid::new_v4();
@@ -1575,21 +1525,18 @@ fn cancel_ack_correlates_requests_and_ignores_lifecycle_events() {
     );
     assert!(
         tracker
-            .take_for_message(&ServerMessage::QuoteCancelled(QuoteCancelledMessage {
+            .take_for_message(&ServerMessage::QuoteUpdate(QuoteUpdateMessage {
                 rfq_id,
-                order_ids: vec![],
-                reason: QuoteCancelReason::Requested,
-                cancelled_at: UNIX_EPOCH,
+                order_id: crate::types::OrderId([1; 32]),
+                state: QuoteState::Cancelled {
+                    rfq_version: crate::RfqVersion::new(1),
+                    reason: QuoteCancelReason::Requested,
+                },
             }))
             .is_none()
     );
-    let ack = |request_id| {
-        ServerMessage::CancelQuoteAck(CancelQuoteAckMessage {
-            request_id,
-            rfq_id,
-            cancelled_order_ids: vec![],
-        })
-    };
+    let ack =
+        |request_id| ServerMessage::Reply(crate::ws::types::ReplyMessage::accepted(request_id));
     assert!(tracker.take_for_message(&ack(second)).is_some());
     assert!(tracker.take_for_message(&ack(second)).is_none());
     assert_eq!(tracker.len(), 1);
@@ -1822,9 +1769,11 @@ async fn recover_test_peer(
                         .await;
                     }
                 }
-                ServerMessage::SubscribeAck(SubscribeAckData {
+                ServerMessage::Reply(crate::ws::types::ReplyMessage {
                     request_id: m.request_id,
-                    subscribed: m.channels,
+                    result: crate::ws::types::ReplyResult::Subscribed {
+                        channels: m.channels,
+                    },
                 })
             }
             ClientMessage::GetActiveRfqs(m) => {

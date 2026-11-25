@@ -18,8 +18,8 @@ use crate::ws::types::{
     AcceptQuoteMessage, BatchQuotesMessage, CancelAllQuotesMessage, CancelQuoteData, CancelRfqData,
     ClientMessage, Delivery, GetSwapStatusMessage, QuoteMessage, ReplaceQuoteMessage,
     RfqRequestMessage, ServerError, ServerMessage, SponsoredTxToSignData,
-    SubmitSignedSponsoredTxData, SubscribeData, SwapQuoteData, SwapQuoteResultData,
-    SwapStatusMessage, SwapSubmitData, SwapSubmitResultData, UnsubscribeData, VaultAuthSuccessData,
+    SubmitSignedSponsoredTxData, SubscribeData, SwapQuote, SwapQuoteData, SwapStatusMessage,
+    SwapSubmitData, UnsubscribeData, VaultAuthSuccessData,
 };
 
 use solana_message::AddressLookupTableAccount;
@@ -47,8 +47,9 @@ pub enum VaultClientError {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum VaultRequestError {
-    #[error("taker_buy_unsupported")]
-    TakerBuyUnsupported,
+    /// The operator lacks `OPEN_AS_WRITER` to sell or `BUY_FROM_MAKERS` to buy.
+    #[error("operator may not take this side")]
+    SideNotPermitted,
     #[error(transparent)]
     Session(#[from] ManagedWsError),
     #[error(transparent)]
@@ -72,7 +73,7 @@ impl VaultRequestError {
     pub fn server_error(&self) -> Option<&ServerError> {
         match self {
             Self::Rejected { response, .. } => match &**response {
-                ServerMessage::RequestError(error) => Some(&error.error),
+                ServerMessage::Reply(reply) => reply.error(),
                 _ => None,
             },
             _ => None,
@@ -85,15 +86,15 @@ impl VaultRequestError {
     pub fn delivery(&self) -> Option<Delivery> {
         match self {
             Self::Rejected { response, .. } => match &**response {
-                ServerMessage::RequestError(error) => match error.delivery {
-                    Delivery::NotApplicable => None,
-                    delivery => Some(delivery),
+                ServerMessage::Reply(reply) => match reply.delivery() {
+                    Some(Delivery::NotApplicable) | None => None,
+                    delivery => delivery,
                 },
                 _ => Some(Delivery::Unknown),
             },
             Self::Session(ManagedWsError::NotReady | ManagedWsError::QueueFull)
             | Self::Gated
-            | Self::TakerBuyUnsupported
+            | Self::SideNotPermitted
             | Self::Transport(
                 SendAwaitError::SubscriptionPending
                 | SendAwaitError::NotReady
@@ -245,14 +246,18 @@ impl VaultOperatorClient {
 
     /// Resolves on the server's receipt; `RfqCreated` still arrives as a push.
     pub async fn rfq_request(&self, payload: RfqRequestMessage) -> Result<(), VaultRequestError> {
-        if payload.side.is_taker_buy() {
-            return Err(VaultRequestError::TakerBuyUnsupported);
+        let buy = payload.side.is_taker_buy();
+        if self
+            .permissions()
+            .is_some_and(|p| !if buy { p.can_buy() } else { p.can_sell() })
+        {
+            return Err(VaultRequestError::SideNotPermitted);
         }
         self.command(ClientMessage::RfqRequest(payload)).await
     }
 
-    pub async fn cancel_rfq(&self, payload: CancelRfqData) -> Result<(), ManagedWsError> {
-        self.send(ClientMessage::CancelRfq(payload)).await
+    pub async fn cancel_rfq(&self, payload: CancelRfqData) -> Result<(), VaultRequestError> {
+        self.command(ClientMessage::CancelRfq(payload)).await
     }
 
     pub async fn accept_quote(&self, payload: AcceptQuoteMessage) -> Result<(), VaultRequestError> {
@@ -280,12 +285,7 @@ impl VaultOperatorClient {
         tables: &[AddressLookupTableAccount],
         bounds: ComputeBudgetBounds,
     ) -> Result<(SubmitSignedSponsoredTxData, String), VaultTxError> {
-        let expected_participant = match intent {
-            VaultOpenIntent::Sale { writer, .. }
-            | VaultOpenIntent::BetweenVaults { writer, .. } => writer.actor(),
-            VaultOpenIntent::Fill { taker, .. } => *taker,
-            VaultOpenIntent::Buy { holder, .. } => *holder,
-        };
+        let expected_participant = intent.participant();
         let signer = Pubkey::new_from_array(self.operator.pubkey_bytes());
         if signer != expected_participant {
             return Err(VaultIntentError::ParticipantSigner {
@@ -316,15 +316,15 @@ impl VaultOperatorClient {
             .await
     }
 
-    pub async fn swap_quote(
-        &self,
-        payload: SwapQuoteData,
-    ) -> Result<SwapQuoteResultData, VaultRequestError> {
+    pub async fn swap_quote(&self, payload: SwapQuoteData) -> Result<SwapQuote, VaultRequestError> {
         self.request(
             ClientMessage::SwapQuote(payload),
-            "swap_quote_result",
+            "swap_quote",
             |message| match message {
-                ServerMessage::SwapQuoteResult(data) => Some(data.clone()),
+                ServerMessage::Reply(crate::ws::types::ReplyMessage {
+                    result: crate::ws::types::ReplyResult::SwapQuote(quote),
+                    ..
+                }) => Some(quote.clone()),
                 _ => None,
             },
         )
@@ -348,20 +348,24 @@ impl VaultOperatorClient {
     }
 
     /// Submits only in `connection_epoch` and only if `gate` admits it; resolves on
-    /// the durable enqueue receipt. [`VaultRequestError::delivery`] classifies failures.
+    /// the durable enqueue receipt with the swap's `execution_id`.
+    /// [`VaultRequestError::delivery`] classifies failures.
     pub async fn swap_submit_in_epoch(
         &self,
         payload: SwapSubmitData,
         connection_epoch: u64,
         gate: &impl SendGate,
-    ) -> Result<SwapSubmitResultData, VaultRequestError> {
+    ) -> Result<OrderId, VaultRequestError> {
         self.gated_request(
             gate,
             connection_epoch,
             ClientMessage::SwapSubmit(payload),
-            "swap_submit_result",
+            "swap_submitted",
             |message| match message {
-                ServerMessage::SwapSubmitResult(data) => Some(data.clone()),
+                ServerMessage::Reply(crate::ws::types::ReplyMessage {
+                    result: crate::ws::types::ReplyResult::SwapSubmitted { execution_id },
+                    ..
+                }) => Some(*execution_id),
                 _ => None,
             },
         )
@@ -440,11 +444,7 @@ impl VaultOperatorClient {
     }
 
     async fn command(&self, message: ClientMessage) -> Result<(), VaultRequestError> {
-        self.request(message, "command_accepted", |message| match message {
-            ServerMessage::CommandAccepted(_) => Some(()),
-            _ => None,
-        })
-        .await
+        self.request(message, "accepted", accepted).await
     }
 
     #[cfg(feature = "chain-rpc")]
@@ -454,17 +454,8 @@ impl VaultOperatorClient {
         connection_epoch: u64,
         message: ClientMessage,
     ) -> Result<(), VaultRequestError> {
-        self.gated_request(
-            gate,
-            connection_epoch,
-            message,
-            "command_accepted",
-            |message| match message {
-                ServerMessage::CommandAccepted(_) => Some(()),
-                _ => None,
-            },
-        )
-        .await
+        self.gated_request(gate, connection_epoch, message, "accepted", accepted)
+            .await
     }
 
     async fn gated_request<T>(
@@ -501,12 +492,24 @@ impl VaultOperatorClient {
         expected: &'static str,
         extract: fn(&ServerMessage) -> Option<T>,
     ) -> Result<T, VaultRequestError> {
-        if let ServerMessage::RequestError(error) = &*response {
+        if let ServerMessage::Reply(reply) = &*response
+            && reply.error().is_some()
+        {
             return Err(VaultRequestError::Rejected {
-                request_id: error.request_id,
+                request_id: reply.request_id,
                 response,
             });
         }
         extract(&response).ok_or(VaultRequestError::UnexpectedResponse { expected, response })
+    }
+}
+
+const fn accepted(message: &ServerMessage) -> Option<()> {
+    match message {
+        ServerMessage::Reply(crate::ws::types::ReplyMessage {
+            result: crate::ws::types::ReplyResult::Accepted,
+            ..
+        }) => Some(()),
+        _ => None,
     }
 }

@@ -33,7 +33,8 @@ pub struct VaultCatalogChangedData {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SwapQuoteResultData {
+pub struct SwapQuote {
+    /// Repeats the reply's `request_id` so a signer can bind the quote to its request offline.
     pub request_id: Uuid,
     pub execution_id: OrderId,
     pub mode: VaultSwapMode,
@@ -67,13 +68,6 @@ impl SwapStaging {
     }
 }
 
-/// Durable enqueue acknowledgement, not chain confirmation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SwapSubmitResultData {
-    pub request_id: Uuid,
-    pub execution_id: OrderId,
-}
-
 /// Keeper knowledge about one Vault swap execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -83,11 +77,40 @@ pub enum SwapExecutionState {
     Finalized {
         signature: String,
         slot: u64,
+        amounts: SwapAmounts,
     },
-    Failed,
+    /// The keeper gave up; `reason` is its last error.
+    Failed {
+        reason: String,
+        transaction: SwapTransaction,
+    },
+    /// Never landed before the quote's `valid_until`.
     Expired,
     /// No handoff of this execution for this Vault is known. Not proof of non-execution.
     Unknown,
+}
+
+/// What the swap moved, from its projected chain event.
+#[serde_as]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SwapAmounts {
+    Projected {
+        #[serde_as(as = "serde_with::DisplayFromStr")]
+        amount_in: u64,
+        #[serde_as(as = "serde_with::DisplayFromStr")]
+        amount_out: u64,
+    },
+    /// Not projected yet; `HttpClient::vault_swaps` will carry it.
+    NotProjected,
+}
+
+/// Whether the failed swap reached the chain; a sent one can be inspected by signature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SwapTransaction {
+    Sent { signature: String },
+    NotSent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

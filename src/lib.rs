@@ -79,13 +79,13 @@ pub use ws::market_decimals::{MarketDecimals, TokenDecimals};
 pub use ws::types::{ClientMessage, ServerMessage};
 #[cfg(all(feature = "vault", feature = "http"))]
 pub use ws::vault::{FleetListing, VaultFleet, VaultFleetConfig};
-#[cfg(all(feature = "vault", feature = "chain-rpc"))]
-pub use ws::vault::{SaleDesk, SaleError, SaleOutcome, SaleStage, SignedSale, VaultSale};
 #[cfg(feature = "vault")]
 pub use ws::vault::{
     SendGate, Ungated, VaultClientError, VaultOperatorClient, VaultOperatorConfig, VaultProjection,
     VaultProjectionReceiver, VaultRequestError, VaultTxError,
 };
+#[cfg(all(feature = "vault", feature = "chain-rpc"))]
+pub use ws::vault::{SignedTrade, TradeDesk, TradeError, TradeOutcome, TradeStage, VaultTrade};
 
 pub use nonce::{AtomicNonceGenerator, NonceError, NonceGenerator};
 pub use orders::{

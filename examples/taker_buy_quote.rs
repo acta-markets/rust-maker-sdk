@@ -155,8 +155,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::warn!(rfq = %skipped.rfq_id, cap = ?skipped.cap_detail, "skipped: top up custody");
                 custody.top_up().await?;
             }
-            ServerMessage::QuoteFilled(fill) => {
-                tracing::info!(rfq = %fill.rfq_id, "buy written; collateral left custody");
+            ServerMessage::QuoteUpdate(QuoteUpdateMessage {
+                rfq_id,
+                state: QuoteState::Filled(_),
+                ..
+            }) => {
+                tracing::info!(rfq = %rfq_id, "buy written; collateral left custody");
                 custody.top_up().await?;
             }
             _ => {}

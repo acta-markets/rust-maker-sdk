@@ -737,13 +737,13 @@ fn governance_instructions_match_golden() {
             "3904/4/7f29ff5418d81c11",
             "3805/4/da408c2b2eb99f79",
             "3905/4/1008c0966018528c",
-            "2f20202020202020202020202020202020202020202020202020202020202020207f00000000b33f7100000000/5/db66018087f022ff",
+            "2f2020202020202020202020202020202020202020202020202020202020202020ff00000000b33f7100000000/5/db66018087f022ff",
             "3e/3/4a35ed45ecc4ab38",
         ]
     );
     assert_eq!(unpriced, [true, false, false, true, true, true]);
     assert!(
-        m.rotate_delegate(key(32), VaultDelegatePermissions::from_bits(1 << 7), 0)
+        m.rotate_delegate(key(32), VaultDelegatePermissions::from_bits(1 << 8), 0)
             .is_err()
     );
 }

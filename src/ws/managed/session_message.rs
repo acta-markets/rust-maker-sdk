@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::ws::types::{ReplyMessage, ReplyResult};
 use tokio::sync::{broadcast, watch};
 use tokio::time::timeout;
 
@@ -122,33 +123,27 @@ async fn handle_session_message(
         ServerMessage::AuthSuccess(_) => {
             send_event(events_tx, ManagedWsEvent::Authenticated);
         }
-        ServerMessage::RequestError(envelope) if envelope.error.is_quote_race() => {
-            tracing::debug!(
-                request_id = %envelope.request_id,
-                error = ?envelope.error,
-                "request lost a quote race"
-            );
+        ServerMessage::Reply(ReplyMessage {
+            request_id,
+            result: ReplyResult::Error { error, .. },
+        }) => {
+            if error.is_quote_race() {
+                tracing::debug!(%request_id, ?error, "request lost a quote race");
+            } else {
+                tracing::error!(%request_id, ?error, "request error");
+            }
         }
-        ServerMessage::RequestError(envelope) => {
-            tracing::error!(
-                request_id = %envelope.request_id,
-                error = ?envelope.error,
-                "request error"
-            );
+        ServerMessage::Reply(ReplyMessage {
+            request_id,
+            result: ReplyResult::Subscribed { channels },
+        }) => {
+            tracing::info!(%request_id, subscribed = ?channels, "subscribe ack");
         }
-        ServerMessage::SubscribeAck(ack) => {
-            tracing::info!(
-                request_id = %ack.request_id,
-                subscribed = ?ack.subscribed,
-                "subscribe ack"
-            );
-        }
-        ServerMessage::UnsubscribeAck(ack) => {
-            tracing::info!(
-                request_id = %ack.request_id,
-                unsubscribed = ?ack.unsubscribed,
-                "unsubscribe ack"
-            );
+        ServerMessage::Reply(ReplyMessage {
+            request_id,
+            result: ReplyResult::Unsubscribed { channels },
+        }) => {
+            tracing::info!(%request_id, unsubscribed = ?channels, "unsubscribe ack");
         }
         ServerMessage::SubscriptionUpdated(data) => {
             tracing::info!(

@@ -200,54 +200,65 @@ fn vault_catalog_changed_names_the_vault() {
 }
 
 #[test]
-fn vault_swap_results_roundtrip_without_claiming_chain_confirmation() {
-    let quote = ServerMessage::SwapQuoteResult(SwapQuoteResultData {
+fn vault_swap_replies_roundtrip_without_claiming_chain_confirmation() {
+    use acta_maker_sdk::ws::types::{ReplyMessage, ReplyResult, SwapQuote};
+    let quote = ServerMessage::Reply(ReplyMessage {
         request_id: request_id(),
-        execution_id: execution_id(),
-        mode: VaultSwapMode::Recovery,
-        tx_base64: "unsigned".to_string(),
-        last_valid_block_height: 77,
-        in_amount: "42".to_string(),
-        quoted_out_amount: "41".to_string(),
-        minimum_out_amount: "40".to_string(),
-        valid_until: std::time::UNIX_EPOCH + std::time::Duration::from_secs(123),
-        staging: acta_maker_sdk::ws::types::server::SwapStaging::None,
+        result: ReplyResult::SwapQuote(SwapQuote {
+            request_id: request_id(),
+            execution_id: execution_id(),
+            mode: VaultSwapMode::Recovery,
+            tx_base64: "unsigned".to_string(),
+            last_valid_block_height: 77,
+            in_amount: "42".to_string(),
+            quoted_out_amount: "41".to_string(),
+            minimum_out_amount: "40".to_string(),
+            valid_until: std::time::UNIX_EPOCH + std::time::Duration::from_secs(123),
+            staging: acta_maker_sdk::ws::types::server::SwapStaging::None,
+        }),
     });
     let expected = format!(
-        r#"{{"type":"SwapQuoteResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","last_valid_block_height":77,"in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":123,"staging":"none"}}}}"#
+        r#"{{"type":"Reply","data":{{"request_id":"{REQUEST_ID}","result":{{"type":"swap_quote","request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}","mode":"recovery","tx_base64":"unsigned","last_valid_block_height":77,"in_amount":"42","quoted_out_amount":"41","minimum_out_amount":"40","valid_until":123,"staging":"none"}}}}}}"#
     );
-    let ServerMessage::SwapQuoteResult(data) = assert_server_wire(&quote, &expected) else {
-        panic!("expected SwapQuoteResult");
+    let ServerMessage::Reply(ReplyMessage {
+        result: ReplyResult::SwapQuote(data),
+        ..
+    }) = assert_server_wire(&quote, &expected)
+    else {
+        panic!("expected a swap_quote reply");
     };
     assert_eq!(data.execution_id, execution_id());
     assert_eq!(data.minimum_out_amount, "40");
     assert_eq!(quote.request_id(), Some(request_id()));
-    let older = expected.replace(
-        r#""valid_until":"123""#,
-        r#""valid_until":"123","main_price_update":"M","second_price_update":"S""#,
-    );
-    assert!(serde_json::from_str::<ServerMessage>(&older).is_ok());
     let staged = expected.replace(r#""staging":"none""#, r#""staging":"unstage""#);
-    let ServerMessage::SwapQuoteResult(data) = serde_json::from_str(&staged).unwrap() else {
-        panic!("expected SwapQuoteResult");
+    let ServerMessage::Reply(ReplyMessage {
+        result: ReplyResult::SwapQuote(data),
+        ..
+    }) = serde_json::from_str(&staged).unwrap()
+    else {
+        panic!("expected a swap_quote reply");
     };
     assert_eq!(
         data.staging,
         acta_maker_sdk::ws::types::SwapStaging::Unstage
     );
 
-    let submit = ServerMessage::SwapSubmitResult(SwapSubmitResultData {
+    let submit = ServerMessage::Reply(ReplyMessage {
         request_id: request_id(),
-        execution_id: execution_id(),
+        result: ReplyResult::SwapSubmitted {
+            execution_id: execution_id(),
+        },
     });
     let expected = format!(
-        r#"{{"type":"SwapSubmitResult","data":{{"request_id":"{REQUEST_ID}","execution_id":"{EXECUTION_ID_HEX}"}}}}"#
+        r#"{{"type":"Reply","data":{{"request_id":"{REQUEST_ID}","result":{{"type":"swap_submitted","execution_id":"{EXECUTION_ID_HEX}"}}}}}}"#
     );
     assert!(!expected.contains("signature"));
     assert!(matches!(
         assert_server_wire(&submit, &expected),
-        ServerMessage::SwapSubmitResult(SwapSubmitResultData { execution_id, .. })
-            if execution_id == self::execution_id()
+        ServerMessage::Reply(ReplyMessage {
+            result: ReplyResult::SwapSubmitted { execution_id },
+            ..
+        }) if execution_id == self::execution_id()
     ));
     assert_eq!(submit.request_id(), Some(request_id()));
 }

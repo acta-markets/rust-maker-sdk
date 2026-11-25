@@ -24,14 +24,22 @@ fn server_frames_parse_with_a_bare_integer_expiry() {
         other => panic!("wrong variant: {other:?}"),
     }
 
-    let refresh = r#"{"type":"QuoteRefreshRequested","data":{
+    let refresh = r#"{"type":"QuoteUpdate","data":{
         "rfq_id":"6f0a4b6e-0000-4000-8000-000000000002",
+        "order_id":"0101010101010101010101010101010101010101010101010101010101010101",
+        "state":{"type":"refresh_requested","rfq_version":3,
         "terms":{"type":"covered_call","strike":"100000000000"},"side":"sell",
-        "min_valid_until":1800000456,"reason":"expiring_soon"}}"#;
+        "min_valid_until":1800000456,"reason":"expiring_soon"}}}"#;
     match parse_server_message(refresh).expect("parses") {
-        ServerMessage::QuoteRefreshRequested(msg) => {
+        ServerMessage::QuoteUpdate(acta_maker_sdk::ws::types::QuoteUpdateMessage {
+            state:
+                acta_maker_sdk::ws::types::QuoteState::RefreshRequested {
+                    min_valid_until, ..
+                },
+            ..
+        }) => {
             assert_eq!(
-                msg.min_valid_until,
+                min_valid_until,
                 QuoteExpiry::from_unix_seconds(1_800_000_456)
             );
         }

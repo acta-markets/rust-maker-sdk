@@ -435,17 +435,8 @@ impl VaultManager {
     ) -> Result<VaultOpenPosition, VaultChainError> {
         terms.validate()?;
         require_side(terms.side, TakerSide::Sell)?;
-        let legs = MarketLegs::bind(self, terms.underlying_mint, terms.quote_mint)?;
-        let holder_legs = MarketLegs::bind(holder, terms.underlying_mint, terms.quote_mint)?;
-        if self.addresses.vault == holder.addresses.vault
-            || self.args.program_id != holder.args.program_id
-            || holder_legs.underlying.program != legs.underlying.program
-            || holder_legs.quote.program != legs.quote.program
-        {
-            return Err(VaultChainError::InvalidInput(
-                "vault-to-vault requires two distinct vaults on the same program and token pair",
-            ));
-        }
+        let (legs, holder_legs) =
+            self.vault_pair(holder, terms.underlying_mint, terms.quote_mint)?;
         let order_id = terms.order_id(
             &self.args.program_id,
             &holder.addresses.vault,
@@ -455,7 +446,64 @@ impl VaultManager {
         Ok(self.open_between_vaults(
             VaultIx::OpenPositionBetweenVaults,
             keeper,
+            self.args.actor,
             holder,
+            holder_legs,
+            legs,
+            order_id,
+            addresses,
+            &terms.args(&order_id),
+        ))
+    }
+
+    /// `OpenPositionForVaultTakerBuy`: this vault buys what `maker_owner` writes from custody.
+    /// The operator needs `BUY_FROM_MAKERS`.
+    pub fn open_position_from_maker(
+        &self,
+        keeper: Pubkey,
+        maker_owner: Pubkey,
+        terms: &VaultTradeTerms,
+    ) -> Result<VaultOpenPosition, VaultChainError> {
+        terms.validate()?;
+        require_side(terms.side, TakerSide::Buy)?;
+        let legs = MarketLegs::bind(self, terms.underlying_mint, terms.quote_mint)?;
+        let order_id = terms.order_id(&self.args.program_id, &maker_owner, &self.addresses.vault);
+        let addresses = self.position_addresses(legs, terms, &order_id);
+        let maker = maker_pda_with_program_id(&self.args.program_id, &maker_owner).0;
+        Ok(self.open_from_maker(
+            VaultIx::OpenPositionForVaultTakerBuy,
+            keeper,
+            maker,
+            legs,
+            order_id,
+            addresses,
+            &terms.args(&order_id),
+        ))
+    }
+
+    /// `OpenPositionBetweenVaultsTakerBuy`: this vault buys what `writer` quoted.
+    /// The operator needs `BUY_FROM_MAKERS`; the writer's delegate signed the quote.
+    pub fn open_position_from_vault(
+        &self,
+        keeper: Pubkey,
+        writer: &Self,
+        terms: &VaultTradeTerms,
+    ) -> Result<VaultOpenPosition, VaultChainError> {
+        terms.validate()?;
+        require_side(terms.side, TakerSide::Buy)?;
+        let (legs, holder_legs) =
+            writer.vault_pair(self, terms.underlying_mint, terms.quote_mint)?;
+        let order_id = terms.order_id(
+            &self.args.program_id,
+            &writer.addresses.vault,
+            &self.addresses.vault,
+        );
+        let addresses = writer.position_addresses(legs, terms, &order_id);
+        Ok(writer.open_between_vaults(
+            VaultIx::OpenPositionBetweenVaultsTakerBuy,
+            keeper,
+            self.args.actor,
+            self,
             holder_legs,
             legs,
             order_id,
@@ -785,7 +833,7 @@ pub struct VaultSpreadTerms {
 
 /// Terms for a vault open: a physical option or a cash spread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VaultSaleTerms {
+pub enum VaultOpenTerms {
     Physical(VaultTradeTerms),
     Spread(VaultSpreadTerms),
 }
@@ -957,6 +1005,61 @@ impl VaultManager {
         ))
     }
 
+    /// `OpenSpreadForVaultTakerBuy`: this vault buys a Maker's spread or cash put.
+    pub fn open_spread_from_maker(
+        &self,
+        keeper: Pubkey,
+        maker_owner: Pubkey,
+        terms: &VaultSpreadTerms,
+    ) -> Result<VaultOpenPosition, VaultChainError> {
+        terms.validate()?;
+        require_side(terms.side, TakerSide::Buy)?;
+        let legs = MarketLegs::bind(self, terms.underlying_mint, terms.quote_mint)?;
+        let order_id =
+            terms.order_id(&self.args.program_id, &maker_owner, &self.addresses.vault)?;
+        let addresses = self.spread_addresses(legs, terms, &order_id);
+        let maker = maker_pda_with_program_id(&self.args.program_id, &maker_owner).0;
+        Ok(self.open_from_maker(
+            VaultIx::OpenSpreadForVaultTakerBuy,
+            keeper,
+            maker,
+            legs,
+            order_id,
+            addresses,
+            &terms.args(&order_id),
+        ))
+    }
+
+    /// `OpenSpreadBetweenVaultsTakerBuy`: this vault buys `writer`'s spread or cash put.
+    pub fn open_spread_from_vault(
+        &self,
+        keeper: Pubkey,
+        writer: &Self,
+        terms: &VaultSpreadTerms,
+    ) -> Result<VaultOpenPosition, VaultChainError> {
+        terms.validate()?;
+        require_side(terms.side, TakerSide::Buy)?;
+        let (legs, holder_legs) =
+            writer.vault_pair(self, terms.underlying_mint, terms.quote_mint)?;
+        let order_id = terms.order_id(
+            &self.args.program_id,
+            &writer.addresses.vault,
+            &self.addresses.vault,
+        )?;
+        let addresses = writer.spread_addresses(legs, terms, &order_id);
+        Ok(writer.open_between_vaults(
+            VaultIx::OpenSpreadBetweenVaultsTakerBuy,
+            keeper,
+            self.args.actor,
+            self,
+            holder_legs,
+            legs,
+            order_id,
+            addresses,
+            &terms.args(&order_id),
+        ))
+    }
+
     /// `OpenSpreadBetweenVaults`: this vault sells the spread to `holder`.
     pub fn open_spread_with_vault_holder(
         &self,
@@ -966,17 +1069,8 @@ impl VaultManager {
     ) -> Result<VaultOpenPosition, VaultChainError> {
         terms.validate()?;
         require_side(terms.side, TakerSide::Sell)?;
-        let legs = MarketLegs::bind(self, terms.underlying_mint, terms.quote_mint)?;
-        let holder_legs = MarketLegs::bind(holder, terms.underlying_mint, terms.quote_mint)?;
-        if self.addresses.vault == holder.addresses.vault
-            || self.args.program_id != holder.args.program_id
-            || holder_legs.underlying.program != legs.underlying.program
-            || holder_legs.quote.program != legs.quote.program
-        {
-            return Err(VaultChainError::InvalidInput(
-                "vault-to-vault requires two distinct vaults on the same program and token pair",
-            ));
-        }
+        let (legs, holder_legs) =
+            self.vault_pair(holder, terms.underlying_mint, terms.quote_mint)?;
         let order_id = terms.order_id(
             &self.args.program_id,
             &holder.addresses.vault,
@@ -986,6 +1080,7 @@ impl VaultManager {
         Ok(self.open_between_vaults(
             VaultIx::OpenSpreadBetweenVaults,
             keeper,
+            self.args.actor,
             holder,
             holder_legs,
             legs,
@@ -1044,6 +1139,71 @@ impl VaultManager {
         }
     }
 
+    /// `self` writes and `holder` holds: two distinct vaults of one program and token pair.
+    fn vault_pair(
+        &self,
+        holder: &Self,
+        underlying_mint: Pubkey,
+        quote_mint: Pubkey,
+    ) -> Result<(MarketLegs, MarketLegs), VaultChainError> {
+        let legs = MarketLegs::bind(self, underlying_mint, quote_mint)?;
+        let holder_legs = MarketLegs::bind(holder, underlying_mint, quote_mint)?;
+        if self.addresses.vault == holder.addresses.vault
+            || self.args.program_id != holder.args.program_id
+            || holder_legs.underlying.program != legs.underlying.program
+            || holder_legs.quote.program != legs.quote.program
+        {
+            return Err(VaultChainError::InvalidInput(
+                "vault-to-vault requires two distinct vaults on the same program and token pair",
+            ));
+        }
+        Ok((legs, holder_legs))
+    }
+
+    /// The vault buys what a Maker writes from custody (`OpenPositionForVaultTakerBuy` layout).
+    #[allow(clippy::too_many_arguments)]
+    fn open_from_maker(
+        &self,
+        ix: VaultIx,
+        keeper: Pubkey,
+        maker: Pubkey,
+        legs: MarketLegs,
+        order_id: [u8; 32],
+        addresses: VaultPositionAddresses,
+        args: &[u8],
+    ) -> VaultOpenPosition {
+        let a = &self.addresses;
+        let mut accounts = vec![
+            AccountMeta::new(keeper, true),
+            AccountMeta::new(self.args.actor, true),
+            AccountMeta::new(a.vault, false),
+            AccountMeta::new_readonly(a.policy, false),
+            AccountMeta::new_readonly(a.delegate, false),
+            AccountMeta::new(legs.quote.vault_ata, false),
+            AccountMeta::new_readonly(maker, false),
+            AccountMeta::new(
+                ata(&maker, &legs.underlying.mint, &legs.underlying.program),
+                false,
+            ),
+            AccountMeta::new(ata(&maker, &legs.quote.mint, &legs.quote.program), false),
+            AccountMeta::new(addresses.market, false),
+            AccountMeta::new(addresses.position, false),
+            AccountMeta::new(addresses.collateral_ata, false),
+            AccountMeta::new_readonly(addresses.config, false),
+            AccountMeta::new(addresses.protocol_fee_ata, false),
+        ];
+        accounts.extend(self.market_tail(legs));
+        accounts.extend([
+            AccountMeta::new_readonly(self.args.share_mint, false),
+            AccountMeta::new_readonly(a.manager_stake_ata, false),
+        ]);
+        VaultOpenPosition {
+            order_id,
+            addresses,
+            instruction: self.instruction(ix, accounts, args),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn open_as_holder(
         &self,
@@ -1091,6 +1251,7 @@ impl VaultManager {
         &self,
         ix: VaultIx,
         keeper: Pubkey,
+        actor: Pubkey,
         holder: &Self,
         holder_legs: MarketLegs,
         legs: MarketLegs,
@@ -1101,7 +1262,7 @@ impl VaultManager {
         let (w, h) = (&self.addresses, &holder.addresses);
         let mut accounts = vec![
             AccountMeta::new(keeper, true),
-            AccountMeta::new(self.args.actor, true),
+            AccountMeta::new(actor, true),
             AccountMeta::new(w.vault, false),
             AccountMeta::new_readonly(w.policy, false),
             AccountMeta::new_readonly(w.delegate, false),
@@ -1146,6 +1307,6 @@ fn require_side(side: TakerSide, route: TakerSide) -> Result<(), VaultChainError
     Err(VaultChainError::InvalidInput(if route.is_taker_buy() {
         "taker_sell_unsupported"
     } else {
-        "taker_buy_unsupported"
+        "vault_buys_through_open_from"
     }))
 }

@@ -33,9 +33,10 @@ pub enum QuoteFinalStatus {
 pub enum QuoteCancelReason {
     Requested,
     RiskCheck,
-    RfqAccepted,
     /// The session sent `on_disconnect: cancel_quotes` and disconnected.
     MakerDisconnected,
+    /// A newer quote from the same maker took this order's place.
+    Replaced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]

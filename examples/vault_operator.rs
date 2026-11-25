@@ -13,7 +13,7 @@ mod venue;
 use acta_maker_sdk::chain::ChainClient;
 use acta_maker_sdk::chain::vault::{
     ComputeBudgetBounds, PairPriceRoutes, VaultAccount, VaultManager, VaultOpenIntent,
-    VaultSaleTerms, VaultSwapIntent,
+    VaultOpenTerms, VaultSwapIntent,
 };
 use acta_maker_sdk::ws::managed::*;
 use acta_maker_sdk::ws::types::*;
@@ -134,11 +134,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(error) => return Err(error.into()),
                 }
             }
-            ServerMessage::OrderConfirmed(confirmed) => {
-                tracing::info!(position = %confirmed.position_pda, "vault position opened");
+            ServerMessage::OrderUpdate(OrderUpdateMessage {
+                state: OrderState::Confirmed { position_pda },
+                ..
+            }) => {
+                tracing::info!(position = %position_pda, "vault position opened");
             }
-            ServerMessage::QuoteFilled(fill) => {
-                tracing::info!(rfq = %fill.rfq_id, position = %fill.position_pda, "filled");
+            ServerMessage::QuoteUpdate(QuoteUpdateMessage {
+                rfq_id,
+                state: QuoteState::Filled(fill),
+                ..
+            }) => {
+                tracing::info!(rfq = %rfq_id, position = %fill.position_pda, "filled");
             }
             ServerMessage::Error(err) => tracing::error!(?err, "session error"),
             _ => {}
@@ -159,7 +166,7 @@ async fn sign_fill(
     chain: &ChainClient,
     holder: &VaultManager,
     taker: Pubkey,
-    terms: VaultSaleTerms,
+    terms: VaultOpenTerms,
     lookup_tables: &[AddressLookupTableAccount],
     to_sign: &SponsoredTxToSignData,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -213,7 +220,7 @@ async fn rebalance(
         COMPUTE_BOUNDS,
     )?;
     let epoch = client.wait_until_ready().await?;
-    let ack = client.swap_submit_in_epoch(submit, epoch, &Ungated).await?;
-    tracing::info!(execution = ?ack.execution_id, "swap queued");
+    let execution_id = client.swap_submit_in_epoch(submit, epoch, &Ungated).await?;
+    tracing::info!(execution = ?execution_id, "swap queued");
     Ok(())
 }

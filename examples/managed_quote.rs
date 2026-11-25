@@ -133,43 +133,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(error) => return Err(error.into()),
                 }
             }
-            ServerMessage::QuoteAcknowledged(ack) => {
-                tracing::info!(rfq = %ack.rfq_id, order = ?ack.order_id, "ack");
-            }
-            ServerMessage::QuoteBestStatus(status) => {
-                tracing::info!(rfq = %status.rfq_id, best = status.is_best, "best status");
-            }
-            ServerMessage::QuoteOutbid(outbid) => {
-                tracing::info!(
-                    rfq = %outbid.rfq_id,
-                    ours = outbid.your_price.value(),
-                    best = ?outbid.current_best_price.price().map(|p| p.value()),
-                    "outbid"
-                );
-            }
-            ServerMessage::QuoteFilled(fill) => {
-                tracing::info!(
-                    rfq = %fill.rfq_id,
+            ServerMessage::QuoteUpdate(update) => match &update.state {
+                QuoteState::Live {
+                    is_best,
+                    best_price,
+                    ..
+                } => tracing::info!(
+                    rfq = %update.rfq_id,
+                    order = ?update.order_id,
+                    best = is_best,
+                    best_price = ?best_price.price().map(|p| p.value()),
+                    "live"
+                ),
+                QuoteState::Filled(fill) => tracing::info!(
+                    rfq = %update.rfq_id,
                     position = %fill.position_pda,
                     tx = %fill.transaction_signature,
                     "filled"
-                );
+                ),
+                QuoteState::Rejected { reason, .. } => {
+                    tracing::warn!(rfq = %update.rfq_id, ?reason, "rejected");
+                }
+                state => tracing::info!(rfq = %update.rfq_id, ?state, "quote update"),
+            },
+            ServerMessage::RfqUpdate(update) => {
+                tracing::info!(rfq = %update.rfq_id, state = ?update.state, "rfq update");
             }
-            ServerMessage::RfqClosed(closed) => {
-                tracing::info!(rfq = %closed.rfq_id, reason = ?closed.reason, "rfq closed");
-            }
-            ServerMessage::QuoteRejected(rejected) => {
-                tracing::warn!(rfq = %rejected.rfq_id, reason = ?rejected.reason, "rejected");
+            ServerMessage::Reply(reply) => {
+                if let Some(error) = reply.error() {
+                    tracing::error!(request_id = %reply.request_id, ?error, "request error");
+                }
             }
             ServerMessage::Error(err) => {
                 tracing::error!(?err, "session error");
-            }
-            ServerMessage::RequestError(envelope) => {
-                tracing::error!(
-                    request_id = %envelope.request_id,
-                    error = ?envelope.error,
-                    "request error"
-                );
             }
             _ => {}
         }

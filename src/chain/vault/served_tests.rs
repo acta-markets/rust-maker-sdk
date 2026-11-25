@@ -16,10 +16,12 @@ use crate::chain::vault::{
     VaultStagingState, VaultTradeTerms, pyth_price_feed_account,
 };
 use crate::types::OrderId;
-use crate::ws::types::{SponsoredTxToSignData, SwapQuoteData, SwapQuoteResultData};
+use crate::ws::types::{SponsoredTxToSignData, SwapQuote, SwapQuoteData};
 
 const FIXTURE: &str = include_str!("../../../tests/fixtures/vault_served_tx.json");
 const BUY_FIXTURE: &str = include_str!("../../../tests/fixtures/vault_served_buy_tx.json");
+const VAULT_BUY_FIXTURE: &str =
+    include_str!("../../../tests/fixtures/vault_served_taker_buy_tx.json");
 const BOUNDS: ComputeBudgetBounds = ComputeBudgetBounds {
     max_unit_limit: 400_000,
     max_unit_price_micro_lamports: 1_000,
@@ -106,9 +108,9 @@ fn swap_request(case: &Value) -> SwapQuoteData {
     }
 }
 
-fn swap_quote(case: &Value, tx_base64: String) -> SwapQuoteResultData {
+fn swap_quote(case: &Value, tx_base64: String) -> SwapQuote {
     let swap = &case["swap"];
-    SwapQuoteResultData {
+    SwapQuote {
         request_id: Uuid::from_str(swap["request_id"].as_str().unwrap()).unwrap(),
         execution_id: OrderId::new([4; 32]),
         mode: serde_json::from_value(swap["mode"].clone()).unwrap_or(VaultSwapMode::Rebalance),
@@ -210,7 +212,7 @@ fn fixture_slot(case: &Value) -> VaultStagingState {
 fn swap_intent<'a>(
     vault: &'a VaultManager,
     request: &'a SwapQuoteData,
-    quote: &'a SwapQuoteResultData,
+    quote: &'a SwapQuote,
     routes: &'a (PriceRoute, PriceRoute),
     staging: &'a [PriceRoute],
     shards: &'a [u16],
@@ -234,7 +236,7 @@ fn swap_intent<'a>(
 fn verify_swap(
     case: &Value,
     request: &SwapQuoteData,
-    quote: &SwapQuoteResultData,
+    quote: &SwapQuote,
     tables: &[AddressLookupTableAccount],
 ) -> Result<(), VaultIntentError> {
     let floor = num(&case["swap"]["minimum_out_amount"]);
@@ -244,7 +246,7 @@ fn verify_swap(
 fn verify_swap_with_floor(
     case: &Value,
     request: &SwapQuoteData,
-    quote: &SwapQuoteResultData,
+    quote: &SwapQuote,
     tables: &[AddressLookupTableAccount],
     min_output_floor: u64,
 ) -> Result<(), VaultIntentError> {
@@ -296,7 +298,7 @@ fn verify(
                     writer: &writer,
                     maker_owner: key(&case["maker_owner"]),
                     maker_quote_signer: key(&case["position"]["quote_signer"]),
-                    terms: VaultSaleTerms::Physical(terms),
+                    terms: VaultOpenTerms::Physical(terms),
                 },
                 tables,
                 BOUNDS,
@@ -311,7 +313,7 @@ fn verify(
                     keeper: keeper(case),
                     writer: &writer,
                     holder: &holder,
-                    terms: VaultSaleTerms::Physical(terms),
+                    terms: VaultOpenTerms::Physical(terms),
                 },
                 tables,
                 BOUNDS,
@@ -326,7 +328,7 @@ fn verify(
                     keeper: keeper(case),
                     holder: &holder,
                     taker: key(&case["taker"]),
-                    terms: VaultSaleTerms::Physical(terms),
+                    terms: VaultOpenTerms::Physical(terms),
                 },
                 tables,
                 BOUNDS,
@@ -637,7 +639,7 @@ fn open_terms_and_counterparties_are_bound() {
 }
 
 #[test]
-fn vault_trade_builder_refuses_taker_buy_before_constructing_instructions() {
+fn vault_writer_builder_refuses_a_buy_before_constructing_instructions() {
     let case = cases()
         .into_iter()
         .find(|case| case["kind"] == "vault_taker")
@@ -651,7 +653,9 @@ fn vault_trade_builder_refuses_taker_buy_before_constructing_instructions() {
             Pubkey::new_unique(),
             &trade_terms,
         ),
-        Err(VaultChainError::InvalidInput("taker_buy_unsupported"))
+        Err(VaultChainError::InvalidInput(
+            "vault_buys_through_open_from"
+        ))
     ));
 }
 
@@ -754,15 +758,14 @@ fn swap_terms_follow_the_request() {
         }
         let vault = manager(case, "swapper");
         let routes = price_routes(case);
-        let with =
-            |routes: &(PriceRoute, PriceRoute), shards: &[u16], quote: &SwapQuoteResultData| {
-                verify_vault_swap(
-                    &swap_intent(&vault, &request, quote, routes, &[], shards, 1),
-                    &tables,
-                    BOUNDS,
-                )
-                .map(|_| ())
-            };
+        let with = |routes: &(PriceRoute, PriceRoute), shards: &[u16], quote: &SwapQuote| {
+            verify_vault_swap(
+                &swap_intent(&vault, &request, quote, routes, &[], shards, 1),
+                &tables,
+                BOUNDS,
+            )
+            .map(|_| ())
+        };
         assert_eq!(
             with(&routes, &[2], &quote),
             Err(VaultIntentError::PriceSection("main"))
@@ -1606,7 +1609,7 @@ fn served_vault_writer_buys_verify_for_the_wallet_holder() {
             keeper: keeper(case),
             writer: &writer,
             holder,
-            terms: VaultSaleTerms::Physical(terms),
+            terms: VaultOpenTerms::Physical(terms),
         };
         let holder = key(&case["holder"]);
         verify_vault_open(&to_sign, &intent(holder, buy), &[table(case)], BOUNDS)
@@ -1630,5 +1633,71 @@ fn served_vault_writer_buys_verify_for_the_wallet_holder() {
             .is_err(),
             "a sell intent must not accept a served buy"
         );
+    }
+}
+
+fn vault_buy(
+    case: &Value,
+    terms: VaultTradeTerms,
+) -> Result<VerifiedTransaction, VaultIntentError> {
+    let holder = manager(case, "holder");
+    let writer = case["writer"].is_object().then(|| manager(case, "writer"));
+    let to_sign = SponsoredTxToSignData {
+        order_id: OrderId::from_hex(case["position"]["order_id"].as_str().unwrap()).unwrap(),
+        tx_base64: served_tx(case),
+        last_valid_block_height: 1,
+        signature_deadline_at: std::time::UNIX_EPOCH,
+    };
+    let terms = VaultOpenTerms::Physical(terms);
+    let intent = match &writer {
+        None => VaultOpenIntent::Purchase {
+            keeper: keeper(case),
+            holder: &holder,
+            maker_owner: key(&case["maker_owner"]),
+            maker_quote_signer: key(&case["position"]["quote_signer"]),
+            terms,
+        },
+        Some(writer) => VaultOpenIntent::PurchaseFromVault {
+            keeper: keeper(case),
+            writer,
+            holder: &holder,
+            terms,
+        },
+    };
+    verify_vault_open(&to_sign, &intent, &[table(case)], BOUNDS)
+}
+
+#[test]
+fn backend_built_vault_buys_verify_and_bind_their_terms() {
+    let cases = serde_json::from_str::<Vec<Value>>(VAULT_BUY_FIXTURE).unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in &cases {
+        let buy = VaultTradeTerms {
+            side: crate::types::TakerSide::Buy,
+            ..terms(case)
+        };
+        vault_buy(case, buy).unwrap_or_else(|error| panic!("{} rejected: {error}", case["kind"]));
+        assert!(
+            vault_buy(
+                case,
+                VaultTradeTerms {
+                    price: buy.price + 1,
+                    ..buy
+                }
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            vault_buy(case, terms(case)),
+            Err(VaultIntentError::Intent(VaultChainError::InvalidInput(
+                "taker_sell_unsupported"
+            )))
+        ));
+        let mut stranger = case.clone();
+        match case["kind"].as_str().unwrap() {
+            "vault_taker_buy" => stranger["maker_owner"] = Pubkey::new_unique().to_string().into(),
+            _ => stranger["writer"]["vault_id"] = hex::encode([0x77; 32]).into(),
+        }
+        assert!(vault_buy(&stranger, buy).is_err());
     }
 }

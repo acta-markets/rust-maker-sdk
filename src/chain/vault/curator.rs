@@ -620,7 +620,7 @@ pub async fn backend_swap(
     bounds: super::ComputeBudgetBounds,
     epoch: u64,
     gate: &impl crate::ws::vault::SendGate,
-) -> Result<crate::ws::types::SwapSubmitResultData, Error> {
+) -> Result<crate::types::OrderId, Error> {
     let request = intent.backend_request(manager.addresses.vault, slippage_bps)?;
     let quote = client.swap_quote(request.clone()).await?;
     let keys = super::served_lookup_table_keys(&quote.tx_base64)?;

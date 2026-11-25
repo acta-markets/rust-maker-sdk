@@ -107,7 +107,6 @@ impl WsErrorCode {
             | Self::InvalidQuantitySizeRule
             | Self::ProductNotAllowed
             | Self::InvalidStrikes
-            | Self::TakerBuyUnsupported
             | Self::SpreadInvalidStrikes
             | Self::SpreadTickViolation
             | Self::SpreadPremiumInvalid
@@ -166,6 +165,7 @@ impl ServerError {
             | Self::InternalError
             | Self::KernelNotAvailable
             | Self::ServerShuttingDown => Retry,
+            Self::RateLimited { .. } => Retry,
             Self::RateLimit(reason) => match reason {
                 RateLimitReason::TooManyActiveRfqsPerTaker
                 | RateLimitReason::TooManyActiveRfqsTotal => Retry,

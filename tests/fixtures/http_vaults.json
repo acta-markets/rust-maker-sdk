@@ -43,6 +43,9 @@
         "remaining": "860"
       },
       "capital_fallback_delay_seconds": 43200,
+      "next_capital_step": {
+        "type": "none"
+      },
       "deposit_window": {
         "type": "set",
         "set_at": 1700000000
@@ -228,6 +231,9 @@
         "type": "unlimited"
       },
       "capital_fallback_delay_seconds": 43200,
+      "next_capital_step": {
+        "type": "none"
+      },
       "deposit_window": {
         "type": "unset"
       },

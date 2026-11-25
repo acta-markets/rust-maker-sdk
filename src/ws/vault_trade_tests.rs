@@ -9,7 +9,7 @@ use super::*;
 use crate::chain::vault::spread_tests::{compile_with_tables, served_sale};
 use crate::chain::vault::{
     ComputeBudgetBounds, Counterparty, VaultAccount, VaultIntentError, VaultManager,
-    VaultManagerArgs, VaultOpenIntent, VaultSaleTerms, VaultSpreadTerms, VaultTradeTerms,
+    VaultManagerArgs, VaultOpenIntent, VaultOpenTerms, VaultSpreadTerms, VaultTradeTerms,
     verify_vault_open,
 };
 use crate::chain::{ChainClient, ChainError, MarketInfo, maker_pda_with_program_id};
@@ -18,11 +18,11 @@ use crate::types::{
     Nonce, OptionTerms, Price, Quantity, QuoteExpiry, Strike, TakerSide, TimeoutSeconds,
 };
 use crate::ws::types::{
-    CommandAcceptedData, Delivery, QuoteReceivedMessage, RequestErrorEnvelope, ServerError,
-    SponsoredTxToSignData, SubmitSignedSponsoredTxData, SwapSubmitData, SwapSubmitResultData,
+    Delivery, QuoteReceivedMessage, ServerError, SponsoredTxToSignData,
+    SubmitSignedSponsoredTxData, SwapSubmitData,
 };
 use crate::ws::vault::{
-    SaleDesk, SaleError, SaleOutcome, SaleStage, SendGate, SignedSale, Ungated, VaultSale,
+    SendGate, SignedTrade, TradeDesk, TradeError, TradeOutcome, TradeStage, Ungated, VaultTrade,
 };
 
 const BOUNDS: ComputeBudgetBounds = ComputeBudgetBounds {
@@ -46,7 +46,11 @@ fn num(value: &serde_json::Value) -> u64 {
 }
 
 fn writer(case: &serde_json::Value) -> VaultManager {
-    let vault = &case["writer"];
+    manager(case, "writer")
+}
+
+fn manager(case: &serde_json::Value, field: &str) -> VaultManager {
+    let vault = &case[field];
     VaultManager::new(VaultManagerArgs {
         program_id: key(&case["program_id"]),
         vault_id: hex::decode(vault["vault_id"].as_str().unwrap())
@@ -125,9 +129,10 @@ fn chain(case: &serde_json::Value) -> ChainClient {
     )
 }
 
-fn sale(case: &serde_json::Value, window: Duration) -> VaultSale {
+fn sale(case: &serde_json::Value, window: Duration) -> VaultTrade {
     let p = &case["position"];
-    VaultSale {
+    VaultTrade {
+        side: TakerSide::Sell,
         market_pda: key(&p["market"]),
         market: MarketInfo {
             settlement_price: 0,
@@ -151,14 +156,14 @@ fn sale(case: &serde_json::Value, window: Duration) -> VaultSale {
     }
 }
 
-fn quote(case: &serde_json::Value, rfq_id: Uuid, price: u64) -> ServerMessage {
+fn quote(case: &serde_json::Value, rfq_id: Uuid, price: u64, side: TakerSide) -> ServerMessage {
     let p = &case["position"];
     ServerMessage::QuoteReceived(QuoteReceivedMessage {
         rfq_id,
         terms: OptionTerms::CoveredCall {
             strike: Strike::new(num(&p["strike"])),
         },
-        side: TakerSide::Sell,
+        side,
         maker_owner: crate::Address32::from_base58(case["maker_owner"].as_str().unwrap())
             .expect("valid fixture"),
         price: Price::new(price),
@@ -174,7 +179,7 @@ fn quote(case: &serde_json::Value, rfq_id: Uuid, price: u64) -> ServerMessage {
 struct DeskError;
 
 struct Desk {
-    writer: VaultManager,
+    vault: VaultManager,
     min_price: u64,
     events: Vec<&'static str>,
     /// The hook that never returns.
@@ -190,7 +195,7 @@ impl Desk {
     }
 }
 
-impl SaleDesk for Desk {
+impl TradeDesk for Desk {
     type Error = DeskError;
 
     async fn take(&mut self, quote: &QuoteReceivedMessage) -> Result<bool, DeskError> {
@@ -203,12 +208,12 @@ impl SaleDesk for Desk {
         Ok(())
     }
 
-    async fn writer(&mut self) -> Result<VaultManager, DeskError> {
-        self.hook("writer").await;
-        Ok(self.writer)
+    async fn vault(&mut self) -> Result<VaultManager, DeskError> {
+        self.hook("vault").await;
+        Ok(self.vault)
     }
 
-    fn signed(&mut self, sale: &SignedSale) -> Result<(), DeskError> {
+    fn signed(&mut self, sale: &SignedTrade) -> Result<(), DeskError> {
         assert_eq!(sale.last_valid_block_height, SERVED_HEIGHT);
         self.events.push("signed");
         Ok(())
@@ -232,7 +237,7 @@ fn spawn_writer(url: String) -> VaultOperatorClient {
 async fn accept_command(socket: &mut Socket, request_id: Uuid) {
     send_server(
         socket,
-        ServerMessage::CommandAccepted(CommandAcceptedData { request_id }),
+        ServerMessage::Reply(crate::ws::types::ReplyMessage::accepted(request_id)),
     )
     .await;
 }
@@ -247,6 +252,12 @@ enum Ending {
     Unserved,
     /// Served, but no submission is expected.
     Served,
+    /// The server fails the accepted order and reopens the RFQ.
+    Failed,
+    /// The RFQ reopens without an order update.
+    Released,
+    /// The RFQ closes after the accept.
+    Closed,
 }
 
 /// Serves one sale: RFQ, a foreign and a rejected-price quote, the taken quote,
@@ -276,16 +287,61 @@ async fn serve_sale(
         .expect("send RfqCreated");
     accept_command(socket, rfq.request_id).await;
     let price = num(&case["position"]["price"]);
-    send_server(socket, quote(case, Uuid::new_v4(), price)).await;
-    send_server(socket, quote(case, rfq_id, price - 1)).await;
-    send_server(socket, quote(case, rfq_id, price)).await;
+    send_server(socket, quote(case, Uuid::new_v4(), price, rfq.side)).await;
+    send_server(socket, quote(case, rfq_id, price - 1, rfq.side)).await;
+    send_server(socket, quote(case, rfq_id, price, rfq.side)).await;
     let ClientMessage::AcceptQuote(accept) = receive_client(socket).await else {
         panic!("expected AcceptQuote");
     };
     assert_eq!(accept.rfq_id, rfq_id);
     accept_command(socket, accept.request_id).await;
-    if matches!(ending, Ending::Unserved) {
-        return None;
+    let rfq_update = |state| {
+        ServerMessage::RfqUpdate(crate::ws::types::RfqUpdateMessage {
+            rfq_id,
+            rfq_version: crate::RfqVersion::new(3),
+            state,
+        })
+    };
+    let available = || {
+        rfq_update(crate::ws::types::RfqState::Available {
+            reason: crate::types::RfqAvailableAgainReason::SignatureTimeout,
+            at: std::time::SystemTime::now(),
+        })
+    };
+    match ending {
+        Ending::Unserved => return None,
+        Ending::Failed => {
+            send_server(
+                socket,
+                ServerMessage::OrderUpdate(crate::ws::types::OrderUpdateMessage {
+                    order_id: accept.order_id,
+                    order_version: crate::types::OrderVersion::new(2),
+                    state: crate::ws::types::OrderState::Failed {
+                        reason: "signature timeout".into(),
+                    },
+                }),
+            )
+            .await;
+            send_server(socket, available()).await;
+            return None;
+        }
+        Ending::Released => {
+            send_server(socket, available()).await;
+            return None;
+        }
+        Ending::Closed => {
+            send_server(
+                socket,
+                rfq_update(crate::ws::types::RfqState::Closed {
+                    reason: crate::types::RfqCloseReason::Expired,
+                    winner: crate::ws::types::RfqWinner::None,
+                    at: std::time::SystemTime::now(),
+                }),
+            )
+            .await;
+            return None;
+        }
+        _ => {}
     }
     send_server(
         socket,
@@ -305,15 +361,20 @@ async fn serve_sale(
     };
     match ending {
         Ending::Accepted => accept_command(socket, submit.request_id).await,
-        Ending::Silent | Ending::Unserved | Ending::Served => {}
+        Ending::Silent
+        | Ending::Unserved
+        | Ending::Served
+        | Ending::Failed
+        | Ending::Released
+        | Ending::Closed => {}
         Ending::Rejected(delivery) => {
             send_server(
                 socket,
-                ServerMessage::RequestError(RequestErrorEnvelope {
-                    request_id: submit.request_id,
-                    error: ServerError::InternalError,
+                ServerMessage::Reply(crate::ws::types::ReplyMessage::failed(
+                    submit.request_id,
+                    ServerError::InternalError,
                     delivery,
-                }),
+                )),
             )
             .await;
         }
@@ -350,7 +411,7 @@ async fn sell_rfq_takes_a_quote_signs_the_served_sale_and_reports_delivery() {
     let mut outcomes = Vec::new();
     for served in [true, true, true, true, false] {
         let mut desk = Desk {
-            writer: writer(&case),
+            vault: writer(&case),
             min_price: num(&case["position"]["price"]),
             events: Vec::new(),
             stall: None,
@@ -358,10 +419,10 @@ async fn sell_rfq_takes_a_quote_signs_the_served_sale_and_reports_delivery() {
         let window = Duration::from_millis(if served { 5_000 } else { 300 });
         outcomes.push(
             client
-                .sell_rfq(&chain, &sale(&case, window), epoch, &Ungated, &mut desk)
+                .trade_rfq(&chain, &sale(&case, window), epoch, &Ungated, &mut desk)
                 .await,
         );
-        let signed: &[&str] = if served { &["writer", "signed"] } else { &[] };
+        let signed: &[&str] = if served { &["vault", "signed"] } else { &[] };
         assert_eq!(
             desk.events,
             [&["take", "take", "accepting"], signed].concat()
@@ -384,7 +445,7 @@ async fn sell_rfq_takes_a_quote_signs_the_served_sale_and_reports_delivery() {
         );
         encode_base58(&bytes[65..129])
     };
-    let Ok(SaleOutcome::Submitted(signed)) = &outcomes[0] else {
+    let Ok(TradeOutcome::Submitted(signed)) = &outcomes[0] else {
         panic!("first sale submitted: {:?}", outcomes[0]);
     };
     assert_eq!(
@@ -416,8 +477,64 @@ async fn sell_rfq_takes_a_quote_signs_the_served_sale_and_reports_delivery() {
         "a timed-out submission may be in flight"
     );
     assert!(
-        matches!(&outcomes[4], Err(error @ SaleError::Unserved) if error.in_flight().is_none())
+        matches!(&outcomes[4], Err(error @ TradeError::Unserved) if error.in_flight().is_none())
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trade_rfq_ends_with_the_servers_reason_when_the_accepted_order_falls_through() {
+    let case = sale_case();
+    let (listener, url) = bind().await;
+    let peer_case = case.clone();
+    let peer = tokio::spawn(async move {
+        let mut socket = accept(&listener).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::ALL).await;
+        answer_reconcile(&mut socket, ALL_READS).await;
+        for ending in [Ending::Failed, Ending::Released, Ending::Closed] {
+            serve_sale(&mut socket, &peer_case, ending).await;
+        }
+        drain_until_closed(socket).await;
+    });
+
+    let client = spawn_writer(url);
+    let epoch = client.wait_until_ready().await.expect("ready");
+    let chain = chain(&case);
+    let window = Duration::from_secs(30);
+    let mut outcomes = Vec::new();
+    for _ in 0..3 {
+        let mut desk = Desk {
+            vault: writer(&case),
+            min_price: num(&case["position"]["price"]),
+            events: Vec::new(),
+            stall: None,
+        };
+        let started = tokio::time::Instant::now();
+        outcomes.push(
+            client
+                .trade_rfq(&chain, &sale(&case, window), epoch, &Ungated, &mut desk)
+                .await,
+        );
+        assert!(started.elapsed() < window / 2, "ended promptly");
+        assert_eq!(desk.events, ["take", "take", "accepting"]);
+    }
+    client.close().await.expect("close");
+    peer.await.expect("peer");
+
+    assert!(
+        matches!(&outcomes[0], Err(TradeError::OrderFailed(reason)) if reason == "signature timeout"),
+        "{:?}",
+        outcomes[0]
+    );
+    assert!(matches!(
+        &outcomes[1],
+        Err(TradeError::Released(
+            crate::types::RfqAvailableAgainReason::SignatureTimeout
+        ))
+    ));
+    assert!(matches!(
+        &outcomes[2],
+        Err(TradeError::Closed(crate::types::RfqCloseReason::Expired))
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -439,7 +556,7 @@ async fn sell_rfq_checks_the_market_honours_the_gate_and_ends_unfilled() {
     let epoch = client.wait_until_ready().await.expect("ready");
     let chain = chain(&case);
     let mut desk = Desk {
-        writer: writer(&case),
+        vault: writer(&case),
         min_price: 1,
         events: Vec::new(),
         stall: None,
@@ -448,17 +565,17 @@ async fn sell_rfq_checks_the_market_honours_the_gate_and_ends_unfilled() {
     elsewhere.market_pda = Pubkey::new_unique();
     assert!(matches!(
         client
-            .sell_rfq(&chain, &elsewhere, epoch, &Ungated, &mut desk)
+            .trade_rfq(&chain, &elsewhere, epoch, &Ungated, &mut desk)
             .await,
-        Err(SaleError::Market)
+        Err(TradeError::Market)
     ));
     let sale = sale(&case, Duration::from_millis(200));
     let refused = client
-        .sell_rfq(&chain, &sale, epoch, &Closed, &mut desk)
+        .trade_rfq(&chain, &sale, epoch, &Closed, &mut desk)
         .await
         .expect_err("gate refuses");
-    let SaleError::Rejected {
-        stage: SaleStage::Request,
+    let TradeError::Rejected {
+        stage: TradeStage::Request,
         error,
     } = &refused
     else {
@@ -467,15 +584,15 @@ async fn sell_rfq_checks_the_market_honours_the_gate_and_ends_unfilled() {
     assert!(matches!(error, VaultRequestError::Gated));
     assert_eq!(error.delivery(), Some(Delivery::NotForwarded));
     assert!(matches!(
-        client.sell_rfq(&chain, &sale, epoch + 1, &Ungated, &mut desk).await,
-        Err(SaleError::Rejected { error, .. }) if error.delivery() == Some(Delivery::NotForwarded)
+        client.trade_rfq(&chain, &sale, epoch + 1, &Ungated, &mut desk).await,
+        Err(TradeError::Rejected { error, .. }) if error.delivery() == Some(Delivery::NotForwarded)
     ));
     assert_eq!(
         client
-            .sell_rfq(&chain, &sale, epoch, &Ungated, &mut desk)
+            .trade_rfq(&chain, &sale, epoch, &Ungated, &mut desk)
             .await
             .expect("unfilled"),
-        SaleOutcome::Unfilled
+        TradeOutcome::Unfilled
     );
     assert!(desk.events.is_empty());
     client.close().await.expect("close");
@@ -494,9 +611,11 @@ async fn swap_submit_is_bound_to_its_epoch_and_gate() {
         };
         send_server(
             &mut socket,
-            ServerMessage::SwapSubmitResult(SwapSubmitResultData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: submit.request_id,
-                execution_id: submit.execution_id,
+                result: crate::ws::types::ReplyResult::SwapSubmitted {
+                    execution_id: submit.execution_id,
+                },
             }),
         )
         .await;
@@ -526,7 +645,7 @@ async fn swap_submit_is_bound_to_its_epoch_and_gate() {
         .swap_submit_in_epoch(submit(), epoch, &Ungated)
         .await
         .expect("receipt");
-    assert_eq!(receipt.execution_id, OrderId::new([3; 32]));
+    assert_eq!(receipt, OrderId::new([3; 32]));
     client.close().await.expect("close");
     peer.await.expect("peer");
 }
@@ -617,7 +736,11 @@ async fn a_stalled_desk_times_out_before_anything_is_signed() {
             .await
             .expect("send RfqCreated");
         let price = num(&peer_case["position"]["price"]);
-        send_server(&mut socket, quote(&peer_case, Uuid::from_u128(9), price)).await;
+        send_server(
+            &mut socket,
+            quote(&peer_case, Uuid::from_u128(9), price, TakerSide::Sell),
+        )
+        .await;
         let _ = serve_sale(&mut socket, &peer_case, Ending::Served).await;
         drain_until_closed(socket).await;
     });
@@ -627,25 +750,25 @@ async fn a_stalled_desk_times_out_before_anything_is_signed() {
     let chain = chain(&case);
     let sale = sale(&case, Duration::from_millis(300));
     for (stall, stage, events) in [
-        ("take", SaleStage::Take, &["take"][..]),
+        ("take", TradeStage::Take, &["take"][..]),
         (
-            "writer",
-            SaleStage::Sign,
-            &["take", "take", "accepting", "writer"][..],
+            "vault",
+            TradeStage::Sign,
+            &["take", "take", "accepting", "vault"][..],
         ),
     ] {
         let mut desk = Desk {
-            writer: writer(&case),
+            vault: writer(&case),
             min_price: num(&case["position"]["price"]),
             events: Vec::new(),
             stall: Some(stall),
         };
         let error = client
-            .sell_rfq(&chain, &sale, epoch, &Ungated, &mut desk)
+            .trade_rfq(&chain, &sale, epoch, &Ungated, &mut desk)
             .await
             .expect_err("stalled desk");
         assert!(
-            matches!(&error, SaleError::TimedOut(timed_out) if *timed_out == stage),
+            matches!(&error, TradeError::TimedOut(timed_out) if *timed_out == stage),
             "{error:?}"
         );
         assert!(error.in_flight().is_none());
@@ -658,7 +781,7 @@ async fn a_stalled_desk_times_out_before_anything_is_signed() {
 const SPREAD_QUOTE_SIGNER: [u8; 32] = [21; 32];
 
 /// A spread on the fixture sale's pair and expiry, K2 four premiums above K1.
-fn spread_sale(case: &serde_json::Value, put: bool) -> VaultSale {
+fn spread_sale(case: &serde_json::Value, put: bool) -> VaultTrade {
     let p = &case["position"];
     let lower_strike = Strike::new(num(&p["strike"]));
     let upper_strike = Strike::new(num(&p["strike"]) + 4 * num(&p["price"]));
@@ -688,7 +811,7 @@ fn spread_sale(case: &serde_json::Value, put: bool) -> VaultSale {
 /// The fixture maker's quote for `sale` and the vault open it binds.
 fn spread_quote(
     case: &serde_json::Value,
-    sale: &VaultSale,
+    sale: &VaultTrade,
     rfq_id: Uuid,
 ) -> (QuoteReceivedMessage, crate::chain::vault::VaultOpenPosition) {
     let p = &case["position"];
@@ -704,7 +827,7 @@ fn spread_quote(
         order_id: OrderId::new([0; 32]),
         net_price: Price::new(num(&p["price"])),
     };
-    let VaultSaleTerms::Spread(terms) = sale.signed_terms(&quote).unwrap() else {
+    let VaultOpenTerms::Spread(terms) = sale.signed_terms(&quote).unwrap() else {
         panic!("spread sale signs spread terms");
     };
     let open = writer(case)
@@ -726,7 +849,7 @@ fn vault_sale_signs_both_spread_strikes_and_the_single_option_strike() {
         let (quote, _) = spread_quote(&case, &sale, Uuid::nil());
         assert_eq!(
             sale.signed_terms(&quote).unwrap(),
-            VaultSaleTerms::Spread(VaultSpreadTerms {
+            VaultOpenTerms::Spread(VaultSpreadTerms {
                 underlying_mint: key(&p["underlying_mint"]),
                 quote_mint: key(&p["quote_mint"]),
                 expiry_ts: num(&p["expiry_ts"]),
@@ -741,14 +864,16 @@ fn vault_sale_signs_both_spread_strikes_and_the_single_option_strike() {
             })
         );
     }
-    let ServerMessage::QuoteReceived(quote) = quote(&case, Uuid::nil(), num(&p["price"])) else {
+    let ServerMessage::QuoteReceived(quote) =
+        quote(&case, Uuid::nil(), num(&p["price"]), TakerSide::Sell)
+    else {
         panic!("quote");
     };
     assert_eq!(
         sale(&case, Duration::from_secs(1))
             .signed_terms(&quote)
             .unwrap(),
-        VaultSaleTerms::Physical(VaultTradeTerms {
+        VaultOpenTerms::Physical(VaultTradeTerms {
             underlying_mint: key(&p["underlying_mint"]),
             quote_mint: key(&p["quote_mint"]),
             expiry_ts: num(&p["expiry_ts"]),
@@ -768,7 +893,7 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
     let case = sale_case();
     let signer = BytesSigner::from_secret(SPREAD_QUOTE_SIGNER);
     // Call and put are served honestly; the last call is served with K2 moved.
-    let rounds: Vec<(VaultSale, Uuid, bool)> = [(false, true), (true, true), (false, false)]
+    let rounds: Vec<(VaultTrade, Uuid, bool)> = [(false, true), (true, true), (false, false)]
         .into_iter()
         .map(|(put, honest)| (spread_sale(&case, put), Uuid::new_v4(), honest))
         .collect();
@@ -880,7 +1005,7 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
         ],
     );
     let desk = || Desk {
-        writer: writer(&case),
+        vault: writer(&case),
         min_price: num(&case["position"]["price"]),
         events: Vec::new(),
         stall: None,
@@ -895,7 +1020,7 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
     else {
         panic!("call spread");
     };
-    let put_on_call = VaultSale {
+    let put_on_call = VaultTrade {
         terms: OptionTerms::PutSpread {
             lower_strike,
             upper_strike,
@@ -904,16 +1029,16 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
     };
     assert!(matches!(
         client
-            .sell_rfq(&chain, &put_on_call, epoch, &Ungated, &mut desk())
+            .trade_rfq(&chain, &put_on_call, epoch, &Ungated, &mut desk())
             .await,
-        Err(SaleError::Market)
+        Err(TradeError::Market)
     ));
     for (lower_strike, upper_strike) in [
         (upper_strike, lower_strike),
         (lower_strike, lower_strike),
         (Strike::new(0), upper_strike),
     ] {
-        let invalid = VaultSale {
+        let invalid = VaultTrade {
             terms: OptionTerms::CallSpread {
                 lower_strike,
                 upper_strike,
@@ -922,9 +1047,9 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
         };
         assert!(matches!(
             client
-                .sell_rfq(&chain, &invalid, epoch, &Ungated, &mut desk())
+                .trade_rfq(&chain, &invalid, epoch, &Ungated, &mut desk())
                 .await,
-            Err(SaleError::Spread(SpreadError::InvalidStrikes))
+            Err(TradeError::Spread(SpreadError::InvalidStrikes))
         ));
     }
 
@@ -933,7 +1058,7 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
         let mut desk = desk();
         outcomes.push(
             client
-                .sell_rfq(&chain, sale, epoch, &Ungated, &mut desk)
+                .trade_rfq(&chain, sale, epoch, &Ungated, &mut desk)
                 .await,
         );
     }
@@ -941,7 +1066,7 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
     let submitted = peer.await.expect("peer");
     assert_eq!(submitted.len(), 2);
     for ((outcome, submit), (quote, _, _)) in outcomes.iter().zip(&submitted).zip(&served) {
-        let Ok(SaleOutcome::Submitted(signed)) = outcome else {
+        let Ok(TradeOutcome::Submitted(signed)) = outcome else {
             panic!("spread sale submitted: {outcome:?}");
         };
         assert_eq!(
@@ -958,7 +1083,7 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
     assert!(
         matches!(
             tampered,
-            SaleError::Sign(VaultTxError::Intent(VaultIntentError::Data {
+            TradeError::Sign(VaultTxError::Intent(VaultIntentError::Data {
                 index: 4,
                 offset: 74
             }))
@@ -966,4 +1091,95 @@ async fn sell_rfq_sells_call_and_put_spreads_and_refuses_a_tampered_one() {
         "{tampered:?}"
     );
     assert!(tampered.in_flight().is_none());
+}
+
+fn purchase_case() -> serde_json::Value {
+    let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../tests/fixtures/vault_served_taker_buy_tx.json"
+    ))
+    .unwrap();
+    cases
+        .into_iter()
+        .find(|case| case["kind"] == "vault_taker_buy")
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trade_rfq_buys_from_a_maker_and_signs_the_served_purchase() {
+    let case = purchase_case();
+    let (listener, url) = bind().await;
+    let peer_case = case.clone();
+    let peer = tokio::spawn(async move {
+        let mut socket = accept(&listener).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::ALL).await;
+        answer_reconcile(&mut socket, ALL_READS).await;
+        let submitted = serve_sale(&mut socket, &peer_case, Ending::Accepted).await;
+        drain_until_closed(socket).await;
+        submitted
+    });
+
+    let client = spawn_writer(url);
+    let epoch = client.wait_until_ready().await.expect("ready");
+    let mut desk = Desk {
+        vault: manager(&case, "holder"),
+        min_price: num(&case["position"]["price"]),
+        events: Vec::new(),
+        stall: None,
+    };
+    let purchase = VaultTrade {
+        side: TakerSide::Buy,
+        ..sale(&case, Duration::from_secs(5))
+    };
+    let outcome = client
+        .trade_rfq(&chain(&case), &purchase, epoch, &Ungated, &mut desk)
+        .await;
+    client.close().await.expect("close");
+    let submitted = peer.await.expect("peer").expect("submitted");
+
+    let Ok(TradeOutcome::Submitted(signed)) = outcome else {
+        panic!("purchase submitted: {outcome:?}");
+    };
+    assert_eq!(signed.order_id, submitted.order_id);
+    assert_eq!(
+        desk.events,
+        ["take", "take", "accepting", "vault", "signed"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trade_rfq_refuses_a_side_the_operator_may_not_take() {
+    let case = purchase_case();
+    let (listener, url) = bind().await;
+    let peer = tokio::spawn(async move {
+        let mut socket = accept(&listener).await;
+        vault_handshake(&mut socket, VaultDelegatePermissions::OPEN_AS_WRITER).await;
+        answer_reconcile(&mut socket, TAKER_READS).await;
+        drain_until_closed(socket).await;
+    });
+
+    let client = spawn_writer(url);
+    let epoch = client.wait_until_ready().await.expect("ready");
+    let mut desk = Desk {
+        vault: manager(&case, "holder"),
+        min_price: 0,
+        events: Vec::new(),
+        stall: None,
+    };
+    let purchase = VaultTrade {
+        side: TakerSide::Buy,
+        ..sale(&case, Duration::from_secs(1))
+    };
+    let outcome = client
+        .trade_rfq(&chain(&case), &purchase, epoch, &Ungated, &mut desk)
+        .await;
+    assert!(matches!(
+        outcome,
+        Err(TradeError::Rejected {
+            stage: TradeStage::Request,
+            error: VaultRequestError::SideNotPermitted,
+        })
+    ));
+    assert!(desk.events.is_empty());
+    client.close().await.expect("close");
+    peer.await.expect("peer");
 }

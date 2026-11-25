@@ -371,8 +371,8 @@ pub struct MyCapsData {
     pub quote_liabilities: Vec<QuoteLiabilityCapInfo>,
 }
 
-/// Answer to `CheckQuote`. A rejection carries exactly what a `QuoteRejected`
-/// would; `caps_unavailable` means retry, not a cap.
+/// Answer to `CheckQuote`. A rejection carries what a `QuoteUpdate` `rejected` would;
+/// `caps_unavailable` means retry, not a cap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuoteCheckData {
     pub request_id: Uuid,
@@ -445,14 +445,15 @@ pub struct OrderStatusMessage {
     pub state: OrderExecutionState,
 }
 
-/// Evidence available for an order lookup. `Unknown` means the server cannot
-/// establish an owned pending execution or a confirmed position; it is not a
-/// proof that the order never executed.
+/// Evidence available for an order lookup. `Expired` is final: the finalized chain
+/// clock passed the quote's `valid_until` and no position exists. `Unknown` means the
+/// server cannot establish any of these; it is not a proof that the order never executed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OrderExecutionState {
     Pending,
     Confirmed { position_pda: Address32 },
+    Expired,
     Unknown,
 }
 
@@ -504,31 +505,30 @@ pub struct SponsoredTxToSignData {
     pub signature_deadline_at: SystemTime,
 }
 
+/// Every change to a taker's order after `AcceptQuote`; drop one only if its `order_version`
+/// is lower than what you hold (equal versions apply). `confirmed` and `failed` end the order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderAcceptedData {
+pub struct OrderUpdateMessage {
     pub order_id: OrderId,
     pub order_version: OrderVersion,
+    pub state: OrderState,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderSubmittedData {
-    pub order_id: OrderId,
-    pub transaction_signature: String,
-    pub order_version: OrderVersion,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OrderState {
+    Accepted,
+    Submitted { transaction_signature: String },
+    Confirmed { position_pda: Address32 },
+    Failed { reason: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderConfirmedData {
-    pub order_id: OrderId,
-    pub position_pda: Address32,
-    pub order_version: OrderVersion,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderFailedData {
-    pub order_id: OrderId,
-    pub reason: String,
-    pub order_version: OrderVersion,
+impl OrderState {
+    /// No further update can follow for this order.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Confirmed { .. } | Self::Failed { .. })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

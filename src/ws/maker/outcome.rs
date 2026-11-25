@@ -2,9 +2,12 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use crate::types::{OrderId, QuoteCancelReason, QuoteFinalStatus, RfqCloseReason};
+use crate::types::{
+    OptionTerms, OrderId, QuoteExpiry, QuoteExpiryReason, RfqAvailableAgainReason, RfqCloseReason,
+    TakerSide,
+};
 use crate::ws::managed::ManagedInbound;
-use crate::ws::types::{QuoteFilledMessage, QuoteRejectReason, ServerMessage, YourQuote};
+use crate::ws::types::{QuoteFill, QuoteRejectReason, QuoteState, ServerMessage};
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -13,9 +16,18 @@ pub enum QuoteOutcome {
     Acked,
     Selected,
     Rejected(QuoteRejectReason),
-    Filled(Box<QuoteFilledMessage>),
+    Filled(Box<QuoteFill>),
     Expired,
+    /// The order ended; quote again with a fresh order valid at least until `min_valid_until`.
+    RefreshRequested {
+        terms: OptionTerms,
+        side: TakerSide,
+        min_valid_until: QuoteExpiry,
+        reason: QuoteExpiryReason,
+    },
     Cancelled,
+    /// Selected, but the trade did not happen; the quote left the book.
+    Released(RfqAvailableAgainReason),
     Lost(QuoteLossReason),
     Unknown(QuoteUnknownReason),
 }
@@ -31,7 +43,6 @@ impl QuoteOutcome {
 #[non_exhaustive]
 pub enum QuoteLossReason {
     RfqClosed(RfqCloseReason),
-    RfqAccepted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,67 +131,42 @@ impl QuoteOutcomeTracker {
 
     fn apply(&mut self, message: &ServerMessage) {
         let next = match message {
-            ServerMessage::QuoteAcknowledged(m)
+            ServerMessage::QuoteUpdate(m)
                 if m.order_id == self.order_id && m.rfq_id == self.rfq_id =>
             {
-                if matches!(self.outcome, QuoteOutcome::Selected) {
-                    return;
-                }
-                QuoteOutcome::Acked
-            }
-            ServerMessage::QuoteRejected(m)
-                if m.order_id == self.order_id && m.rfq_id == self.rfq_id =>
-            {
-                QuoteOutcome::Rejected(m.reason.clone())
-            }
-            ServerMessage::QuoteSelected(m)
-                if m.order_id == self.order_id && m.rfq_id == self.rfq_id =>
-            {
-                QuoteOutcome::Selected
-            }
-            ServerMessage::QuoteFilled(m)
-                if m.order_id == self.order_id && m.rfq_id == self.rfq_id =>
-            {
-                QuoteOutcome::Filled(Box::new(m.clone()))
-            }
-            ServerMessage::QuoteExpired(m)
-                if m.order_id == self.order_id && m.rfq_id == self.rfq_id =>
-            {
-                QuoteOutcome::Expired
-            }
-            ServerMessage::QuoteCancelled(m)
-                if m.rfq_id == self.rfq_id && m.order_ids.contains(&self.order_id) =>
-            {
-                if m.reason == QuoteCancelReason::RfqAccepted {
-                    QuoteOutcome::Lost(QuoteLossReason::RfqAccepted)
-                } else {
-                    QuoteOutcome::Cancelled
-                }
-            }
-            ServerMessage::RfqAvailableAgain(m)
-                if m.rfq_id == self.rfq_id && matches!(self.outcome, QuoteOutcome::Selected) =>
-            {
-                QuoteOutcome::Acked
-            }
-            ServerMessage::RfqClosed(m) if m.rfq_id == self.rfq_id => match &m.your_quote {
-                YourQuote::Quoted {
-                    order_id, status, ..
-                } if *order_id == self.order_id => match status {
-                    QuoteFinalStatus::Expired => QuoteOutcome::Expired,
-                    QuoteFinalStatus::Cancelled => QuoteOutcome::Cancelled,
-                    QuoteFinalStatus::Outbid => {
-                        QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason))
+                match &m.state {
+                    QuoteState::Live { .. } if matches!(self.outcome, QuoteOutcome::Selected) => {
+                        return;
                     }
-                    QuoteFinalStatus::Filled => return,
-                },
-                _ if m.reason == RfqCloseReason::Filled
-                    && matches!(self.outcome, QuoteOutcome::Acked) =>
-                {
-                    QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason))
+                    QuoteState::Live { .. } => QuoteOutcome::Acked,
+                    QuoteState::RefreshRequested {
+                        terms,
+                        side,
+                        min_valid_until,
+                        reason,
+                        ..
+                    } => QuoteOutcome::RefreshRequested {
+                        terms: *terms,
+                        side: *side,
+                        min_valid_until: *min_valid_until,
+                        reason: *reason,
+                    },
+                    QuoteState::Expired { .. } => QuoteOutcome::Expired,
+                    QuoteState::Selected(_) => QuoteOutcome::Selected,
+                    QuoteState::Filled(fill) => QuoteOutcome::Filled(Box::new(fill.clone())),
+                    QuoteState::Rejected { .. }
+                        if !matches!(self.outcome, QuoteOutcome::Pending) =>
+                    {
+                        return;
+                    }
+                    QuoteState::Rejected { reason, .. } => QuoteOutcome::Rejected(reason.clone()),
+                    QuoteState::Released { reason, .. } => QuoteOutcome::Released(*reason),
+                    QuoteState::Lost { reason, .. } => {
+                        QuoteOutcome::Lost(QuoteLossReason::RfqClosed(*reason))
+                    }
+                    QuoteState::Cancelled { .. } => QuoteOutcome::Cancelled,
                 }
-                _ if m.reason == RfqCloseReason::Filled => return,
-                _ => QuoteOutcome::Lost(QuoteLossReason::RfqClosed(m.reason)),
-            },
+            }
             _ => return,
         };
         self.outcome = next;

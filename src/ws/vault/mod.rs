@@ -5,7 +5,7 @@ mod fleet;
 mod gate;
 mod projection;
 #[cfg(feature = "chain-rpc")]
-mod sell;
+mod trade;
 mod tx;
 
 pub use client::{VaultClientError, VaultOperatorClient, VaultRequestError};
@@ -15,7 +15,7 @@ pub use fleet::{FleetListing, VaultFleet, VaultFleetConfig};
 pub use gate::{SendGate, Ungated};
 pub use projection::{VaultProjection, VaultProjectionReceiver};
 #[cfg(feature = "chain-rpc")]
-pub use sell::{SaleDesk, SaleError, SaleOutcome, SaleStage, SignedSale, VaultSale};
+pub use trade::{SignedTrade, TradeDesk, TradeError, TradeOutcome, TradeStage, VaultTrade};
 pub use tx::VaultTxError;
 
 #[cfg(test)]

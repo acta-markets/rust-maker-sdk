@@ -45,32 +45,32 @@ fn auth_success_requires_expires_at() {
 
 #[test]
 fn order_lifecycle_frames_preserve_reconciliation_rank() {
-    let confirmed: ServerMessage = serde_json::from_value(json!({
-        "type": "OrderConfirmed",
-        "data": {
-            "order_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
-            "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
-            "order_version": 4
-        }
-    }))
-    .unwrap();
-    let failed: ServerMessage = serde_json::from_value(json!({
-        "type": "OrderFailed",
-        "data": {
-            "order_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
-            "reason": "local failure",
-            "order_version": 3
-        }
-    }))
-    .unwrap();
+    let order = |order_version: u8, state: serde_json::Value| -> ServerMessage {
+        serde_json::from_value(json!({
+            "type": "OrderUpdate",
+            "data": {
+                "order_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+                "order_version": order_version,
+                "state": state
+            }
+        }))
+        .unwrap()
+    };
+    let confirmed = order(
+        4,
+        json!({"type": "confirmed", "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP"}),
+    );
+    let failed = order(3, json!({"type": "failed", "reason": "local failure"}));
 
     assert!(matches!(
         confirmed,
-        ServerMessage::OrderConfirmed(data) if data.order_version == OrderVersion::CONFIRMED
+        ServerMessage::OrderUpdate(data)
+            if data.order_version == OrderVersion::CONFIRMED && data.state.is_terminal()
     ));
     assert!(matches!(
         failed,
-        ServerMessage::OrderFailed(data) if data.order_version == OrderVersion::FAILED
+        ServerMessage::OrderUpdate(data)
+            if data.order_version == OrderVersion::FAILED && data.state.is_terminal()
     ));
 }
 
@@ -99,21 +99,10 @@ fn auth_error_requires_message() {
 }
 
 enum ExpectedParse {
-    QuotesUpdate {
-        rfq_id: Uuid,
-        quotes_len: usize,
-    },
-    ChainEventMakerRegistered {
-        quote_signing: &'static str,
-    },
-    RfqClosed {
-        rfq_id: Uuid,
-        rfq_version: u64,
-    },
-    QuoteCancelled {
-        order_ids_len: usize,
-        reason: QuoteCancelReason,
-    },
+    QuotesUpdate { rfq_id: Uuid, quotes_len: usize },
+    ChainEventMakerRegistered { quote_signing: &'static str },
+    RfqClosed { rfq_id: Uuid, rfq_version: u64 },
+    QuoteCancelled { reason: QuoteCancelReason },
 }
 
 #[test]
@@ -165,14 +154,16 @@ fn server_message_parses_cases() {
         (
             "rfq_closed",
             json!({
-                "type": "RfqClosed",
+                "type": "RfqUpdate",
                 "data": {
                     "rfq_id": rfq_id,
                     "rfq_version": 7,
-                    "reason": "expired",
-                    "your_quote": {"type": "none"},
-                    "winner": {"type": "none"},
-                    "closed_at": 123
+                    "state": {
+                        "type": "closed",
+                        "reason": "expired",
+                        "winner": {"type": "none"},
+                        "at": 123
+                    }
                 }
             }),
             ExpectedParse::RfqClosed {
@@ -183,16 +174,14 @@ fn server_message_parses_cases() {
         (
             "quote_cancelled",
             json!({
-                "type": "QuoteCancelled",
+                "type": "QuoteUpdate",
                 "data": {
                     "rfq_id": rfq_id,
-                    "order_ids": [],
-                    "reason": "requested",
-                    "cancelled_at": 123
+                    "order_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+                    "state": {"type": "cancelled", "rfq_version": 2, "reason": "requested"}
                 }
             }),
             ExpectedParse::QuoteCancelled {
-                order_ids_len: 0,
                 reason: QuoteCancelReason::Requested,
             },
         ),
@@ -221,7 +210,7 @@ fn server_message_parses_cases() {
                 );
             }
             (
-                ServerMessage::RfqClosed(closed),
+                ServerMessage::RfqUpdate(closed),
                 ExpectedParse::RfqClosed {
                     rfq_id,
                     rfq_version,
@@ -230,15 +219,15 @@ fn server_message_parses_cases() {
                 assert_eq!(closed.rfq_id, rfq_id, "{name}");
                 assert_eq!(closed.rfq_version, RfqVersion::new(rfq_version), "{name}");
             }
-            (
-                ServerMessage::QuoteCancelled(cancelled),
-                ExpectedParse::QuoteCancelled {
-                    order_ids_len,
-                    reason,
-                },
-            ) => {
-                assert_eq!(cancelled.order_ids.len(), order_ids_len, "{name}");
-                assert_eq!(cancelled.reason, reason, "{name}");
+            (ServerMessage::QuoteUpdate(update), ExpectedParse::QuoteCancelled { reason }) => {
+                assert!(
+                    matches!(
+                        update.state,
+                        acta_maker_sdk::ws::types::QuoteState::Cancelled { reason: got, .. }
+                            if got == reason
+                    ),
+                    "{name}"
+                );
             }
             _ => panic!("unexpected message for case: {name}"),
         }
@@ -475,22 +464,25 @@ fn welcome_roundtrip() {
 fn quote_acknowledged_roundtrip() {
     let rfq_id = Uuid::new_v4();
     let order_id = OrderId::new([1u8; 32]);
-    let replaced = OrderId::new([2u8; 32]);
-    let msg = ServerMessage::QuoteAcknowledged(QuoteAcknowledgedMessage {
+    let msg = ServerMessage::QuoteUpdate(acta_maker_sdk::ws::types::QuoteUpdateMessage {
         rfq_id,
         order_id,
-        replaced: acta_maker_sdk::ws::types::ReplacedQuote::Replaced { order_id: replaced },
+        state: acta_maker_sdk::ws::types::QuoteState::Live {
+            rfq_version: crate::RfqVersion::new(1),
+            is_best: true,
+            best_price: acta_maker_sdk::ws::types::QuotedPrice::None,
+        },
     });
     let json = serde_json::to_string(&msg).unwrap();
     let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
     match parsed {
-        ServerMessage::QuoteAcknowledged(data) => {
+        ServerMessage::QuoteUpdate(data) => {
             assert_eq!(data.rfq_id, rfq_id);
             assert_eq!(data.order_id, order_id);
-            assert_eq!(
-                data.replaced,
-                acta_maker_sdk::ws::types::ReplacedQuote::Replaced { order_id: replaced }
-            );
+            assert!(matches!(
+                data.state,
+                acta_maker_sdk::ws::types::QuoteState::Live { is_best: true, .. }
+            ));
         }
         _ => panic!("expected QuoteAcknowledged"),
     }
@@ -499,12 +491,14 @@ fn quote_acknowledged_roundtrip() {
 #[test]
 fn quote_filled_names_its_market() {
     let frame = json!({
-        "type": "QuoteFilled",
+        "type": "QuoteUpdate",
         "data": {
             "rfq_id": "00000000-0000-0000-0000-000000000001",
             "order_id": "01".repeat(32),
+            "state": {
+            "type": "filled",
+            "rfq_version": 4,
             "market_pda": "GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9",
-            "expiry_ts": 1_700_000_000,
             "terms": {"type": "cash_secured_put", "strike": "86000000000"},
             "side": "sell",
             "taker_owner": "5DNHbugre3SXXogpZroA5SEsENdAd69AfNK5Z7ZCWr84",
@@ -513,36 +507,35 @@ fn quote_filled_names_its_market() {
             "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
             "transaction_signature": "sig",
             "filled_at": 1_699_999_000,
+            },
         },
     });
-    let ServerMessage::QuoteFilled(filled) = serde_json::from_value(frame.clone()).unwrap() else {
-        panic!("expected QuoteFilled");
+    let message: ServerMessage = serde_json::from_value(frame.clone()).unwrap();
+    let ServerMessage::QuoteUpdate(acta_maker_sdk::ws::types::QuoteUpdateMessage {
+        state: acta_maker_sdk::ws::types::QuoteState::Filled(filled),
+        ..
+    }) = &message
+    else {
+        panic!("expected a filled QuoteUpdate");
     };
     assert_eq!(
         filled.market_pda,
         acta_maker_sdk::Address32::from_base58("GQHjFXCxFNwgSYmU87k3eu5oCXCtD89WmS3DRzFX3SP9")
             .unwrap()
     );
-    assert_eq!(
-        filled.expiry_ts,
-        UNIX_EPOCH + Duration::from_secs(1_700_000_000)
-    );
     assert_eq!(filled.terms.position_type(), PositionType::CashSecuredPut);
-    assert_eq!(
-        serde_json::to_value(ServerMessage::QuoteFilled(filled)).unwrap(),
-        frame
-    );
+    assert_eq!(serde_json::to_value(&message).unwrap(), frame);
     for field in ["market_pda", "terms", "side"] {
         let mut missing = frame.clone();
-        missing["data"].as_object_mut().unwrap().remove(field);
+        missing["data"]["state"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
         assert!(
             serde_json::from_value::<ServerMessage>(missing).is_err(),
             "{field}"
         );
     }
-    let mut unknown_expiry = frame.clone();
-    unknown_expiry["data"]["expiry_ts"] = serde_json::Value::Null;
-    assert!(serde_json::from_value::<ServerMessage>(unknown_expiry).is_err());
 }
 
 #[test]
@@ -909,16 +902,16 @@ fn subscribe_roundtrip() {
 
 #[test]
 fn request_error_roundtrip() {
-    let original = ServerMessage::RequestError(RequestErrorEnvelope {
-        request_id: Uuid::new_v4(),
-        error: ServerError::RfqNotFound,
-        delivery: acta_maker_sdk::ws::types::server::Delivery::NotApplicable,
-    });
+    let original = ServerMessage::Reply(acta_maker_sdk::ws::types::ReplyMessage::failed(
+        Uuid::new_v4(),
+        ServerError::RfqNotFound,
+        acta_maker_sdk::ws::types::server::Delivery::NotApplicable,
+    ));
     let json = serde_json::to_value(&original).unwrap();
     let parsed: ServerMessage = serde_json::from_value(json).unwrap();
     match parsed {
-        ServerMessage::RequestError(env) => {
-            assert!(matches!(env.error, ServerError::RfqNotFound));
+        ServerMessage::Reply(env) => {
+            assert!(matches!(env.error(), Some(ServerError::RfqNotFound)));
         }
         _ => panic!("expected RequestError"),
     }
@@ -926,33 +919,39 @@ fn request_error_roundtrip() {
 
 #[test]
 fn subscribe_ack_roundtrip() {
-    let original = ServerMessage::SubscribeAck(SubscribeAckData {
+    let original = ServerMessage::Reply(acta_maker_sdk::ws::types::ReplyMessage {
         request_id: Uuid::new_v4(),
-        subscribed: vec![common::WsChannel::Rfqs],
+        result: acta_maker_sdk::ws::types::ReplyResult::Subscribed {
+            channels: vec![common::WsChannel::Rfqs],
+        },
     });
     let json = serde_json::to_value(&original).unwrap();
     let parsed: ServerMessage = serde_json::from_value(json).unwrap();
     match parsed {
-        ServerMessage::SubscribeAck(data) => {
-            assert_eq!(data.subscribed, vec![common::WsChannel::Rfqs]);
-        }
-        _ => panic!("expected SubscribeAck"),
+        ServerMessage::Reply(acta_maker_sdk::ws::types::ReplyMessage {
+            result: acta_maker_sdk::ws::types::ReplyResult::Subscribed { channels },
+            ..
+        }) => assert_eq!(channels, vec![common::WsChannel::Rfqs]),
+        other => panic!("expected a Subscribed reply, got {other:?}"),
     }
 }
 
 #[test]
 fn unsubscribe_ack_roundtrip() {
-    let original = ServerMessage::UnsubscribeAck(UnsubscribeAckData {
+    let original = ServerMessage::Reply(acta_maker_sdk::ws::types::ReplyMessage {
         request_id: Uuid::new_v4(),
-        unsubscribed: vec![common::WsChannel::Markets],
+        result: acta_maker_sdk::ws::types::ReplyResult::Unsubscribed {
+            channels: vec![common::WsChannel::Markets],
+        },
     });
     let json = serde_json::to_value(&original).unwrap();
     let parsed: ServerMessage = serde_json::from_value(json).unwrap();
     match parsed {
-        ServerMessage::UnsubscribeAck(data) => {
-            assert_eq!(data.unsubscribed, vec![common::WsChannel::Markets]);
-        }
-        _ => panic!("expected UnsubscribeAck"),
+        ServerMessage::Reply(acta_maker_sdk::ws::types::ReplyMessage {
+            result: acta_maker_sdk::ws::types::ReplyResult::Unsubscribed { channels },
+            ..
+        }) => assert_eq!(channels, vec![common::WsChannel::Markets]),
+        other => panic!("expected a Unsubscribed reply, got {other:?}"),
     }
 }
 
@@ -1012,23 +1011,19 @@ proptest! {
         ],
     ) {
         let rfq_id = Uuid::from_bytes(rfq_bytes);
-        let msg = ServerMessage::RfqClosed(RfqClosedMessage {
-            rfq_id,
-            rfq_version: RfqVersion::new(rfq_version),
-            reason,
-            your_quote: acta_maker_sdk::ws::types::YourQuote::None,
-            winner: acta_maker_sdk::ws::types::RfqWinner::None,
-            closed_at: UNIX_EPOCH + Duration::from_secs(closed_at),
-        });
+        let msg = ServerMessage::RfqUpdate(acta_maker_sdk::ws::types::RfqUpdateMessage { rfq_id, rfq_version: RfqVersion::new(rfq_version), state: acta_maker_sdk::ws::types::RfqState::Closed { reason, winner: acta_maker_sdk::ws::types::RfqWinner::None, at: UNIX_EPOCH + Duration::from_secs(closed_at) } });
 
         let raw = serde_json::to_string(&msg).unwrap();
         let decoded: ServerMessage = serde_json::from_str(&raw).unwrap();
         match decoded {
-            ServerMessage::RfqClosed(decoded) => {
+            ServerMessage::RfqUpdate(decoded) => {
                 prop_assert_eq!(decoded.rfq_id, rfq_id);
                 prop_assert_eq!(decoded.rfq_version, RfqVersion::new(rfq_version));
-                prop_assert_eq!(decoded.reason, reason);
-                prop_assert_eq!(decoded.closed_at, UNIX_EPOCH + Duration::from_secs(closed_at));
+                let acta_maker_sdk::ws::types::RfqState::Closed { reason: decoded_reason, at, .. } = decoded.state else {
+                    return Err(proptest::test_runner::TestCaseError::fail("not a closed RFQ"));
+                };
+                prop_assert_eq!(decoded_reason, reason);
+                prop_assert_eq!(at, UNIX_EPOCH + Duration::from_secs(closed_at));
             }
             _ => prop_assert!(false, "decoded wrong variant"),
         }
@@ -1037,28 +1032,34 @@ proptest! {
     #[test]
     fn quote_cancelled_roundtrip_prop(
         rfq_bytes in proptest::array::uniform16(any::<u8>()),
-        cancelled_at in 0u64..2_000_000_000u64,
         reason in prop_oneof![
             Just(QuoteCancelReason::Requested),
             Just(QuoteCancelReason::RiskCheck),
-            Just(QuoteCancelReason::RfqAccepted),
+            Just(QuoteCancelReason::MakerDisconnected),
+            Just(QuoteCancelReason::Replaced),
         ],
     ) {
         let rfq_id = Uuid::from_bytes(rfq_bytes);
-        let msg = ServerMessage::QuoteCancelled(QuoteCancelledMessage {
+        let msg = ServerMessage::QuoteUpdate(acta_maker_sdk::ws::types::QuoteUpdateMessage {
             rfq_id,
-            order_ids: Vec::new(),
-            reason,
-            cancelled_at: UNIX_EPOCH + Duration::from_secs(cancelled_at),
+            order_id: OrderId([0xaa; 32]),
+            state: acta_maker_sdk::ws::types::QuoteState::Cancelled {
+                rfq_version: crate::RfqVersion::new(1),
+                reason,
+            },
         });
 
         let raw = serde_json::to_string(&msg).unwrap();
         let decoded: ServerMessage = serde_json::from_str(&raw).unwrap();
         match decoded {
-            ServerMessage::QuoteCancelled(decoded) => {
+            ServerMessage::QuoteUpdate(decoded) => {
                 prop_assert_eq!(decoded.rfq_id, rfq_id);
-                prop_assert_eq!(decoded.reason, reason);
-                prop_assert_eq!(decoded.cancelled_at, UNIX_EPOCH + Duration::from_secs(cancelled_at));
+                prop_assert!(decoded.state.is_terminal());
+                let cancelled_with_reason = matches!(
+                    decoded.state,
+                    acta_maker_sdk::ws::types::QuoteState::Cancelled { reason: got, .. } if got == reason
+                );
+                prop_assert!(cancelled_with_reason);
             }
             _ => prop_assert!(false, "decoded wrong variant"),
         }
@@ -1068,47 +1069,30 @@ proptest! {
 #[test]
 fn quote_rejected_roundtrip() {
     let rfq_id = Uuid::new_v4();
-    let msg = ServerMessage::QuoteRejected(QuoteRejectedMessage {
+    let msg = ServerMessage::QuoteUpdate(acta_maker_sdk::ws::types::QuoteUpdateMessage {
         rfq_id,
         order_id: OrderId([0xbb; 32]),
-        reason: QuoteRejectReason::InvalidStrike,
-        message: "strike not in allowed set".to_string(),
+        state: acta_maker_sdk::ws::types::QuoteState::Rejected {
+            reason: QuoteRejectReason::InvalidStrike,
+            message: "strike not in allowed set".to_string(),
+        },
     });
     let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"QuoteRejected\""));
+    assert!(json.contains("\"type\":\"QuoteUpdate\""));
     assert!(json.contains("\"invalid_strike\""));
     let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
     match parsed {
-        ServerMessage::QuoteRejected(data) => {
+        ServerMessage::QuoteUpdate(data) => {
             assert_eq!(data.rfq_id, rfq_id);
-            assert_eq!(data.reason, QuoteRejectReason::InvalidStrike);
+            assert!(matches!(
+                data.state,
+                acta_maker_sdk::ws::types::QuoteState::Rejected {
+                    reason: QuoteRejectReason::InvalidStrike,
+                    ..
+                }
+            ));
         }
         _ => panic!("Expected QuoteRejected"),
-    }
-}
-
-#[test]
-fn cancel_all_quotes_ack_roundtrip() {
-    let request_id = Uuid::new_v4();
-    let msg = ServerMessage::CancelAllQuotesAck(CancelAllQuotesAckMessage {
-        request_id,
-        cancelled_count: 3,
-        cancelled_order_ids: vec![
-            OrderId([0xaa; 32]),
-            OrderId([0xbb; 32]),
-            OrderId([0xcc; 32]),
-        ],
-    });
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"CancelAllQuotesAck\""));
-    let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
-    match parsed {
-        ServerMessage::CancelAllQuotesAck(data) => {
-            assert_eq!(data.request_id, request_id);
-            assert_eq!(data.cancelled_count, 3);
-            assert_eq!(data.cancelled_order_ids.len(), 3);
-        }
-        _ => panic!("Expected CancelAllQuotesAck"),
     }
 }
 
@@ -1180,44 +1164,12 @@ fn batch_quotes_roundtrip() {
 }
 
 #[test]
-fn batch_quotes_ack_roundtrip() {
-    let ack = QuoteAcknowledgedMessage {
-        rfq_id: Uuid::new_v4(),
-        order_id: OrderId([0xaa; 32]),
-        replaced: acta_maker_sdk::ws::types::ReplacedQuote::None,
-    };
-    let reject = QuoteRejectedMessage {
-        rfq_id: Uuid::new_v4(),
-        order_id: OrderId([0xbb; 32]),
-        reason: QuoteRejectReason::RfqNotActive,
-        message: "rejected".to_string(),
-    };
-    let msg = ServerMessage::BatchQuotesAck(BatchQuotesAckMessage {
-        results: vec![
-            BatchQuoteResult::Acknowledged(ack),
-            BatchQuoteResult::Rejected(reject),
-        ],
-    });
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"BatchQuotesAck\""));
-    let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
-    match parsed {
-        ServerMessage::BatchQuotesAck(data) => {
-            assert_eq!(data.results.len(), 2);
-            assert!(matches!(data.results[0], BatchQuoteResult::Acknowledged(_)));
-            assert!(matches!(data.results[1], BatchQuoteResult::Rejected(_)));
-        }
-        _ => panic!("Expected BatchQuotesAck"),
-    }
-}
-
-#[test]
 fn unknown_types_and_codes_are_rejected() {
     for raw in [
         r#"{"type":"SomeFutureMessage","data":{"x":1}}"#,
         r#"{"type":"Error","data":{"type":"Generic","data":{"code":"brand_new_code","message":"x"}}}"#,
         r#"{"type":"Error","data":{"type":"Cap","data":{"future_cap":{"limit":1}}}}"#,
-        r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":"quota_exhausted","message":"x"}}"#,
+        r#"{"type":"QuoteUpdate","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":"quota_exhausted","message":"x"}}"#,
         r#"{"type":"BatchQuotesAck","data":{"results":[{"status":"deferred","data":{}}]}}"#,
     ] {
         assert!(parse_server_message(raw).is_err(), "{raw}");
@@ -1412,33 +1364,45 @@ fn listing_cursors_are_tagged_keyset_positions() {
 
 #[test]
 fn quote_rejected_cap_exceeded_carries_the_cap_error() {
-    let raw = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":{"cap_exceeded":"caps_unavailable"},"message":"rejected"}}"#;
+    let raw = r#"{"type":"QuoteUpdate","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":{"type":"rejected","reason":{"cap_exceeded":"caps_unavailable"},"message":"rejected"}}}"#;
     match serde_json::from_str::<ServerMessage>(raw).unwrap() {
-        ServerMessage::QuoteRejected(data) => {
-            assert_eq!(
-                data.reason,
-                QuoteRejectReason::CapExceeded(CapError::CapsUnavailable)
-            );
+        ServerMessage::QuoteUpdate(data) => {
+            assert!(matches!(
+                data.state,
+                acta_maker_sdk::ws::types::QuoteState::Rejected {
+                    reason: QuoteRejectReason::CapExceeded(CapError::CapsUnavailable),
+                    ..
+                }
+            ));
         }
         _ => panic!("Expected QuoteRejected"),
     }
 
-    let structured = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":{"cap_exceeded":{"maker_position_cap_exceeded":{"current":3,"limit":3}}},"message":"rejected"}}"#;
+    let structured = r#"{"type":"QuoteUpdate","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":{"type":"rejected","reason":{"cap_exceeded":{"maker_position_cap_exceeded":{"current":3,"limit":3}}},"message":"rejected"}}}"#;
     match serde_json::from_str::<ServerMessage>(structured).unwrap() {
-        ServerMessage::QuoteRejected(data) => assert!(matches!(
-            data.reason,
-            QuoteRejectReason::CapExceeded(CapError::MakerPositionCapExceeded {
-                current: 3,
-                limit: 3
-            })
+        ServerMessage::QuoteUpdate(data) => assert!(matches!(
+            data.state,
+            acta_maker_sdk::ws::types::QuoteState::Rejected {
+                reason: QuoteRejectReason::CapExceeded(CapError::MakerPositionCapExceeded {
+                    current: 3,
+                    limit: 3
+                }),
+                ..
+            }
         )),
         _ => panic!("Expected QuoteRejected"),
     }
 
-    let plain = r#"{"type":"QuoteRejected","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":"invalid_strike","message":"rejected"}}"#;
+    let plain = r#"{"type":"QuoteUpdate","data":{"rfq_id":"00000000-0000-0000-0000-00000000002a","order_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":{"type":"rejected","reason":"invalid_strike","message":"rejected"}}}"#;
     match serde_json::from_str::<ServerMessage>(plain).unwrap() {
-        ServerMessage::QuoteRejected(data) => {
-            assert_eq!(data.reason, QuoteRejectReason::InvalidStrike)
+        ServerMessage::QuoteUpdate(data) => {
+            assert!(matches!(
+                data.state,
+                acta_maker_sdk::ws::types::QuoteState::Rejected {
+                    reason: QuoteRejectReason::InvalidStrike,
+                    ..
+                }
+            ))
         }
         _ => panic!("Expected QuoteRejected"),
     }
@@ -1487,24 +1451,28 @@ fn rfq_skipped_requires_cap_detail() {
 }
 
 #[test]
-fn cancel_quote_ack_requires_all_fields() {
+fn subscribe_reply_requires_request_id_and_channels() {
     let ack = serde_json::json!({
-        "type": "CancelQuoteAck",
+        "type": "Reply",
         "data": {
             "request_id": "00000000-0000-0000-0000-000000000001",
-            "rfq_id": "00000000-0000-0000-0000-000000000002",
-            "cancelled_order_ids": []
+            "result": { "type": "subscribed", "channels": [] }
         }
     });
     let decoded: acta_maker_sdk::ws::types::ServerMessage =
         serde_json::from_value(ack.clone()).unwrap();
     assert!(matches!(
         decoded,
-        acta_maker_sdk::ws::types::ServerMessage::CancelQuoteAck(_)
+        acta_maker_sdk::ws::types::ServerMessage::Reply(_)
     ));
-    for field in ["request_id", "rfq_id", "cancelled_order_ids"] {
+    for (parent, field) in [("/data", "request_id"), ("/data/result", "channels")] {
         let mut missing = ack.clone();
-        missing["data"].as_object_mut().unwrap().remove(field);
+        missing
+            .pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
         assert!(
             serde_json::from_value::<acta_maker_sdk::ws::types::ServerMessage>(missing).is_err(),
             "{field}"
@@ -1536,87 +1504,90 @@ fn lifecycle_identity_fields_are_required() {
             }),
         ),
         (
-            "RfqClosed",
+            "RfqUpdate closed",
             "rfq_version",
             json!({
-                "type": "RfqClosed",
+                "type": "RfqUpdate",
                 "data": {
                     "rfq_id": rfq_id,
                     "rfq_version": 1,
-                    "reason": "expired",
-                    "closed_at": 1,
-                    "your_quote": {"type": "none"},
-                    "winner": {"type": "none"},
+                    "state": {
+                        "type": "closed",
+                        "reason": "expired",
+                        "at": 1,
+                        "winner": {"type": "none"},
+                    },
                 },
             }),
         ),
         (
-            "RfqAvailableAgain",
+            "RfqUpdate available",
             "rfq_version",
             json!({
-                "type": "RfqAvailableAgain",
+                "type": "RfqUpdate",
                 "data": {
                     "rfq_id": rfq_id,
                     "rfq_version": 1,
-                    "reason": "signature_timeout",
-                    "available_again_at": 1,
+                    "state": { "type": "available", "reason": "signature_timeout", "at": 1 },
                 },
             }),
         ),
         (
-            "QuoteCancelled",
-            "order_ids",
+            "QuoteUpdate cancelled",
+            "order_id",
             json!({
-                "type": "QuoteCancelled",
+                "type": "QuoteUpdate",
                 "data": {
                     "rfq_id": rfq_id,
-                    "order_ids": [],
-                    "reason": "requested",
-                    "cancelled_at": 1,
+                    "order_id": order_id.as_str(),
+                    "state": { "type": "cancelled", "rfq_version": 2, "reason": "requested" },
                 },
             }),
         ),
         (
-            "OrderAccepted",
+            "OrderUpdate accepted",
             "order_version",
             json!({
-                "type": "OrderAccepted",
-                "data": { "order_id": order_id.as_str(), "order_version": 1 },
+                "type": "OrderUpdate",
+                "data": { "order_id": order_id.as_str(), "order_version": 1, "state": { "type": "accepted" } },
             }),
         ),
         (
-            "OrderSubmitted",
+            "OrderUpdate submitted",
             "order_version",
             json!({
-                "type": "OrderSubmitted",
+                "type": "OrderUpdate",
                 "data": {
                     "order_id": order_id.as_str(),
-                    "transaction_signature": "signature",
                     "order_version": 2,
+                    "state": { "type": "submitted", "transaction_signature": "signature" },
                 },
             }),
         ),
         (
-            "OrderConfirmed",
+            "OrderUpdate confirmed",
             "order_version",
             json!({
-                "type": "OrderConfirmed",
+                "type": "OrderUpdate",
                 "data": {
                     "order_id": order_id.as_str(),
-                    "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
                     "order_version": 4,
+                    "state": {
+                        "type": "confirmed",
+                        "position_pda": "75NqraLLofiLUpNQg2wUPG6CJpxcaGEZUwuNrnAgvcTP",
+                    },
                 },
             }),
         ),
         (
-            "OrderFailed",
+            "OrderUpdate failed",
             "order_version",
             json!({
-                "type": "OrderFailed",
+                "type": "OrderUpdate",
                 "data": {
                     "order_id": order_id.as_str(),
-                    "reason": "failed",
                     "order_version": 3,
+                    "state": { "type": "failed", "reason": "failed" },
                 },
             }),
         ),
@@ -1661,16 +1632,24 @@ fn required_wire_fields_preserve_values_and_reject_missing_or_null() {
     assert_eq!(cases.len(), 11);
     for case in cases {
         let field = case["field"].as_str().unwrap();
+        let (parent, leaf) = match field.rsplit_once('.') {
+            Some((parent, leaf)) => (format!("/data/{}", parent.replace('.', "/")), leaf),
+            None => ("/data".to_owned(), field),
+        };
         let message = &case["message"];
         let parsed: ServerMessage = serde_json::from_value(message.clone()).unwrap();
         let encoded = serde_json::to_value(parsed).unwrap();
-        assert_eq!(encoded["data"][field], message["data"][field]);
+        assert_eq!(
+            encoded.pointer(&parent).unwrap()[leaf],
+            message.pointer(&parent).unwrap()[leaf]
+        );
         for null in [false, true] {
             let mut incomplete = message.clone();
+            let object = incomplete.pointer_mut(&parent).unwrap();
             if null {
-                incomplete["data"][field] = serde_json::Value::Null;
+                object[leaf] = serde_json::Value::Null;
             } else {
-                incomplete["data"].as_object_mut().unwrap().remove(field);
+                object.as_object_mut().unwrap().remove(leaf);
             }
             assert!(
                 serde_json::from_value::<ServerMessage>(incomplete).is_err(),

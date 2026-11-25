@@ -445,3 +445,106 @@ async fn vault_cycles_decode_a_running_cycle() {
     assert_eq!(cycles[0].state, super::types::CycleState::Running {});
     assert_eq!(server.join().unwrap().len(), 1);
 }
+
+#[test]
+fn vault_obligations_decode_the_served_shape() {
+    let body = serde_json::json!({
+        "vault_pda": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+        "projection_version": 42,
+        "deposit_requests": {
+            "total": 3,
+            "requests": [{
+                "wallet": "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T",
+                "amount": "1000000",
+                "created_at": 10,
+                "transaction": {"type": "unknown"}
+            }],
+            "next_cursor": "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T"
+        },
+        "withdraw_requests": {"total": 0, "requests": [], "next_cursor": null},
+        "unfunded_holdings": [{
+            "position_pda": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+            "order_id": "05".repeat(32),
+            "market_pda": "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T",
+            "position_type": "covered_call",
+            "strike": "150000000000",
+            "quantity": "2000000000",
+            "expiry_ts": 1_800_000_000_u64,
+            "funding": {"mint": "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T", "amount": "300000000"}
+        }],
+        "pending_updates": [{"kind": "second_leg", "activates_at": 99}]
+    });
+    let obligations: super::VaultObligations = serde_json::from_value(body).expect("decodes");
+    assert_eq!(obligations.projection_version, 42);
+    assert_eq!(obligations.deposit_requests.total, 3);
+    assert_eq!(obligations.deposit_requests.requests[0].amount, 1_000_000);
+    assert!(obligations.withdraw_requests.next_cursor.is_none());
+    let holding = &obligations.unfunded_holdings[0];
+    assert_eq!(holding.position_type, super::HoldingType::CoveredCall);
+    assert_eq!(holding.funding.amount, 300_000_000);
+    assert_eq!(
+        obligations.pending_updates[0].kind,
+        super::VaultUpdateKind::SecondLeg
+    );
+}
+
+#[test]
+fn vault_swap_records_decode_both_kinds() {
+    let body = serde_json::json!({
+        "swaps": [
+            {
+                "id": "9",
+                "kind": {"type": "closing_convert", "direction": "second_to_main"},
+                "second_mint": "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T",
+                "actor": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+                "amount_in": "6571427",
+                "amount_out": "91146091",
+                "created_at": 50,
+                "transaction": {"type": "known", "signature": "sig"}
+            },
+            {
+                "id": "8",
+                "kind": {"type": "stage", "leg": "second", "mint": "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T", "generation": 2},
+                "second_mint": "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T",
+                "actor": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+                "amount_in": "1",
+                "amount_out": "1",
+                "created_at": 40,
+                "transaction": {"type": "known", "signature": "sig2"}
+            }
+        ],
+        "next_cursor": null
+    });
+    let page: super::types::VaultSwapsResponse = serde_json::from_value(body).expect("decodes");
+    assert_eq!(
+        page.swaps[0].kind,
+        super::VaultSwapRecordKind::ClosingConvert {
+            direction: crate::types::VaultSwapDirection::SecondToMain
+        }
+    );
+    assert_eq!(page.swaps[0].amount_out, 91_146_091);
+    assert!(
+        matches!(&page.swaps[1].kind, super::VaultSwapRecordKind::Stage(staging) if staging.generation == 2)
+    );
+}
+
+#[tokio::test]
+async fn vault_position_reads_one_row() {
+    let row: Value = serde_json::from_str::<Value>(POSITIONS).unwrap()["positions"][0].clone();
+    let (base, server) = serve(vec![("200 OK", row.to_string())]);
+    let client = HttpClient::new(base).unwrap();
+    let position = client
+        .vault_position(
+            crate::Address32::new([0; 32]),
+            crate::Address32::new([0; 32]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(&position).unwrap(), row);
+    assert_eq!(
+        server.join().unwrap(),
+        [
+            "/api/v1/vaults/11111111111111111111111111111111/positions/11111111111111111111111111111111"
+        ]
+    );
+}

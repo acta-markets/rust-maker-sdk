@@ -22,6 +22,7 @@ pub enum CloseCode {
     SessionReplaced,
     HelloTimeout,
     UnsupportedProtocolVersion,
+    VaultSessionInvalidated,
 }
 
 impl CloseCode {
@@ -35,6 +36,7 @@ impl CloseCode {
             Self::SessionReplaced => 4004,
             Self::HelloTimeout => 4005,
             Self::UnsupportedProtocolVersion => 4006,
+            Self::VaultSessionInvalidated => 4007,
         }
     }
 
@@ -53,6 +55,7 @@ impl CloseCode {
             4004 => Some(Self::SessionReplaced),
             4005 => Some(Self::HelloTimeout),
             4006 => Some(Self::UnsupportedProtocolVersion),
+            4007 => Some(Self::VaultSessionInvalidated),
             _ => None,
         }
     }
@@ -389,6 +392,16 @@ mod close_code_tests {
             (CloseCode::RateLimited, 4003, "rate_limited"),
             (CloseCode::SessionReplaced, 4004, "session_replaced"),
             (CloseCode::HelloTimeout, 4005, "hello_timeout"),
+            (
+                CloseCode::UnsupportedProtocolVersion,
+                4006,
+                "unsupported_protocol_version",
+            ),
+            (
+                CloseCode::VaultSessionInvalidated,
+                4007,
+                "vault_session_invalidated",
+            ),
         ] {
             assert_eq!((close.code(), close.reason()), (code, reason));
             assert_eq!(CloseCode::from_code(code), Some(close));

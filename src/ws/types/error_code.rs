@@ -68,7 +68,6 @@ pub enum WsErrorCode {
     MissingTickForUnderlyingMint,
     LadderStrikeSourceUnavailable,
     InvalidStrikes,
-    TakerBuyUnsupported,
     SpreadInvalidStrikes,
     SpreadTickViolation,
     SpreadPremiumInvalid,

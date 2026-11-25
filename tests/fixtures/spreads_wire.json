@@ -162,12 +162,15 @@
     }
   },
   "QuoteRejected": {
-    "type": "QuoteRejected",
+    "type": "QuoteUpdate",
     "data": {
       "rfq_id": "00000000-0000-0000-0000-000000000001",
       "order_id": "0101010101010101010101010101010101010101010101010101010101010101",
-      "reason": "spread_premium_invalid",
-      "message": "gross premium must be positive and below width liability"
+      "state": {
+        "type": "rejected",
+        "reason": "spread_premium_invalid",
+        "message": "gross premium must be positive and below width liability"
+      }
     }
   },
   "CheckQuote": {

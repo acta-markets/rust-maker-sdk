@@ -177,48 +177,54 @@
     }
   },
   {
-    "field": "market_pda",
+    "field": "state.market_pda",
     "message": {
-      "type": "QuoteFilled",
+      "type": "QuoteUpdate",
       "data": {
         "rfq_id": "00000000-0000-0000-0000-000000000001",
         "order_id": "0101010101010101010101010101010101010101010101010101010101010101",
-        "market_pda": "7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs",
-        "expiry_ts": 1700000000,
-        "terms": {
-          "type": "covered_call",
-          "strike": "100"
-        },
-        "side": "sell",
-        "taker_owner": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T",
-        "price": "1",
-        "quantity": "10",
-        "position_pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D",
-        "transaction_signature": "sig",
-        "filled_at": 1700000000
+        "state": {
+          "type": "filled",
+          "rfq_version": 4,
+          "market_pda": "7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs",
+          "terms": {
+            "type": "covered_call",
+            "strike": "100"
+          },
+          "side": "sell",
+          "taker_owner": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T",
+          "price": "1",
+          "quantity": "10",
+          "position_pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D",
+          "transaction_signature": "sig",
+          "filled_at": 1700000000
+        }
       }
     }
   },
   {
-    "field": "terms",
+    "field": "state.terms",
     "message": {
-      "type": "QuoteFilled",
+      "type": "QuoteUpdate",
       "data": {
         "rfq_id": "00000000-0000-0000-0000-000000000001",
         "order_id": "0101010101010101010101010101010101010101010101010101010101010101",
-        "market_pda": "7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs",
-        "expiry_ts": 1700000000,
-        "terms": {
-          "type": "covered_call",
-          "strike": "100"
-        },
-        "side": "sell",
-        "taker_owner": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T",
-        "price": "1",
-        "quantity": "10",
-        "position_pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D",
-        "transaction_signature": "sig",
-        "filled_at": 1700000000
+        "state": {
+          "type": "filled",
+          "rfq_version": 4,
+          "market_pda": "7eaSCSQv2PN6eFnRhv8ozsYN89yoPY7GKZUVa7DSDfqs",
+          "terms": {
+            "type": "covered_call",
+            "strike": "100"
+          },
+          "side": "sell",
+          "taker_owner": "GKwe8PT8YLdJiztcH7TpVkf7GVHFtHu4tNW9x5woDp6T",
+          "price": "1",
+          "quantity": "10",
+          "position_pda": "2PEfSGdYo17syw6vewKJceXbKHV481KWjXbo1x6g9E9D",
+          "transaction_signature": "sig",
+          "filled_at": 1700000000
+        }
       }
     }
   }

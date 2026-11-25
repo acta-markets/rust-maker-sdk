@@ -62,7 +62,6 @@
     "spread_premium_invalid": "fix_request",
     "spread_tick_violation": "fix_request",
     "subscription_scope_too_large": "fix_request",
-    "taker_buy_unsupported": "fix_request",
     "temporarily_unavailable": "retry",
     "time_overflow": "fix_request",
     "too_many_auth_attempts": "retry",
@@ -201,6 +200,15 @@
       "action": "refresh",
       "error": {
         "type": "UnknownOrder"
+      }
+    },
+    {
+      "action": "retry",
+      "error": {
+        "data": {
+          "retry_after_ms": 250
+        },
+        "type": "RateLimited"
       }
     },
     {

@@ -120,10 +120,14 @@ async fn authenticate_peer(socket: &mut Socket) {
                     quote_mints: vec![],
                 })
             }
-            ClientMessage::Subscribe(m) => ServerMessage::SubscribeAck(SubscribeAckData {
-                request_id: m.request_id,
-                subscribed: m.channels,
-            }),
+            ClientMessage::Subscribe(m) => {
+                ServerMessage::Reply(acta_maker_sdk::ws::types::ReplyMessage {
+                    request_id: m.request_id,
+                    result: acta_maker_sdk::ws::types::ReplyResult::Subscribed {
+                        channels: m.channels,
+                    },
+                })
+            }
             ClientMessage::GetActiveRfqs(m) => {
                 reads += 1;
                 ServerMessage::ActiveRfqs(ActiveRfqsData {
@@ -188,10 +192,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut sends = Vec::with_capacity(INBOUND);
         let mut next_send = tokio::time::Instant::now();
         for i in 0..INBOUND {
-            let message = ServerMessage::QuoteAcknowledged(QuoteAcknowledgedMessage {
+            let message = ServerMessage::QuoteUpdate(QuoteUpdateMessage {
                 rfq_id: Uuid::from_u128(i as u128),
                 order_id: acta_maker_sdk::OrderId::new([0u8; 32]),
-                replaced: acta_maker_sdk::ws::types::ReplacedQuote::None,
+                state: QuoteState::Live {
+                    rfq_version: acta_maker_sdk::RfqVersion::new(1),
+                    is_best: true,
+                    best_price: acta_maker_sdk::ws::types::QuotedPrice::None,
+                },
             });
             next_send += INBOUND_PACING;
             loop {
@@ -264,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let inbound = messages.recv().await?;
         match inbound.message() {
-            ServerMessage::QuoteAcknowledged(_) => {
+            ServerMessage::QuoteUpdate(_) => {
                 parsed.push(inbound.received_at);
                 delivered.push(Instant::now());
             }

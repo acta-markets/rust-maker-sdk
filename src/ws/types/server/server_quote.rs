@@ -2,8 +2,11 @@ use crate::Address32;
 use crate::types::unix_time::UnixSeconds;
 use std::time::SystemTime;
 
-use crate::types::ids::{Nonce, OptionTerms, OrderId, Price, Quantity};
-use crate::types::{QuoteExpiry, QuoteExpiryReason, TakerSide};
+use crate::types::ids::{Nonce, OptionTerms, OrderId, Price, Quantity, RfqVersion};
+use crate::types::{
+    QuoteExpiry, QuoteExpiryReason, QuoteLockedReason, RfqAvailableAgainReason, RfqCloseReason,
+    TakerSide,
+};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use strum::IntoStaticStr;
@@ -12,90 +15,12 @@ use uuid::Uuid;
 use crate::types::QuoteCancelReason;
 use crate::types::errors::CapError;
 
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteRefreshRequestedMessage {
-    pub rfq_id: Uuid,
-    pub terms: OptionTerms,
-    pub side: TakerSide,
-    pub min_valid_until: QuoteExpiry,
-    pub reason: QuoteExpiryReason,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteAcknowledgedMessage {
-    pub rfq_id: Uuid,
-    pub order_id: OrderId,
-    pub replaced: ReplacedQuote,
-}
-
-/// The quote this one replaced, if any.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ReplacedQuote {
-    None,
-    Replaced { order_id: OrderId },
-}
-
-impl ReplacedQuote {
-    #[must_use]
-    pub const fn order_id(self) -> Option<OrderId> {
-        match self {
-            Self::Replaced { order_id } => Some(order_id),
-            Self::None => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteBestStatusMessage {
-    pub rfq_id: Uuid,
-    pub order_id: OrderId,
-    pub is_best: bool,
-    pub current_best_price: crate::ws::types::common::QuotedPrice,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteOutbidMessage {
-    pub rfq_id: Uuid,
-    pub order_id: OrderId,
-    pub your_price: Price,
-    pub current_best_price: crate::ws::types::common::QuotedPrice,
-}
-
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteFilledMessage {
-    pub rfq_id: Uuid,
-    pub order_id: OrderId,
-    pub market_pda: Address32,
-    #[serde_as(as = "UnixSeconds")]
-    pub expiry_ts: SystemTime,
-    pub terms: OptionTerms,
-    pub side: TakerSide,
-    pub taker_owner: Address32,
-    pub price: Price,
-    pub quantity: Quantity,
-    pub position_pda: Address32,
-    pub transaction_signature: String,
-    #[serde_as(as = "UnixSeconds")]
-    pub filled_at: SystemTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteExpiredMessage {
-    pub rfq_id: Uuid,
-    pub order_id: OrderId,
-    pub reason: QuoteExpiryReason,
-}
-
 /// `cap_exceeded` carries the failing dimension itself (`{"cap_exceeded": <CapError>}`
 /// on the wire); every other reason is a bare string.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 pub enum QuoteRejectReason {
     ProductNotAllowed,
-    TakerBuyUnsupported,
     SpreadInvalidStrikes,
     SpreadTickViolation,
     SpreadPremiumInvalid,
@@ -110,78 +35,20 @@ pub enum QuoteRejectReason {
     CapExceeded(CapError),
     RfqNotFound,
     RfqNotActive,
+    /// The RFQ is locked on a selected quote; quote again if it becomes available.
+    RfqLocked,
+    /// The quote this one replaces is locked in a trade.
+    QuoteLocked(QuoteLockedReason),
+    /// The quote named in `replaces` is no longer in the book.
+    ReplacedOrderNotFound,
+    InvalidValidUntil,
+    /// The order id is already known: selected, ended, in another RFQ or with other terms.
     DuplicateOrderId,
     RateLimited,
+    /// Transient server or market-data condition; retry later.
+    Overloaded,
     TradingPaused,
     InternalError,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteRejectedMessage {
-    pub rfq_id: Uuid,
-    pub order_id: OrderId,
-    pub reason: QuoteRejectReason,
-    pub message: String,
-}
-
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteSelectedMessage {
-    pub rfq_id: Uuid,
-    pub order_id: OrderId,
-    pub taker_owner: Address32,
-    pub price: Price,
-    pub quantity: Quantity,
-    pub terms: OptionTerms,
-    pub side: TakerSide,
-    #[serde_as(as = "UnixSeconds")]
-    pub signature_deadline_at: SystemTime,
-}
-
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteCancelledMessage {
-    pub rfq_id: Uuid,
-    pub order_ids: Vec<OrderId>,
-    pub reason: QuoteCancelReason,
-    #[serde_as(as = "UnixSeconds")]
-    pub cancelled_at: SystemTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CancelQuoteAckMessage {
-    pub request_id: Uuid,
-    pub rfq_id: Uuid,
-    pub cancelled_order_ids: Vec<OrderId>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CancelAllQuotesAckMessage {
-    pub request_id: Uuid,
-    pub cancelled_count: u32,
-    pub cancelled_order_ids: Vec<OrderId>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "status", content = "data", rename_all = "snake_case")]
-pub enum BatchQuoteResult {
-    Acknowledged(QuoteAcknowledgedMessage),
-    Rejected(QuoteRejectedMessage),
-}
-
-impl BatchQuoteResult {
-    #[must_use]
-    pub const fn order_id(&self) -> OrderId {
-        match self {
-            Self::Acknowledged(message) => message.order_id,
-            Self::Rejected(message) => message.order_id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BatchQuotesAckMessage {
-    pub results: Vec<BatchQuoteResult>,
 }
 
 #[serde_as]
@@ -202,4 +69,99 @@ pub struct QuoteReceivedMessage {
 pub struct QuotesUpdateMessage {
     pub rfq_id: Uuid,
     pub quotes: Vec<QuoteReceivedMessage>,
+}
+
+/// Every change to one of your quotes; each order ends with exactly one terminal state.
+/// Book states carry the RFQ's `rfq_version`: drop one only if it is lower than what you hold
+/// for that RFQ (a `GetMyQuotes` row included); one change can send several at the same version.
+/// `rejected` refuses one submission: it ends the order only if you have not seen that order
+/// `live` or `selected`; otherwise the order keeps its state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuoteUpdateMessage {
+    pub rfq_id: Uuid,
+    pub order_id: OrderId,
+    pub state: QuoteState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum QuoteState {
+    /// Accepted or re-ranked.
+    Live {
+        rfq_version: RfqVersion,
+        is_best: bool,
+        best_price: crate::ws::types::common::QuotedPrice,
+    },
+    /// The order ended; quote again with a fresh order to stay in the RFQ.
+    RefreshRequested {
+        rfq_version: RfqVersion,
+        terms: OptionTerms,
+        side: TakerSide,
+        min_valid_until: QuoteExpiry,
+        reason: QuoteExpiryReason,
+    },
+    Selected(QuoteSelection),
+    Filled(QuoteFill),
+    Rejected {
+        reason: QuoteRejectReason,
+        message: String,
+    },
+    Expired {
+        rfq_version: RfqVersion,
+        reason: QuoteExpiryReason,
+    },
+    /// The RFQ was selected on this quote but the trade did not happen; the quote is gone.
+    Released {
+        rfq_version: RfqVersion,
+        reason: RfqAvailableAgainReason,
+    },
+    /// The RFQ closed without filling this quote.
+    Lost {
+        rfq_version: RfqVersion,
+        reason: RfqCloseReason,
+    },
+    /// Withdrawn: `requested` by your own cancel, otherwise by the server.
+    Cancelled {
+        rfq_version: RfqVersion,
+        reason: QuoteCancelReason,
+    },
+}
+
+impl QuoteState {
+    /// No further update can follow for this order.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        !matches!(self, Self::Live { .. } | Self::Selected(_))
+    }
+}
+
+/// The taker picked this quote and has until `signature_deadline_at` to sign.
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuoteSelection {
+    pub rfq_version: RfqVersion,
+    pub taker_owner: Address32,
+    pub price: Price,
+    pub quantity: Quantity,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
+    #[serde_as(as = "UnixSeconds")]
+    pub signature_deadline_at: SystemTime,
+}
+
+/// The position this quote opened on chain.
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuoteFill {
+    pub rfq_version: RfqVersion,
+    pub market_pda: Address32,
+    pub terms: OptionTerms,
+    pub side: TakerSide,
+    pub taker_owner: Address32,
+    pub price: Price,
+    pub quantity: Quantity,
+    pub position_pda: Address32,
+    pub transaction_signature: String,
+    #[serde_as(as = "UnixSeconds")]
+    pub filled_at: SystemTime,
 }

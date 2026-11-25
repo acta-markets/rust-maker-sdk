@@ -245,7 +245,10 @@ async fn session(
                 )
                 .await?;
             }
-            ServerMessage::SubscribeAck(ack) if ack.request_id == subscribe_id => {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
+                request_id,
+                result: crate::ws::types::ReplyResult::Subscribed { .. },
+            }) if request_id == subscribe_id => {
                 *delay = config.retry;
                 probe_at = Some(Instant::now() + bound);
                 silent_at = Instant::now() + bound * 2;
@@ -258,8 +261,10 @@ async fn session(
             ServerMessage::AuthError(error) => {
                 return Err(format!("auth rejected: {:?}", error.reason).into());
             }
-            ServerMessage::RequestError(error) if error.request_id == subscribe_id => {
-                return Err(format!("subscription rejected: {:?}", error.error).into());
+            ServerMessage::Reply(reply) if reply.request_id == subscribe_id => {
+                if let Some(error) = reply.error() {
+                    return Err(format!("subscription rejected: {error:?}").into());
+                }
             }
             _ => {}
         }
@@ -369,7 +374,7 @@ mod tests {
     use super::*;
     use crate::orders::BytesSigner;
     use crate::ws::types::{
-        AuthRequestData, AuthSuccessData, SubscribeAckData, VaultCatalogChangedData, WelcomeData,
+        AuthRequestData, AuthSuccessData, VaultCatalogChangedData, WelcomeData,
     };
 
     const VAULTS: &str = include_str!("../../../tests/fixtures/http_vaults.json");
@@ -522,9 +527,11 @@ mod tests {
         assert_eq!(subscribe.channels, [WsChannel::Vaults]);
         send(
             socket,
-            ServerMessage::SubscribeAck(SubscribeAckData {
+            ServerMessage::Reply(crate::ws::types::ReplyMessage {
                 request_id: subscribe.request_id,
-                subscribed: vec![WsChannel::Vaults],
+                result: crate::ws::types::ReplyResult::Subscribed {
+                    channels: vec![WsChannel::Vaults],
+                },
             }),
         )
         .await;

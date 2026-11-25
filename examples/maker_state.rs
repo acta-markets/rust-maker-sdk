@@ -6,7 +6,7 @@
 //!   Top up with a plain `MakerDeposit`, as in `taker_buy_quote`.
 //! - Reconnect: a quote that was being filled when the socket dropped is `awaiting_signature`
 //!   or `executing` in the live book; ask `GetOrderStatus` for each before quoting that RFQ
-//!   again. `unknown` is not proof that the order did not execute.
+//!   again. `expired` means it never traded; `unknown` is not proof that it did not.
 //! - Settlement: a settled position carries its fixing and the atoms each side received in
 //!   `PositionSettlement`.
 
@@ -93,6 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("rfq {}: filled, position {position_pda}", quote.rfq_id);
             }
             OrderExecutionState::Pending => println!("rfq {}: fill in flight", quote.rfq_id),
+            OrderExecutionState::Expired => println!("rfq {}: not traded", quote.rfq_id),
             OrderExecutionState::Unknown => {
                 println!("rfq {}: unknown, do not requote it yet", quote.rfq_id);
             }
